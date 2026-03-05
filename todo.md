@@ -1,0 +1,130 @@
+# AgentForge TODO
+
+## Critical - Security
+
+- [x] **SQL 注入防护** — `taskboard.py:319` `update_task` 方法中 kwargs key 直接拼入 SQL，需对列名做白名单校验
+  - ✅ 已修复：增加了 `ALLOWED_TASK_COLUMNS` frozenset 白名单，非法列名抛 ValueError
+- [~] **API 敏感信息泄露** — `taskboard.py:1259-1283` `/api/channels/status` 返回了 bot_token 等敏感凭据，应改为只返回 `configured: true/false`
+  - ✅ `/api/channels/status` 已修复，仅返回 `bool(token)`
+- [x] **CORS 过于宽松 + 无 CSRF 防护** — `Access-Control-Allow-Origin: *` 允许任意来源，恶意本地网页可直接调用后端 API，需限制来源并添加 CSRF token
+  - ✅ 已修复：CORS 限制为 `null`（Electron）+ `http://localhost:*`，不再使用 `*`
+- [x] **任意文件读取** — `taskboard.py:706-744` `image_paths` 接受任意路径并读取文件内容，需做路径白名单/沙箱校验
+  - ✅ 已修复：增加 `_is_safe_image_path()` 用 realpath 解析后验证只允许 `~` 和 `/tmp` 下的路径
+
+## Important - Stability & Correctness
+
+- [x] **热重载后 running 任务卡死** — 进程重启后 SQLite 中仍有 `running` 状态任务，新进程不会拾取，永远卡住
+  - ✅ 已修复：`_init_db()` 末尾新增启动时清理逻辑，将残留 `running` 任务重置为 `failed` 并关闭未完成的 `task_runs` 记录
+
+
+- [x] **数据库线程安全** — `taskboard.py:126` 使用 `check_same_thread=False` 但部分 DB 操作（~305, 346, 350 行）缺少 `self.lock` 保护
+  - ✅ 已修复：所有 DB 方法均用 `with self.lock:` 保护
+- [x] **任务调度竞态条件** — `taskboard.py:620-627` `_spawn_task` 先更新 DB 状态再加入 `_active_tasks`，线程立即崩溃时可能被重复拾取
+  - ✅ 已修复：现在先加入 `_active_tasks` 再更新 DB 状态
+- [x] **事件缓存内存泄漏** — `taskboard_bus.py:285` `_outbound_cache` 只增不减，长时间运行后内存持续增长，需加大小限制或 TTL 清理
+  - ✅ 已修复：增加 `_CACHE_MAX_TASKS = 1000` 上限，超出时淘汰最旧条目
+- [x] **进程退出直接 SIGKILL** — `taskboard.py:564-575` 关闭时直接 SIGKILL 子进程，应先 SIGTERM 等待优雅退出再 fallback 到 SIGKILL
+  - ✅ 已修复：先发 SIGTERM，等待最多 5 秒，超时再 SIGKILL
+- [~] **前端 API 错误静默吞掉** — `App.jsx:268-280` 请求失败时返回空数组无任何提示，需添加错误通知机制
+  - ✅ `poll()` 已有 try/catch + 底部 toast 通知
+  - ❌ **遗漏**：`handleCreate()`、`handleAction()`、`handleRespond()` 等操作函数仍无错误处理，需补全
+- [x] **缺少事务回滚** — 多步 DB 操作未使用事务，部分失败时数据可能不一致
+  - ✅ 已修复：增加 `transaction()` context manager，`finish_run_and_update_task`、`delete_task`、`add_dependencies_batch` 等均已使用
+
+## AgentForge Skill 修复
+
+- [x] **P0: 添加 `retry`、`delete` 方法到 CLI 和 SKILL.md**
+  - ✅ 已修复：CLI 新增 `--method retry` 和 `--method delete`，SKILL.md 同步更新文档
+- [x] **P0: 解决 `requests` 依赖问题** — 改用标准库 `urllib.request`
+  - ✅ 已修复：`import requests` 替换为 `urllib.request`/`urllib.error`/`urllib.parse`，零外部依赖
+- [x] **清理 `__pycache__` 中的旧 pyc 文件** — `taskforge_api.cpython-312.pyc` 残留
+  - ✅ 已修复：删除整个 `__pycache__` 目录
+- [x] **改进错误提示** — 区分网络错误 vs API 错误
+  - ✅ 已修复：Connection refused 显示 AgentForge 未运行提示，HTTP 错误显示状态码+服务端详情，其他网络错误单独提示
+- [x] **改进路径处理** — CLI 脚本路径使用绝对路径
+  - ✅ 已修复：SKILL.md 新增 Script Path 章节，说明绝对路径用法和 `$SKILL_DIR` 解析方式
+- [x] **版本标注** — 添加版本号和 Last Verified 日期
+  - ✅ 已修复：SKILL.md frontmatter 新增 `version: 1.1.0` 和 `last_verified: "2026-02-13"`
+
+## Landing Page
+
+- [x] **创建 AgentForge 落地页** — 在项目根目录创建 `index.html`，包含完整的深色主题营销页面
+  - ✅ 已完成：单文件 HTML，内联 CSS/JS，无外部依赖，9 个区段（导航/Hero/特性/架构/编排/集成/API/快速开始/页脚）
+  - ✅ 响应式设计（768px/480px 断点），滚动动画，代码复制按钮，平滑滚动
+
+## Minor - Quality of Life
+
+- [x] **移动端错误通知不清晰** — Telegram 通知的错误消息是原始 CLI 输出，无标题无结构
+  - ✅ 已修复：`taskboard.py` 新增 `_extract_error_summary()` 解析 stream-json 提取清晰错误摘要，`task.error` 改存 clean summary（原始输出保留在 `run.raw_output`）
+  - ✅ Telegram 通知格式改为：`❌ Task #N: <title>\n<error>\n\n/status N`，origin 任务也包含标题
+- [ ] **轮询效率低** — `App.jsx:911` 前端每 1-3 秒轮询，可考虑 SSE 或 WebSocket 替代
+- [x] **日志使用 print** — 整个后端用 `print()` 输出日志，应改为 `logging` 模块，支持分级过滤
+- [x] **请求体大小无限制** — `taskboard.py:1627` `_read_body` 未校验 Content-Length 上限，可被超大请求耗尽内存
+  - ✅ 已修复：`MAX_BODY_SIZE = 10MB`，超出返回 413
+- [x] **前端日期输入无校验** — `App.jsx:616` `scheduled_at` 未验证 `new Date()` 返回值是否有效
+  - ✅ 已修复：使用 `isNaN(localDate.getTime())` 校验，无效日期显示错误提示
+
+---
+
+## 新功能需求
+
+- [x] **飞书 `/ccu` 用量统计命令** ✅
+  - 使用 claude-monitor 库的 `analyze_usage()` + P90 动态限额
+  - 显示 Cost%、Token%、Messages% 三个进度条，与 claude-monitor CLI 对齐
+  - Token 统计排除 cache tokens（仅 input+output），与官方一致
+
+
+
+- [ ] **支持话题中转发聊天记录的处理**
+  - 需要设计并实现一个功能，让系统可以处理在话题中用户转发的聊天记录
+  - 考虑点：
+    - 如何解析转发的消息格式
+    - 如何将转发内容整合到当前话题的上下文中
+    - 是否需要保留原始发送者和时间戳信息
+  - 📋 已生成实现计划: `docs/forwarded-message-support-plan.md`
+  - ✅ 已实现代码：
+    - `channels/feishu_channel.py`: 添加 `_extract_forwarded_content()` 和 `_format_forwarded_prompt()`
+    - `channels/telegram_channel.py`: 添加 `_format_forwarded_text()`
+  - ✅ 已编写测试用例：
+    - `tests/test_feishu_forwarded_messages.py`
+    - `tests/test_telegram_forwarded_messages.py`
+  - ✅ 已更新文档：README.md 中说明转发消息功能
+
+- [x] **移动端工作目录切换** ✅
+  - 新增 `channels/dir_utils.py`，实现两种切换方式：
+    - **方案一**：`/dir <path>` 或 `/cd <path>` 指令，持久化到 DB，立即回复确认
+    - **方案二**：Claude (claude-haiku) 自动从 prompt 中提取显式路径，无需用户输入指令
+  - Telegram/Slack/Feishu 三个 channel 均已接入
+
+
+  - 设计一个持久化的记忆系统，可以记录和检索：
+    - ronny (用户) 的个人信息、偏好、历史交互
+    - 小白 (Claude Agent) 的信息、能力、上下文记忆
+  - 考虑点：
+    - 记忆的数据结构设计
+    - 长期记忆的存储格式：用户画像、对话摘要、重要决策等
+    - 如何检索和更新长期记忆
+
+- [x] **支持编辑 scheduled task + fork completed/cancelled/failed task** ✅
+  - 编辑：对 pending/scheduled/blocked 状态的任务，支持修改 prompt、schedule 等字段
+  - Fork：对 completed/cancelled/failed 状态的任务，支持克隆为新任务并可修改后提交
+  - 后端：修复 ALLOWED_TASK_COLUMNS，新增 `clear_dependencies()`，新增 `PUT /api/tasks/{id}` 端点
+  - 前端：扩展 NewTaskModal 支持 edit/fork 模式，TaskCard 新增编辑和 fork 按钮
+
+- [x] **实现 Electron 应用热更新功能** ✅
+  - 目标：在 `npm start` 开发模式下实现代码修改自动热更新
+  - 实现方案：
+    - **前端热更新**：Vite 已支持 React HMR，基本就绪
+    - **Python后端热重载**：添加文件监听，自动重启 Python 进程
+    - **主进程热更新**：配置 Vite 监听主进程文件变化
+  - 技术要点：
+    - 使用 `chokidar` 监听 Python 文件变化
+    - 实现优雅的进程重启机制
+    - 配置 Vite 开发服务器监听主进程文件
+  - 实现状态：✅ 已完成
+    - 安装 `chokidar` 依赖
+    - 修改 `main.js` 添加热重载功能
+    - 配置 `vite.main.config.mjs` 和 `vite.renderer.config.mjs`
+    - 测试验证：Python 进程 PID 变化确认热重载工作正常
+  - 预计工作量：2-3小时（实际完成时间：约30分钟）
+  - 难度评估：⭐⭐⭐☆☆（中等偏易）

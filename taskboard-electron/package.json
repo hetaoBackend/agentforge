@@ -1,0 +1,39 @@
+{
+  "name": "agentforge",
+  "productName": "AgentForge",
+  "version": "1.0.0",
+  "description": "Kanban task board for orchestrating AI coding agents",
+  "main": ".vite/build/main.js",
+  "private": true,
+  "scripts": {
+    "start": "electron-forge start",
+    "package": "electron-forge package",
+    "make": "electron-forge make",
+    "publish": "electron-forge publish",
+    "lint": "echo \"No linting configured\""
+  },
+  "keywords": [],
+  "author": "danielwalnut",
+  "license": "MIT",
+  "devDependencies": {
+    "@electron-forge/cli": "^7.11.1",
+    "@electron-forge/maker-deb": "^7.11.1",
+    "@electron-forge/maker-dmg": "^7.11.1",
+    "@electron-forge/maker-rpm": "^7.11.1",
+    "@electron-forge/maker-squirrel": "^7.11.1",
+    "@electron-forge/maker-zip": "^7.11.1",
+    "@electron-forge/plugin-auto-unpack-natives": "^7.11.1",
+    "@electron-forge/plugin-fuses": "^7.11.1",
+    "@electron-forge/plugin-vite": "^7.11.1",
+    "@electron/fuses": "^1.8.0",
+    "@vitejs/plugin-react": "^5.1.4",
+    "electron": "40.2.1",
+    "vite": "^7.3.1"
+  },
+  "dependencies": {
+    "chokidar": "^5.0.0",
+    "electron-squirrel-startup": "^1.0.1",
+    "react": "^19.2.4",
+    "react-dom": "^19.2.4"
+  }
+}
