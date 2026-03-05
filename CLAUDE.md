@@ -80,7 +80,7 @@ Single large component (~1500 lines). Key design points:
 
 ## Workflow Rules
 
-### Task Tracking with todo.md
+### Task Tracking with docs/todo.md
 - **Before starting any task**: Record the task in `todo.md` with a pending status before beginning work.
 - **Before notifying completion**: Double-confirm the task is actually done (verify changes, run relevant checks), then update the corresponding entry in `todo.md` to reflect the completed status.
 - This ensures all work is tracked and verified before being reported as finished.

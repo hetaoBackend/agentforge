@@ -1,36 +1,46 @@
 # AgentForge
 
-A macOS desktop app for orchestrating AI coding agents. Manage, schedule, and monitor [Claude Code](https://docs.anthropic.com/en/docs/claude-code) tasks through a kanban-style task board — or remotely via Telegram, Slack, and Feishu.
+> Orchestrate AI coding agents from your Mac — schedule, monitor, and chain Claude Code tasks on a kanban board.
+
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Platform: macOS](https://img.shields.io/badge/Platform-macOS%2012%2B-lightgrey?logo=apple)](https://github.com/releases)
+[![Python 3.12+](https://img.shields.io/badge/Python-3.12%2B-blue?logo=python)](https://python.org)
+[![Claude Code](https://img.shields.io/badge/Powered%20by-Claude%20Code-orange)](https://docs.anthropic.com/en/docs/claude-code)
+
+**Website**: https://agentforge-landing-weld.vercel.app/
+
+![AgentForge Screenshot](assets/screenshot.png)
+
+---
+
+## Table of Contents
+
+- [Features](#features)
+- [Requirements](#requirements)
+- [Installation](#installation)
+- [Troubleshooting](#troubleshooting)
+- [Quick Start](#quick-start)
+- [Chat Channels](#chat-channels)
+- [Multi-Agent Pipelines (DAG)](#multi-agent-pipelines-dag)
+- [API Reference](#api-reference)
+- [Background Service](#background-service)
+- [Architecture](#architecture)
+- [Contributing](#contributing)
+- [License](#license)
+
+---
 
 ## Features
 
-- **Agents that spawn agents** — Built-in Claude Code skill lets any running task create sub-tasks, build DAG pipelines, and collect results — enabling recursive, multi-agent workflows
-- **Kanban Task Board** — Column view: Queue, Running, Done
+- **Agents that spawn agents** — Any running task can create sub-tasks, build DAG pipelines, and collect results via the bundled Claude Code skill
+- **Kanban Task Board** — Visual Queue / Running / Done columns with live output streaming
 - **DAG Pipelines** — Define task dependencies with automatic cascade execution and failure propagation
-- **Flexible Scheduling** — Immediate, delayed, one-time (datetime), and cron-based recurring tasks
-- **Live Output Streaming** — Real-time colorized output from Claude Code CLI
-- **Chat Channels** — Control AgentForge from Telegram, Slack, or Feishu
-- **Persistent Storage** — SQLite-backed task history and configuration
+- **Flexible Scheduling** — Immediate, delayed, one-time datetime, and cron-based recurring tasks
+- **Chat Control** — Create tasks and receive notifications from Telegram, Slack, or Feishu/Lark
+- **Persistent Storage** — SQLite-backed task history, run logs, and streaming output
 - **Native macOS App** — Electron shell with one-click DMG install
 
-## Architecture
-
-```
-┌──────────────────┐     HTTP/JSON      ┌──────────────────┐
-│   React Frontend │ ◄────────────────► │  Python Backend   │
-│   (Kanban UI)    │   localhost:9712    │  (Scheduler+API)  │
-└──────────────────┘                    └───────┬──────────┘
-                                                │
-                                    ┌───────────┼───────────┐
-                                    │           │           │
-                                    ▼           ▼           ▼
-                              ┌──────────┐ ┌────────┐ ┌──────────┐
-                              │  SQLite  │ │Scheduler│ │ Claude   │
-                              │  Store   │ │ (cron)  │ │ Code CLI │
-                              └──────────┘ └────────┘ └──────────┘
-```
-
-The Electron main process spawns a single-file Python HTTP server on startup. The React renderer talks to it over `localhost:9712`. There is no WebSocket — all communication is REST polling.
+---
 
 ## Requirements
 
@@ -39,7 +49,9 @@ The Electron main process spawns a single-file Python HTTP server on startup. Th
 - Node.js 18+
 - [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) installed and on `PATH`
 
-## Quick Start
+---
+
+## Installation
 
 ### Option 1: Desktop App (Recommended)
 
@@ -47,319 +59,71 @@ The Electron main process spawns a single-file Python HTTP server on startup. Th
 2. Open the DMG and drag **AgentForge** into `/Applications`.
 3. Launch from Launchpad or the Applications folder.
 
-### Option 2: Development Mode
+### Option 2: Build from Source
 
 ```bash
-# Clone the repo
-git clone https://github.com/anthropics/agentforge.git
+git clone https://github.com/your-org/agentforge.git
 cd agentforge
 
-# Install Python dependencies
-uv sync
+# Install all dependencies
+make install-deps
 
-# Install Electron dependencies
+# Build and package a DMG
+make package-dmg
+# Output: taskboard-electron/out/make/AgentForge-1.0.0-arm64.dmg
+```
+
+### Option 3: Development Mode
+
+```bash
+git clone https://github.com/your-org/agentforge.git
+cd agentforge
+
+uv sync
 cd taskboard-electron && npm install && cd ..
 
-# Start the backend
+# Terminal 1: start Python backend
 uv run taskboard.py
 
-# In another terminal, start the Electron app
+# Terminal 2: start Electron + Vite dev server
 cd taskboard-electron && npm start
 ```
 
-### Option 3: Build from Source
+---
+
+## Troubleshooting
+
+### `npm install` hangs or freezes
+
+This is the most common setup issue. The Electron binary (~100 MB) is downloaded from GitHub and may stall on slow connections or in China.
+
+**Quick fix — use mirrors:**
 
 ```bash
-# Full build pipeline (backend binary + Electron + DMG)
-make package-dmg
-
-# Or step by step
-make build-backend
-make build-electron
-make package-dmg
+npm config set registry https://registry.npmmirror.com
+export ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/
+cd taskboard-electron && npm install
 ```
 
-The output DMG lands at `taskboard-electron/out/make/AgentForge-1.0.0-arm64.dmg`.
+**Full guide:** [docs/installation-troubleshooting.md](docs/installation-troubleshooting.md) covers:
+- How to diagnose whether the hang is network or native compilation
+- Mirror setup for China and slow connections
+- Installing build tools (macOS / Linux / Windows)
+- Node.js version requirements
+- Full clean-install procedure
 
-## Claude Code Skill — Recursive Task Delegation
+---
 
-AgentForge ships with a **Claude Code skill** (`skills/agentforge/`). Once installed, any task running inside Claude Code can itself create, query, and manage other AgentForge tasks. This turns a single agent into an orchestrator that decomposes work, fans out sub-tasks, and collects results — recursively.
+## Quick Start
 
-```
-          User
-           │
-           ▼
-     ┌───────────┐       create sub-tasks
-     │  Task A    │──────────────────────┐
-     │ (Claude)   │                      │
-     └─────┬─────┘              ┌────────┴────────┐
-           │                    ▼                  ▼
-           │              ┌───────────┐     ┌───────────┐
-           │              │  Task B   │     │  Task C   │
-           │              │ (Claude)  │     │ (Claude)  │
-           │              └─────┬─────┘     └───────────┘
-           │                    │  create more sub-tasks
-           │                    ▼
-           │              ┌───────────┐
-           │              │  Task D   │
-           │              │ (Claude)  │
-           │              └───────────┘
-           ▼
-     collect & summarize
-```
+Once the app is running, the backend listens on `http://127.0.0.1:9712`.
 
-### What the skill enables
+**Create a task via the UI:** Open AgentForge, click **New Task**, fill in the title, prompt, and working directory, choose a schedule type, and click **Create**.
 
-- **Fan-out / fan-in** — A parent task spawns N independent sub-tasks in parallel, then polls until all complete and synthesizes results.
-- **DAG pipelines** — Chain tasks with `--depends-on` so downstream steps auto-start only after upstream ones finish. Failed upstreams cascade-cancel the rest.
-- **Result injection** — Pass `--inject-result` so upstream output is automatically prepended to the downstream prompt, giving each step full context.
-- **Scheduled workflows** — Combine cron, delayed, and immediate schedules to build time-aware pipelines.
-
-### Install the skill
-
-Copy or symlink the skill directory into your Claude Code skills location:
+**Create a task via curl:**
 
 ```bash
-# Example: symlink into ~/.claude/skills
-ln -s /path/to/agentforge/skills/agentforge ~/.claude/skills/agentforge
-```
-
-Once installed, any Claude Code session (including tasks spawned by AgentForge itself) can call the skill to delegate work — enabling **agents that spawn agents**.
-
-### Example: parallel research pipeline
-
-A single prompt can kick off a multi-agent workflow:
-
-```
-Research the top 3 competitors of Acme Corp.
-For each competitor, create a separate AgentForge task that:
-  1. Gathers recent news and financials
-  2. Writes a one-page summary
-Then create a final task (depends-on the above 3) that
-synthesizes everything into a comparative report.
-```
-
-AgentForge handles scheduling, dependency tracking, and result passing. The parent task only needs to create the DAG — the platform does the rest.
-
-## Chat Channels
-
-AgentForge supports pluggable chat channels so you can create tasks, check status, and receive completion notifications from your favorite messaging app.
-
-| Channel | Transport | Setup |
-|---------|-----------|-------|
-| Telegram | Bot API (polling) | Easy |
-| Slack | Socket Mode | Moderate |
-| Feishu / Lark | Event Subscription | Moderate |
-
-Channels auto-start when the corresponding environment variables are detected.
-
-<details>
-<summary><b>Telegram</b></summary>
-
-### 1. Create a Bot
-
-1. Open Telegram and chat with [@BotFather](https://t.me/BotFather).
-2. Send `/newbot` and follow the prompts.
-3. Copy the **HTTP API token** (looks like `123456789:ABCdef…`).
-
-### 2. Get Your User ID (optional)
-
-To restrict access, get your numeric user ID from [@userinfobot](https://t.me/userinfobot).
-
-### 3. Configure
-
-```bash
-export TELEGRAM_BOT_TOKEN="123456789:ABCdefGHIjklMNOpqrSTUvwxYZ"
-export TELEGRAM_ALLOWED_USERS="123456789,987654321"   # optional
-```
-
-| Variable | Required | Description |
-|----------|----------|-------------|
-| `TELEGRAM_BOT_TOKEN` | Yes | Bot token from @BotFather |
-| `TELEGRAM_ALLOWED_USERS` | No | Comma-separated user IDs. Unrestricted if empty. |
-
-### 4. Run
-
-```bash
-uv run taskboard.py
-```
-
-You should see:
-
-```
-[AgentForge] TELEGRAM_BOT_TOKEN detected — starting Telegram channel...
-[Telegram] Bot polling started
-```
-
-### 5. Commands
-
-| Command | Description |
-|---------|-------------|
-| `/newtask <title> \| <prompt>` | Create a task |
-| `/list` | List tasks |
-| `/status <id>` | Task details |
-| `/cancel <id>` | Cancel a task |
-| `/help` | Show help |
-
-</details>
-
-<details>
-<summary><b>Slack</b></summary>
-
-### 1. Create a Slack App
-
-Go to [api.slack.com/apps](https://api.slack.com/apps) → **Create New App → From scratch**.
-
-### 2. Bot Permissions
-
-Under **OAuth & Permissions → Bot Token Scopes**, add:
-
-- `app_mentions:read`
-- `chat:write`
-- `im:history`
-- `im:read`
-- `im:write`
-- `channel:history`
-- `groups:write`
-- `im:history`
-- `mpim:write`
-- `reactions:write`
-
-### 3. Enable Socket Mode
-
-1. Go to **Socket Mode** → toggle on.
-2. Generate an **App-Level Token** with the `connections:write` scope.
-3. Copy the token (starts with `xapp-`).
-
-### 4. Subscribe to Events
-
-Under **Event Subscriptions → Subscribe to bot events**, add:
-
-- `app_mention`
-- `message.im`
-- `message.channels`
-
-### 5. Install & Invite
-
-Install the app to your workspace and copy the **Bot User OAuth Token** (`xoxb-…`).
-
-```
-/invite @AgentForge
-```
-
-### 6. Configure
-
-```bash
-export SLACK_BOT_TOKEN="xoxb-..."
-export SLACK_APP_TOKEN="xapp-..."
-export SLACK_ALLOWED_USERS="U012AB3CD,U098ZY7WX"   # optional
-```
-
-| Variable | Required | Description |
-|----------|----------|-------------|
-| `SLACK_BOT_TOKEN` | Yes | Bot token (`xoxb-…`) |
-| `SLACK_APP_TOKEN` | Yes | App-level token (`xapp-…`) |
-| `SLACK_ALLOWED_USERS` | No | Comma-separated Slack user IDs |
-
-### 7. Run
-
-```bash
-uv run taskboard.py
-```
-
-### 8. Commands
-
-Send as a DM or @mention in a channel:
-
-| Command | Description |
-|---------|-------------|
-| `newtask <title> \| <prompt>` | Create a task |
-| `list` | List tasks |
-| `status <id>` | Task details |
-| `cancel <id>` | Cancel a task |
-| `help` | Show help |
-
-**Forwarded Messages**: You can forward any message from another chat to the bot. The bot will include the original sender and timestamp in the task context.
-
-</details>
-
-<details>
-<summary><b>Feishu / Lark</b></summary>
-
-Feishu uses the AgentForge **settings API** for configuration (not environment variables). It connects via WebSocket long-connection, so no public IP is needed.
-
-### 1. Create a Feishu App
-
-- Go to the [Feishu Open Platform](https://open.feishu.cn/app)
-- Create a new app → Enable **Bot** capability
-- Permissions: Add `im:message` (send messages), `im:resource` (download images)
-- Events: Add `im.message.receive_v1` (receive messages)
-- Select **Long Connection** mode (requires running AgentForge first to establish connection)
- - Get **App ID** and **App Secret** from "Credentials & Basic Info"
-- Publish the app
-
-### 2. Configure via Settings API
-
-```bash
-curl -X POST http://127.0.0.1:9712/api/feishu/settings \
-  -H "Content-Type: application/json" \
-  -d '{
-    "feishu_app_id": "cli_xxxx",
-    "feishu_app_secret": "your_app_secret",
-    "feishu_default_working_dir": "~/projects",
-    "feishu_enabled": "true"
-  }'
-```
-
-| Setting | Required | Description |
-|---------|----------|-------------|
-| `feishu_app_id` | Yes | App ID from Feishu Open Platform |
-| `feishu_app_secret` | Yes | App Secret |
-| `feishu_default_chat_id` | No | Default chat for notifications (`oc_…` or `ou_…`) |
-| `feishu_default_working_dir` | No | Working directory for tasks (default `~`) |
-| `feishu_enabled` | Yes | Set to `"true"` to activate |
-
-The channel restarts automatically when you POST new settings. You can also configure it from the AgentForge desktop app settings page.
-
-### 3. Usage
-
-Send any message to the bot in a DM or group chat to create a task. Supports text messages, rich-text posts, and images. Reply in a thread to resume a completed task's session.
-
-**Forwarded Messages**: You can forward or quote messages from other chats. The bot will parse forwarded/quoted content and include the original sender name, timestamp, and message text in the task context.
-
-| Command | Description |
-|---------|-------------|
-| *(any message)* | Create a new task from the message content |
-| *(forwarded message)* | Create a task with forwarded content context |
-| `/status <id>` | Show task status |
-| `/resume <id> <message>` | Resume a task session |
-
-</details>
-
-> [!TIP]
-> See [`channels/README.md`](channels/README.md) for full setup details, notification behavior, and how to add custom channels.
-
-## API Reference
-
-All endpoints are served at `http://127.0.0.1:9712/api`.
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/api/tasks` | List all tasks |
-| GET | `/api/tasks/:id` | Get a single task |
-| GET | `/api/tasks/:id/runs` | Get run history |
-| GET | `/api/tasks/:id/output` | Get task output |
-| GET | `/api/tasks/:id/events` | Stream output events |
-| POST | `/api/tasks` | Create a task |
-| POST | `/api/tasks/:id/cancel` | Cancel a task |
-| POST | `/api/tasks/:id/retry` | Retry a task |
-| DELETE | `/api/tasks/:id` | Delete a task |
-| GET | `/api/health` | Health check |
-
-### Create Task Examples
-
-```bash
-# Immediate execution
+# Run immediately
 curl -X POST http://localhost:9712/api/tasks \
   -H "Content-Type: application/json" \
   -d '{
@@ -369,7 +133,7 @@ curl -X POST http://localhost:9712/api/tasks \
     "schedule_type": "immediate"
   }'
 
-# Delayed execution (5 minutes)
+# Run after a delay (seconds)
 curl -X POST http://localhost:9712/api/tasks \
   -H "Content-Type: application/json" \
   -d '{
@@ -380,7 +144,7 @@ curl -X POST http://localhost:9712/api/tasks \
     "delay_seconds": 300
   }'
 
-# Cron schedule (daily at 9 AM)
+# Recurring cron schedule (daily at 9 AM)
 curl -X POST http://localhost:9712/api/tasks \
   -H "Content-Type: application/json" \
   -d '{
@@ -393,9 +157,186 @@ curl -X POST http://localhost:9712/api/tasks \
   }'
 ```
 
-## Background Service (launchd)
+---
 
-To keep the backend running persistently on macOS:
+## Chat Channels
+
+Control AgentForge from your favorite messaging app. Channels auto-start when the corresponding environment variables are detected.
+
+| Channel | Transport | Difficulty |
+|---------|-----------|------------|
+| Telegram | Bot API (polling) | Easy |
+| Slack | Socket Mode | Moderate |
+| Feishu / Lark | WebSocket long-connection | Moderate |
+
+<details>
+<summary><b>Telegram setup</b></summary>
+
+### 1. Create a Bot
+
+1. Chat with [@BotFather](https://t.me/BotFather) on Telegram.
+2. Send `/newbot` and follow the prompts.
+3. Copy the **HTTP API token**.
+
+### 2. Configure
+
+```bash
+export TELEGRAM_BOT_TOKEN="123456789:ABCdefGHIjklMNOpqrSTUvwxYZ"
+export TELEGRAM_ALLOWED_USERS="123456789"   # optional — restrict access by user ID
+```
+
+### 3. Commands
+
+| Command | Description |
+|---------|-------------|
+| `/newtask <title> \| <prompt>` | Create a task |
+| `/list` | List all tasks |
+| `/status <id>` | Task details |
+| `/cancel <id>` | Cancel a task |
+| `/help` | Show help |
+
+</details>
+
+<details>
+<summary><b>Slack setup</b></summary>
+
+### 1. Create a Slack App
+
+Go to [api.slack.com/apps](https://api.slack.com/apps) → **Create New App → From scratch**.
+
+### 2. Bot Permissions
+
+Under **OAuth & Permissions → Bot Token Scopes**, add:
+`app_mentions:read`, `chat:write`, `im:history`, `im:read`, `im:write`, `reactions:write`
+
+### 3. Enable Socket Mode
+
+**Socket Mode** → toggle on → generate an **App-Level Token** (`xapp-…`) with `connections:write`.
+
+### 4. Subscribe to Events
+
+**Event Subscriptions → Subscribe to bot events**: `app_mention`, `message.im`
+
+### 5. Configure
+
+```bash
+export SLACK_BOT_TOKEN="xoxb-..."
+export SLACK_APP_TOKEN="xapp-..."
+export SLACK_ALLOWED_USERS="U012AB3CD"   # optional
+```
+
+### 6. Commands
+
+Send as a DM or @mention:
+
+| Command | Description |
+|---------|-------------|
+| `newtask <title> \| <prompt>` | Create a task |
+| `list` | List all tasks |
+| `status <id>` | Task details |
+| `cancel <id>` | Cancel a task |
+
+</details>
+
+<details>
+<summary><b>Feishu / Lark setup</b></summary>
+
+Feishu uses the settings API (no environment variables needed). It connects via WebSocket — no public IP required.
+
+### 1. Create a Feishu App
+
+- [Feishu Open Platform](https://open.feishu.cn/app) → new app → enable **Bot**
+- Permissions: `im:message`, `im:resource`
+- Events: `im.message.receive_v1` with **Long Connection** mode
+- Copy **App ID** and **App Secret**
+
+### 2. Configure via API
+
+```bash
+curl -X POST http://127.0.0.1:9712/api/feishu/settings \
+  -H "Content-Type: application/json" \
+  -d '{
+    "feishu_app_id": "cli_xxxx",
+    "feishu_app_secret": "your_app_secret",
+    "feishu_default_working_dir": "~/projects",
+    "feishu_enabled": "true"
+  }'
+```
+
+Or configure from the desktop app's settings page.
+
+</details>
+
+> See [`channels/README.md`](channels/README.md) for detailed setup, notification behavior, and adding custom channels.
+
+---
+
+## Multi-Agent Pipelines (DAG)
+
+AgentForge ships with a **Claude Code skill** (`skills/agentforge/`) that lets any agent running inside Claude Code create and manage other AgentForge tasks — enabling recursive, multi-agent workflows.
+
+```
+          User
+           |
+           v
+     [ Task A ]  ──creates──>  [ Task B ]  [ Task C ]
+                                    |
+                                  creates
+                                    v
+                               [ Task D ]  (depends on B)
+```
+
+### Install the skill
+
+```bash
+# Symlink into your Claude Code skills directory
+ln -s /path/to/agentforge/skills/agentforge ~/.claude/skills/agentforge
+```
+
+### What the skill enables
+
+- **Fan-out / fan-in** — Spawn N sub-tasks in parallel, poll until complete, synthesize results
+- **DAG dependencies** — `--depends-on <ids>` makes downstream tasks wait for upstream to finish; failures cascade-cancel the rest
+- **Result injection** — `--inject-result` prepends upstream output into the downstream prompt automatically
+- **Scheduled sub-workflows** — Combine cron, delayed, and immediate schedules within a pipeline
+
+### Example — parallel research pipeline
+
+```
+Research the top 3 competitors of Acme Corp.
+For each competitor, create a separate AgentForge task that:
+  1. Gathers recent news and financials
+  2. Writes a one-page summary
+Then create a final task (depends-on the above 3) that
+synthesizes everything into a comparative report.
+```
+
+AgentForge handles scheduling, dependency tracking, and result passing automatically.
+
+---
+
+## API Reference
+
+All endpoints are served at `http://127.0.0.1:9712/api`.
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/tasks` | List all tasks |
+| GET | `/api/tasks/:id` | Get a single task |
+| POST | `/api/tasks` | Create a task |
+| POST | `/api/tasks/:id/cancel` | Cancel a task |
+| POST | `/api/tasks/:id/retry` | Retry a failed task |
+| DELETE | `/api/tasks/:id` | Delete a task |
+| GET | `/api/tasks/:id/runs` | Get run history |
+| GET | `/api/tasks/:id/output` | Get accumulated output |
+| GET | `/api/tasks/:id/events` | Get structured output events |
+| GET | `/api/health` | Health check |
+
+---
+
+## Background Service
+
+To keep the backend running persistently without the desktop app:
 
 ```xml
 <!-- ~/Library/LaunchAgents/com.agentforge.taskboard.plist -->
@@ -408,17 +349,20 @@ To keep the backend running persistently on macOS:
     <string>com.agentforge.taskboard</string>
     <key>ProgramArguments</key>
     <array>
-        <string>/usr/bin/python3</string>
-        <string>/path/to/taskboard.py</string>
+        <string>/usr/local/bin/uv</string>
+        <string>run</string>
+        <string>/path/to/agentforge/taskboard.py</string>
     </array>
+    <key>WorkingDirectory</key>
+    <string>/path/to/agentforge</string>
     <key>RunAtLoad</key>
     <true/>
     <key>KeepAlive</key>
     <true/>
     <key>StandardOutPath</key>
-    <string>/tmp/taskboard.log</string>
+    <string>/tmp/agentforge.log</string>
     <key>StandardErrorPath</key>
-    <string>/tmp/taskboard.err</string>
+    <string>/tmp/agentforge.err</string>
 </dict>
 </plist>
 ```
@@ -427,6 +371,45 @@ To keep the backend running persistently on macOS:
 launchctl load ~/Library/LaunchAgents/com.agentforge.taskboard.plist
 ```
 
+---
+
+## Architecture
+
+```
+┌──────────────────┐     HTTP/JSON      ┌──────────────────┐
+│   React Frontend │ <────────────────> │  Python Backend  │
+│   (Kanban UI)    │   localhost:9712   │  (Scheduler+API) │
+└──────────────────┘                   └───────┬──────────┘
+                                               |
+                               ┌───────────────┼───────────────┐
+                               v               v               v
+                         [ SQLite DB ]   [ Scheduler ]   [ Claude CLI ]
+```
+
+- **Python backend** (`taskboard.py`) — single-file `BaseHTTPRequestHandler` server. Manages tasks in SQLite (`~/.agentforge/tasks.db`), runs `claude` CLI via `AgentExecutor`, and schedules work with `TaskScheduler` (polls every 2 s, supports cron via `croniter`).
+- **Electron shell** (`taskboard-electron/`) — spawns the Python backend on start, kills it on quit. Loads React renderer from Vite dev server (dev) or bundled assets (prod).
+- **React frontend** (`App.jsx`) — single-component kanban board that polls the REST API and renders colorized streaming output.
+
+---
+
+## Contributing
+
+Contributions are welcome! Here's how to get started:
+
+1. Fork the repository and create a feature branch.
+2. Start the app in development mode (see [Option 3](#option-3-development-mode) above).
+3. Make your changes and verify them manually — there are no automated tests.
+4. Open a pull request with a clear description of the change.
+
+**Key files:**
+- `taskboard.py` — entire Python backend (DB, scheduler, executor, HTTP handlers)
+- `taskboard-electron/src/main.js` — Electron main process
+- `taskboard-electron/src/renderer/App.jsx` — React frontend (~1500 lines)
+- `channels/` — pluggable chat channel adapters
+- `skills/agentforge/` — Claude Code skill for agent-to-agent delegation
+
+---
+
 ## License
 
-This project is licensed under the MIT License. See [LICENSE](LICENSE) for details.
+MIT — see [LICENSE](LICENSE) for details.
