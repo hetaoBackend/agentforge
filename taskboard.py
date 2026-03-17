@@ -127,6 +127,7 @@ class Task:
     prompt_images: list = field(default_factory=list)  # [{media_type, data, name}]
     image_paths: list = field(default_factory=list)    # list of local image file paths
     dag_id: Optional[str] = None             # optional DAG workflow group label
+    feishu_root_msg_id: Optional[str] = None  # Feishu root message_id that created this task
 
 
 # ──────────────────────────── Database ────────────────────────────
@@ -290,6 +291,12 @@ class TaskDB:
             self.conn.commit()
         except sqlite3.OperationalError:
             pass  # Column already exists
+        # Migration: add feishu_root_msg_id column for post-restart resume
+        try:
+            self.conn.execute("ALTER TABLE tasks ADD COLUMN feishu_root_msg_id TEXT")
+            self.conn.commit()
+        except sqlite3.OperationalError:
+            pass  # Column already exists
 
         self.conn.commit()
 
@@ -339,17 +346,26 @@ class TaskDB:
             logger.debug(f"image_paths JSON: {image_paths_json}")
             cur = self.conn.execute("""
                 INSERT INTO tasks (title, prompt, working_dir, status, schedule_type,
-                    cron_expr, delay_seconds, next_run_at, max_runs, created_at, updated_at, tags, agent, prompt_images, image_paths, dag_id)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    cron_expr, delay_seconds, next_run_at, max_runs, created_at, updated_at, tags, agent, prompt_images, image_paths, dag_id, feishu_root_msg_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (task.title, task.prompt, task.working_dir, task.status.value,
                   task.schedule_type.value, task.cron_expr, task.delay_seconds,
                   task.next_run_at, task.max_runs, now, now, task.tags, task.agent,
                   json.dumps(task.prompt_images, ensure_ascii=False),
-                  image_paths_json, task.dag_id))
+                  image_paths_json, task.dag_id, task.feishu_root_msg_id))
             self.conn.commit()
             task_id = cur.lastrowid
             logger.debug(f"Task {task_id} inserted with image_paths")
             return task_id
+
+    def get_task_by_feishu_root_msg(self, root_msg_id: str) -> Optional[dict]:
+        """Look up the most recent task created from a given Feishu root message ID."""
+        with self.lock:
+            row = self.conn.execute(
+                "SELECT * FROM tasks WHERE feishu_root_msg_id = ? ORDER BY id DESC LIMIT 1",
+                (root_msg_id,)
+            ).fetchone()
+            return dict(row) if row else None
 
     def get_setting(self, key: str, default: str = None) -> Optional[str]:
         with self.lock:
