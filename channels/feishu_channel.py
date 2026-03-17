@@ -861,6 +861,15 @@ class FeishuChannel(Channel):
                     if not task_id and parent_id:
                         task_id = self._root_msg_map.get(parent_id)
 
+            # Fallback: query DB by feishu_root_msg_id (survives service restarts)
+            if not task_id:
+                for msg_id in filter(None, [root_id, parent_id]):
+                    db_task = self.db.get_task_by_feishu_root_msg(msg_id)
+                    if db_task:
+                        task_id = db_task["id"]
+                        print(f"[Feishu] Recovered task {task_id} from DB via feishu_root_msg_id={msg_id}")
+                        break
+
             # Determine which message to reply to in the thread
             thread_root = root_id or parent_id
 
@@ -937,6 +946,7 @@ class FeishuChannel(Channel):
             tags="feishu",
             image_paths=image_paths,
             prompt_images=prompt_images,
+            feishu_root_msg_id=message.message_id,
         )
         print(f"[Feishu] Task object created with {len(image_paths)} image_paths and {len(prompt_images)} prompt_images")
         task_id = self.scheduler.submit_task(new_task)

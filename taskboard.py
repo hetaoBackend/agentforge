@@ -127,6 +127,7 @@ class Task:
     prompt_images: list = field(default_factory=list)  # [{media_type, data, name}]
     image_paths: list = field(default_factory=list)    # list of local image file paths
     dag_id: Optional[str] = None             # optional DAG workflow group label
+    feishu_root_msg_id: Optional[str] = None  # Feishu root message_id that created this task
 
 
 # ──────────────────────────── Database ────────────────────────────
@@ -290,6 +291,12 @@ class TaskDB:
             self.conn.commit()
         except sqlite3.OperationalError:
             pass  # Column already exists
+        # Migration: add feishu_root_msg_id column for post-restart resume
+        try:
+            self.conn.execute("ALTER TABLE tasks ADD COLUMN feishu_root_msg_id TEXT")
+            self.conn.commit()
+        except sqlite3.OperationalError:
+            pass  # Column already exists
 
         self.conn.commit()
 
@@ -339,17 +346,26 @@ class TaskDB:
             logger.debug(f"image_paths JSON: {image_paths_json}")
             cur = self.conn.execute("""
                 INSERT INTO tasks (title, prompt, working_dir, status, schedule_type,
-                    cron_expr, delay_seconds, next_run_at, max_runs, created_at, updated_at, tags, agent, prompt_images, image_paths, dag_id)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    cron_expr, delay_seconds, next_run_at, max_runs, created_at, updated_at, tags, agent, prompt_images, image_paths, dag_id, feishu_root_msg_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (task.title, task.prompt, task.working_dir, task.status.value,
                   task.schedule_type.value, task.cron_expr, task.delay_seconds,
                   task.next_run_at, task.max_runs, now, now, task.tags, task.agent,
                   json.dumps(task.prompt_images, ensure_ascii=False),
-                  image_paths_json, task.dag_id))
+                  image_paths_json, task.dag_id, task.feishu_root_msg_id))
             self.conn.commit()
             task_id = cur.lastrowid
             logger.debug(f"Task {task_id} inserted with image_paths")
             return task_id
+
+    def get_task_by_feishu_root_msg(self, root_msg_id: str) -> Optional[dict]:
+        """Look up the most recent task created from a given Feishu root message ID."""
+        with self.lock:
+            row = self.conn.execute(
+                "SELECT * FROM tasks WHERE feishu_root_msg_id = ? ORDER BY id DESC LIMIT 1",
+                (root_msg_id,)
+            ).fetchone()
+            return dict(row) if row else None
 
     def get_setting(self, key: str, default: str = None) -> Optional[str]:
         with self.lock:
@@ -740,16 +756,57 @@ class TaskScheduler(BusAwareSchedulerMixin):
         self.db.update_task(task["id"], status="running")
         t.start()
 
-    def _parse_and_store_event(self, task_id: int, run_id: int, line: str):
+    def _parse_codex_event(self, event: dict) -> tuple:
+        """Normalize a Codex JSONL event into (event_type, content) for storage.
+
+        Returns (None, None) to skip events that carry no displayable content.
+        """
+        etype = event.get("type", "")
+        if etype == "item.completed":
+            item = event.get("item", {})
+            itype = item.get("type", "")
+            if itype == "agent_message":
+                return "assistant", item.get("text", "")
+            elif itype == "reasoning":
+                text = item.get("text", "")
+                return ("assistant", f"[thinking] {text}") if text else (None, None)
+            elif itype == "command_execution":
+                cmd = item.get("command", "")
+                out = item.get("aggregated_output", "")
+                content = f"$ {cmd}\n{out}".strip() if cmd else json.dumps(event, ensure_ascii=False)
+                return etype, content
+            else:
+                return etype, json.dumps(event, ensure_ascii=False)
+        elif etype == "turn.failed":
+            err = event.get("error", {})
+            msg = err.get("message", "") if isinstance(err, dict) else str(err)
+            return "error", msg
+        elif etype == "error":
+            return "error", event.get("message", "")
+        elif etype == "turn.completed":
+            # turn.completed only carries usage stats; final text comes from agent_message items
+            return None, None
+        elif etype in ("thread.started", "turn.started", "item.started", "item.updated"):
+            return None, None
+        else:
+            return etype, json.dumps(event, ensure_ascii=False)
+
+    def _parse_and_store_event(self, task_id: int, run_id: int, line: str, agent: str = "claude"):
         """Parse a line from the output stream and store it as an event."""
         if not line.strip():
             return
 
         try:
             event = json.loads(line)
-            event_type = event.get("type", "unknown")
 
-            # Extract content based on event type
+            if agent == "codex":
+                event_type, content = self._parse_codex_event(event)
+                if event_type and content:
+                    self.db.add_output_event(task_id, run_id, event_type, content)
+                return
+
+            # Claude stream-json
+            event_type = event.get("type", "unknown")
             if event_type in ("user", "assistant"):
                 text_content, image_events = self._extract_message_content(event)
                 if text_content:
@@ -935,17 +992,38 @@ class TaskScheduler(BusAwareSchedulerMixin):
                 except Exception as e:
                     logger.error(f"Task {tid}: Failed to load image {img_path}: {e}")
 
-        use_stdin = bool(prompt_images)
+        agent = task.get("agent", "claude")
+        use_stdin = bool(prompt_images) and agent == "claude"
 
-        if use_stdin:
-            # Multimodal input: pass via stdin with --input-format stream-json
+        if agent == "codex":
+            working_dir_expanded = os.path.expanduser(task["working_dir"])
+            if task.get("session_id"):
+                cmd = [
+                    "codex", "exec", "resume",
+                    "--json",
+                    "--ask-for-approval", "never",
+                    task["session_id"],
+                    prompt,
+                ]
+            else:
+                cmd = [
+                    "codex", "exec",
+                    "--json",
+                    "--ask-for-approval", "never",
+                    "--cd", working_dir_expanded,
+                    prompt,
+                ]
+            for img_path in image_paths or []:
+                cmd.extend(["--image", img_path])
+        elif use_stdin:
+            # Claude multimodal input: pass via stdin with --input-format stream-json
             cmd = ["claude", "-p", "--input-format", "stream-json",
                    "--output-format", "stream-json", "--verbose",
                    "--permission-mode", "bypassPermissions"]
         else:
             cmd = ["claude", "-p", prompt, "--output-format", "stream-json",
                    "--verbose", "--permission-mode", "bypassPermissions"]
-        if task.get("session_id"):
+        if agent == "claude" and task.get("session_id"):
             cmd.extend(["--resume", task["session_id"]])
         raw_stdout = ""
         raw_stderr = ""
@@ -1012,7 +1090,7 @@ class TaskScheduler(BusAwareSchedulerMixin):
                     chunks.append(line)
                     self._live_output[tid] = "".join(chunks)
                     # Parse and store each line as an event
-                    self._parse_and_store_event(tid, run_id, line)
+                    self._parse_and_store_event(tid, run_id, line, agent)
                 proc.wait()
             finally:
                 timer.cancel()
@@ -1051,42 +1129,59 @@ class TaskScheduler(BusAwareSchedulerMixin):
             if timed_out[0]:
                 success, output = False, f"Task timed out after {timeout_secs}s"
             elif proc.returncode == 0:
-                # stream-json: find the last result event and last assistant text
-                out = ""
-                last_assistant_text = ""
-                for line in raw_stdout.splitlines():
-                    line = line.strip()
-                    if not line:
-                        continue
-                    try:
-                        event = json.loads(line)
-                        if event.get("type") == "assistant":
-                            # Extract text from assistant message as fallback
-                            msg = event.get("message", {})
-                            content = msg.get("content", [])
-                            text_parts = []
-                            for c in content:
-                                if isinstance(c, str):
-                                    text_parts.append(c)
-                                elif isinstance(c, dict) and c.get("type") == "text":
-                                    text_parts.append(c.get("text", ""))
-                            if text_parts:
-                                last_assistant_text = "".join(text_parts)
-                        elif event.get("type") == "result":
-                            result_text = event.get("result")
-                            if result_text:
-                                out = result_text
-                    except json.JSONDecodeError:
-                        pass
-                # If result event had no result field (e.g. error_during_execution
-                # with 0 output tokens), fall back to last assistant message text
-                if not out:
-                    out = last_assistant_text
-                success, output = True, out
+                if agent == "codex":
+                    # Codex JSONL: final output is the last agent_message item text
+                    out = ""
+                    for line in raw_stdout.splitlines():
+                        line = line.strip()
+                        if not line:
+                            continue
+                        try:
+                            event = json.loads(line)
+                            if (event.get("type") == "item.completed"
+                                    and event.get("item", {}).get("type") == "agent_message"):
+                                out = event["item"].get("text", "")
+                        except json.JSONDecodeError:
+                            pass
+                    success, output = True, out or raw_stdout
+                else:
+                    # Claude stream-json: find the last result event and last assistant text
+                    out = ""
+                    last_assistant_text = ""
+                    for line in raw_stdout.splitlines():
+                        line = line.strip()
+                        if not line:
+                            continue
+                        try:
+                            event = json.loads(line)
+                            if event.get("type") == "assistant":
+                                msg = event.get("message", {})
+                                content = msg.get("content", [])
+                                text_parts = []
+                                for c in content:
+                                    if isinstance(c, str):
+                                        text_parts.append(c)
+                                    elif isinstance(c, dict) and c.get("type") == "text":
+                                        text_parts.append(c.get("text", ""))
+                                if text_parts:
+                                    last_assistant_text = "".join(text_parts)
+                            elif event.get("type") == "result":
+                                result_text = event.get("result")
+                                if result_text:
+                                    out = result_text
+                        except json.JSONDecodeError:
+                            pass
+                    # If result event had no result field (e.g. error_during_execution
+                    # with 0 output tokens), fall back to last assistant message text
+                    if not out:
+                        out = last_assistant_text
+                    success, output = True, out
             else:
                 success, output = False, raw_stderr or raw_stdout
         except FileNotFoundError:
-            success, output = False, "claude CLI not found. Is it installed?"
+            cli_name = "codex" if task.get("agent") == "codex" else "claude"
+            install_hint = "Install with: npm install -g @openai/codex" if cli_name == "codex" else "Is it installed?"
+            success, output = False, f"{cli_name} CLI not found. {install_hint}"
             self._active_pgids.pop(tid, None)
         except (OSError, subprocess.SubprocessError) as e:
             logger.error(f"Task {tid} subprocess error: {e}")
@@ -1095,9 +1190,24 @@ class TaskScheduler(BusAwareSchedulerMixin):
 
         self._live_output.pop(tid, None)
 
-        # Extract session_id from stream-json output
+        # Extract session_id from output (format differs by agent)
         extracted_session_id = None
-        for line in reversed(raw_stdout.splitlines()):
+        if agent == "codex":
+            # Codex emits session_id in the thread.started event at the beginning
+            for line in raw_stdout.splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    event = json.loads(line)
+                    if event.get("type") == "thread.started" and event.get("thread_id"):
+                        extracted_session_id = event["thread_id"]
+                        break
+                except json.JSONDecodeError:
+                    pass
+        else:
+            # Claude emits session_id in the result event at the end
+            for line in reversed(raw_stdout.splitlines()):
                 line = line.strip()
                 if not line:
                     continue

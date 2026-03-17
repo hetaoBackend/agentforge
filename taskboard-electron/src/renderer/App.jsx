@@ -73,6 +73,7 @@ const COLUMNS = [
 
 const AGENTS = {
   claude: { label: "Claude Code", icon: "⌘", color: "#7c6aff" },
+  codex: { label: "Codex CLI", icon: "◈", color: "#10a37f" },
 };
 
 // ─── Formatted Output Component ───
@@ -982,6 +983,13 @@ function NewTaskModal({ onClose, onSubmit, initialData, mode = "create" }) {
             </div>
           </div>
 
+          <div>
+            <label style={labelStyle}>Agent</label>
+            <select style={inputStyle} value={form.agent} onChange={e => set("agent", e.target.value)}>
+              <option value="claude">Claude Code (claude CLI)</option>
+              <option value="codex">Codex CLI (openai/codex)</option>
+            </select>
+          </div>
 
         </div>
 
@@ -1522,9 +1530,10 @@ function getEventTypeColor(eventType) {
   }
 }
 
-function SettingsModal({ onClose, timeout: initialTimeout, onSave, feishu: initialFeishu, onFeishuSave, channelsStatus: initialChannelsStatus, onChannelsSave }) {
+function SettingsModal({ onClose, timeout: initialTimeout, defaultAgent: initialDefaultAgent, onSave, feishu: initialFeishu, onFeishuSave, channelsStatus: initialChannelsStatus, onChannelsSave }) {
   const [tab, setTab] = useState("general");
   const [timeout, setTimeout] = useState(initialTimeout ?? 600);
+  const [defaultAgent, setDefaultAgent] = useState(initialDefaultAgent ?? "claude");
   const [feishu, setFeishu] = useState({
     feishu_app_id: "",
     feishu_app_secret: "",
@@ -1557,8 +1566,8 @@ function SettingsModal({ onClose, timeout: initialTimeout, onSave, feishu: initi
   }, []);
 
   const handleSaveGeneral = async () => {
-    await updateSettings({ timeout: parseInt(timeout) || 600 });
-    onSave(parseInt(timeout) || 600);
+    await updateSettings({ timeout: parseInt(timeout) || 600, default_agent: defaultAgent });
+    onSave(parseInt(timeout) || 600, defaultAgent);
     onClose();
   };
 
@@ -1674,6 +1683,14 @@ function SettingsModal({ onClose, timeout: initialTimeout, onSave, feishu: initi
                 style={fieldStyle}
               />
               <div style={hintStyle}>Default: 600s (10 min). Max time before a running task is killed.</div>
+            </div>
+            <div style={{ marginBottom: 20 }}>
+              <label style={labelStyle}>Default Agent</label>
+              <select value={defaultAgent} onChange={e => setDefaultAgent(e.target.value)} style={fieldStyle}>
+                <option value="claude">Claude Code (claude CLI)</option>
+                <option value="codex">Codex CLI (openai/codex)</option>
+              </select>
+              <div style={hintStyle}>Agent used for new tasks unless overridden per-task.</div>
             </div>
             <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
               <button onClick={onClose} style={{
@@ -2026,6 +2043,7 @@ export default function App() {
   const [connected, setConnected] = useState(false);
   const [filter, setFilter] = useState("");
   const [taskTimeout, setTaskTimeout] = useState(600);
+  const [defaultAgent, setDefaultAgent] = useState("claude");
   const [feishuSettings, setFeishuSettings] = useState({});
   const [channelsStatus, setChannelsStatus] = useState({});
   const [backendReady, setBackendReady] = useState(false);
@@ -2098,6 +2116,7 @@ export default function App() {
     if (!backendReady) return;
     fetchSettings().then(s => {
       if (s.timeout) setTaskTimeout(s.timeout);
+      if (s.default_agent) setDefaultAgent(s.default_agent);
     });
     fetchFeishuSettings().then(s => setFeishuSettings(s));
     fetchChannelsStatus().then(s => setChannelsStatus(s));
@@ -2350,7 +2369,7 @@ export default function App() {
       </div>
 
       {/* Modals */}
-      {showNew && <NewTaskModal onClose={() => setShowNew(false)} onSubmit={handleCreate} />}
+      {showNew && <NewTaskModal onClose={() => setShowNew(false)} onSubmit={handleCreate} initialData={{ agent: defaultAgent }} />}
       {editingTask && (
         <NewTaskModal
           onClose={() => setEditingTask(null)}
@@ -2371,7 +2390,8 @@ export default function App() {
         <SettingsModal
           onClose={() => setShowSettings(false)}
           timeout={taskTimeout}
-          onSave={(timeout) => { setTaskTimeout(timeout); }}
+          defaultAgent={defaultAgent}
+          onSave={(timeout, agent) => { setTaskTimeout(timeout); if (agent) setDefaultAgent(agent); }}
           feishu={feishuSettings}
           onFeishuSave={(updated) => setFeishuSettings(updated)}
           channelsStatus={channelsStatus}
