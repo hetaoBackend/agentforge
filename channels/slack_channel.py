@@ -47,6 +47,7 @@ Reply to a completion/failure notification to resume that task.
 • `/resume <id> <message>` — resume a task with a message
 • `/dir <path>` — set default working directory
 　　e.g. `/dir ~/workspace/myproject`
+• `/agent <name>` — switch coding agent (`claude` / `codex`)
 • `/help` — show this message
 
 *Tips:*
@@ -275,6 +276,10 @@ class SlackChannel(Channel):
                 from channels.dir_utils import handle_dir_command
                 reply = handle_dir_command(text, "slack", self.db)
                 self._reply(channel_id, msg_ts, reply or HELP_TEXT)
+            elif cmd == "/agent":
+                from channels.agent_utils import handle_agent_command
+                reply = handle_agent_command(text, "slack", self.db)
+                self._reply(channel_id, msg_ts, reply or HELP_TEXT)
             elif cmd == "/help":
                 self._reply(channel_id, msg_ts, HELP_TEXT)
             else:
@@ -331,12 +336,14 @@ class SlackChannel(Channel):
 
         title = text[:60] + ("…" if len(text) > 60 else "")
         from channels.dir_utils import resolve_working_dir
+        from channels.agent_utils import resolve_agent
         task = Task(
             title=f"[Slack] {title}",
             prompt=text,
             working_dir=resolve_working_dir(text, "slack", self.db),
             schedule_type=ScheduleType.IMMEDIATE,
             tags="slack",
+            agent=resolve_agent("slack", self.db),
         )
         task_id = self.scheduler.submit_task(task)
         print(f"[Slack] Task #{task_id} created from message")

@@ -54,6 +54,7 @@ HELP_TEXT = (
     "/resume `<id> <message>` — resume a task\n"
     "/dir `<path>` — set default working directory\n"
     "　　　　e\\.g\\. `/dir ~/workspace/myproject`\n"
+    "/agent `<name>` — switch coding agent \\(`claude` / `codex`\\)\n"
     "/help — show this message\n\n"
     "*Tips:*\n"
     "• You can also mention a path in your message and it will be used automatically\\.\n"
@@ -332,6 +333,13 @@ class TelegramChannel(Channel):
             await update.message.reply_text(dir_reply)
             return
 
+        # ── /agent command: switch coding agent ──────────────────
+        from channels.agent_utils import handle_agent_command
+        agent_reply = handle_agent_command(text, "telegram", self.db)
+        if agent_reply is not None:
+            await update.message.reply_text(agent_reply)
+            return
+
         # ── 检测转发消息 ───────────────────────────────────────
         text = self._format_forwarded_text(text, update)
 
@@ -392,12 +400,14 @@ class TelegramChannel(Channel):
         from channels.dir_utils import resolve_working_dir
         working_dir = resolve_working_dir(text, "telegram", self.db)
 
+        from channels.agent_utils import resolve_agent
         task = Task(
             title=f"[Telegram] {title_prefix}{title}",
             prompt=text,
             working_dir=working_dir,
             schedule_type=ScheduleType.IMMEDIATE,
             tags="telegram" + (", forwarded" if is_forwarded else ""),
+            agent=resolve_agent("telegram", self.db),
         )
         task_id = self.scheduler.submit_task(task)
         print(f"[Telegram] Task #{task_id} created from message{' (forwarded)' if is_forwarded else ''}")

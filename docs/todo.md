@@ -54,6 +54,8 @@
 
 ## Minor - Quality of Life
 
+- [x] **Create PR for current branch changes** — open a GitHub PR from the current branch into `main`
+  - ✅ PR opened: #5
 - [x] **移动端错误通知不清晰** — Telegram 通知的错误消息是原始 CLI 输出，无标题无结构
   - ✅ 已修复：`taskboard.py` 新增 `_extract_error_summary()` 解析 stream-json 提取清晰错误摘要，`task.error` 改存 clean summary（原始输出保留在 `run.raw_output`）
   - ✅ Telegram 通知格式改为：`❌ Task #N: <title>\n<error>\n\n/status N`，origin 任务也包含标题
@@ -95,6 +97,12 @@
     - **方案一**：`/dir <path>` 或 `/cd <path>` 指令，持久化到 DB，立即回复确认
     - **方案二**：Claude (claude-haiku) 自动从 prompt 中提取显式路径，无需用户输入指令
   - Telegram/Slack/Feishu 三个 channel 均已接入
+
+- [x] **IM 侧切换 coding agent** ✅
+  - 新增 `channels/agent_utils.py`，支持 `/agent claude` / `/agent codex` 命令
+  - Feishu/Telegram/Slack 三个 channel 均已接入，创建任务时自动使用当前 default agent
+  - 写入全局 `default_agent` setting，Forge App 前端 Settings 面板自动同步显示
+  - 修复 API 层 `POST /api/tasks` 和 DAG 创建时 agent 字段也使用 `default_agent` 作为 fallback
 
 
   - 设计一个持久化的记忆系统，可以记录和检索：
