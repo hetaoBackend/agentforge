@@ -1001,7 +1001,8 @@ class TaskScheduler(BusAwareSchedulerMixin):
                 cmd = [
                     "codex", "exec", "resume",
                     "--json",
-                    "--ask-for-approval", "never",
+                    "--dangerously-bypass-approvals-and-sandbox",
+                    "--skip-git-repo-check",
                     task["session_id"],
                     prompt,
                 ]
@@ -1009,7 +1010,8 @@ class TaskScheduler(BusAwareSchedulerMixin):
                 cmd = [
                     "codex", "exec",
                     "--json",
-                    "--ask-for-approval", "never",
+                    "--dangerously-bypass-approvals-and-sandbox",
+                    "--skip-git-repo-check",
                     "--cd", working_dir_expanded,
                     prompt,
                 ]
@@ -1698,7 +1700,7 @@ class TaskAPIHandler(BaseHTTPRequestHandler):
                 next_run_at=body.get("next_run_at"),  # Allow setting next_run_at directly
                 max_runs=body.get("max_runs"),
                 tags=body.get("tags", ""),
-                agent=body.get("agent", "claude"),
+                agent=body.get("agent") or self.db.get_setting("default_agent", "claude"),
                 prompt_images=prompt_images,
                 image_paths=image_paths,
                 dag_id=body.get("dag_id"),
@@ -1850,7 +1852,7 @@ class TaskAPIHandler(BaseHTTPRequestHandler):
                     next_run_at=tdef.get("next_run_at"),
                     max_runs=tdef.get("max_runs"),
                     tags=tdef.get("tags", ""),
-                    agent=tdef.get("agent", "claude"),
+                    agent=tdef.get("agent") or self.db.get_setting("default_agent", "claude"),
                     prompt_images=prompt_images,
                     dag_id=dag_id,
                 )

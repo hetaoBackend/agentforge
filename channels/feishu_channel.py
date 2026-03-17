@@ -53,6 +53,7 @@ HELP_TEXT = """\
 • `/resume <id> <message>` — 继续执行任务
 • `/dir <path>` — 设置默认工作目录
 　　例如：`/dir ~/workspace/myproject`
+• `/agent <name>` — 切换 coding agent（`claude` / `codex`）
 • `/ccu` — 查看 Claude Code 当前用量（ccu-blocks）
 • `/help` — 显示此帮助
 
@@ -769,6 +770,14 @@ class FeishuChannel(Channel):
                 self._send_message(reply_to, reply)
             return
 
+        # ── command: /agent <name> — switch coding agent ─────────
+        if content.startswith("/agent "):
+            from channels.agent_utils import handle_agent_command
+            reply = handle_agent_command(content, "feishu", self.db)
+            if reply:
+                self._send_message(reply_to, reply)
+            return
+
         # ── command: /ccu [blocks] — usage stats ────────────────
         if content.strip().lower().startswith("/ccu"):
             stats = self._get_usage_stats()
@@ -938,6 +947,7 @@ class FeishuChannel(Channel):
                     print(f"[Feishu] Failed to convert image {img_path} to base64: {e}")
 
         from taskboard import Task, ScheduleType
+        from channels.agent_utils import resolve_agent
         new_task = Task(
             title=f"[Feishu] {title}",
             prompt=content,
@@ -947,6 +957,7 @@ class FeishuChannel(Channel):
             image_paths=image_paths,
             prompt_images=prompt_images,
             feishu_root_msg_id=message.message_id,
+            agent=resolve_agent("feishu", self.db),
         )
         print(f"[Feishu] Task object created with {len(image_paths)} image_paths and {len(prompt_images)} prompt_images")
         task_id = self.scheduler.submit_task(new_task)

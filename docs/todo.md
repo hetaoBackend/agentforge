@@ -96,6 +96,12 @@
     - **方案二**：Claude (claude-haiku) 自动从 prompt 中提取显式路径，无需用户输入指令
   - Telegram/Slack/Feishu 三个 channel 均已接入
 
+- [x] **IM 侧切换 coding agent** ✅
+  - 新增 `channels/agent_utils.py`，支持 `/agent claude` / `/agent codex` 命令
+  - Feishu/Telegram/Slack 三个 channel 均已接入，创建任务时自动使用当前 default agent
+  - 写入全局 `default_agent` setting，Forge App 前端 Settings 面板自动同步显示
+  - 修复 API 层 `POST /api/tasks` 和 DAG 创建时 agent 字段也使用 `default_agent` 作为 fallback
+
 
   - 设计一个持久化的记忆系统，可以记录和检索：
     - ronny (用户) 的个人信息、偏好、历史交互
