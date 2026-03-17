@@ -54,7 +54,8 @@
 
 ## Minor - Quality of Life
 
-- [ ] **Create PR for current branch changes** — open a GitHub PR from the current branch into `main`
+- [x] **Create PR for current branch changes** — open a GitHub PR from the current branch into `main`
+  - ✅ PR opened: #5
 - [x] **移动端错误通知不清晰** — Telegram 通知的错误消息是原始 CLI 输出，无标题无结构
   - ✅ 已修复：`taskboard.py` 新增 `_extract_error_summary()` 解析 stream-json 提取清晰错误摘要，`task.error` 改存 clean summary（原始输出保留在 `run.raw_output`）
   - ✅ Telegram 通知格式改为：`❌ Task #N: <title>\n<error>\n\n/status N`，origin 任务也包含标题
