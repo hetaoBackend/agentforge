@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, powerSaveBlocker } from 'electron';
 import path from 'node:path';
 import http from 'node:http';
 import { spawn } from 'node:child_process';
@@ -216,6 +216,7 @@ ipcMain.handle('select-directory', async () => {
 });
 
 app.whenReady().then(() => {
+  powerSaveBlocker.start('prevent-app-suspension');
   createWindow();
 
   // 设置Python后端热重载

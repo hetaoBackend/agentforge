@@ -749,19 +749,28 @@ class TaskScheduler(BusAwareSchedulerMixin):
         if etype == "item.completed":
             item = event.get("item", {})
             itype = item.get("type", "")
-            if itype == "message":
-                return "assistant", item.get("content", "")
+            if itype == "agent_message":
+                return "assistant", item.get("text", "")
             elif itype == "reasoning":
-                text = item.get("content", "")
+                text = item.get("text", "")
                 return ("assistant", f"[thinking] {text}") if text else (None, None)
+            elif itype == "command_execution":
+                cmd = item.get("command", "")
+                out = item.get("aggregated_output", "")
+                content = f"$ {cmd}\n{out}".strip() if cmd else json.dumps(event, ensure_ascii=False)
+                return etype, content
             else:
                 return etype, json.dumps(event, ensure_ascii=False)
-        elif etype in ("turn.failed", "error"):
-            return "error", event.get("error", event.get("message", ""))
+        elif etype == "turn.failed":
+            err = event.get("error", {})
+            msg = err.get("message", "") if isinstance(err, dict) else str(err)
+            return "error", msg
+        elif etype == "error":
+            return "error", event.get("message", "")
         elif etype == "turn.completed":
-            msg = event.get("message", "")
-            return ("result", msg) if msg else (None, None)
-        elif etype in ("thread.started", "turn.started", "item.started"):
+            # turn.completed only carries usage stats; final text comes from agent_message items
+            return None, None
+        elif etype in ("thread.started", "turn.started", "item.started", "item.updated"):
             return None, None
         else:
             return etype, json.dumps(event, ensure_ascii=False)
@@ -973,7 +982,13 @@ class TaskScheduler(BusAwareSchedulerMixin):
         if agent == "codex":
             working_dir_expanded = os.path.expanduser(task["working_dir"])
             if task.get("session_id"):
-                cmd = ["codex", "exec", "resume", task["session_id"], prompt]
+                cmd = [
+                    "codex", "exec", "resume",
+                    "--json",
+                    "--ask-for-approval", "never",
+                    task["session_id"],
+                    prompt,
+                ]
             else:
                 cmd = [
                     "codex", "exec",
@@ -1099,7 +1114,7 @@ class TaskScheduler(BusAwareSchedulerMixin):
                 success, output = False, f"Task timed out after {timeout_secs}s"
             elif proc.returncode == 0:
                 if agent == "codex":
-                    # Codex JSONL: find the last turn.completed message
+                    # Codex JSONL: final output is the last agent_message item text
                     out = ""
                     for line in raw_stdout.splitlines():
                         line = line.strip()
@@ -1107,8 +1122,9 @@ class TaskScheduler(BusAwareSchedulerMixin):
                             continue
                         try:
                             event = json.loads(line)
-                            if event.get("type") == "turn.completed" and event.get("message"):
-                                out = event["message"]
+                            if (event.get("type") == "item.completed"
+                                    and event.get("item", {}).get("type") == "agent_message"):
+                                out = event["item"].get("text", "")
                         except json.JSONDecodeError:
                             pass
                     success, output = True, out or raw_stdout
@@ -1168,8 +1184,8 @@ class TaskScheduler(BusAwareSchedulerMixin):
                     continue
                 try:
                     event = json.loads(line)
-                    if event.get("type") == "thread.started" and event.get("session_id"):
-                        extracted_session_id = event["session_id"]
+                    if event.get("type") == "thread.started" and event.get("thread_id"):
+                        extracted_session_id = event["thread_id"]
                         break
                 except json.JSONDecodeError:
                     pass

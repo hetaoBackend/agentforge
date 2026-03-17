@@ -1,14 +1,15 @@
 # RFC: Codex CLI Support in AgentForge
 
-**Status:** Draft
+**Status:** Implemented
 **Date:** 2026-03-16
+**Updated:** 2026-03-17
 **Author:** hetao
 
 ---
 
 ## Summary
 
-Add OpenAI Codex CLI (`codex`) as a selectable agent backend alongside the existing Claude Code CLI (`claude`). Users will be able to choose `codex` per-task or as a global default.
+Add OpenAI Codex CLI (`codex`) as a selectable agent backend alongside the existing Claude Code CLI (`claude`). Users can choose `codex` per-task or as a global default.
 
 ---
 
@@ -20,7 +21,15 @@ AgentForge currently hard-codes the `claude` CLI in every execution path. The `a
 
 ## Codex CLI Overview
 
-[Codex CLI](https://github.com/openai/codex) is OpenAI's terminal coding agent. The relevant operational characteristics are:
+[Codex CLI](https://github.com/openai/codex) is OpenAI's terminal coding agent, built in Rust. Latest stable: `rust-v0.115.0`.
+
+### Installation
+
+```bash
+npm install -g @openai/codex
+# or
+brew install --cask codex
+```
 
 ### Non-interactive execution
 
@@ -28,7 +37,7 @@ AgentForge currently hard-codes the `claude` CLI in every execution path. The `a
 # Basic execution
 codex exec "your task prompt here"
 
-# With JSONL streaming (machine-readable)
+# With JSONL streaming (machine-readable output)
 codex exec --json "your task prompt here"
 
 # With working directory
@@ -37,9 +46,9 @@ codex exec --json --cd /path/to/project "your task"
 # Full automation (no approval prompts)
 codex exec --json --ask-for-approval never "your task"
 
-# Session resume
-codex exec resume <SESSION_ID>
-codex exec resume --last "follow-up prompt"
+# Session resume (thread_id from thread.started event)
+codex exec resume --json --ask-for-approval never <THREAD_ID> "follow-up prompt"
+codex exec resume --last --json "follow-up prompt"
 ```
 
 ### Output behaviour
@@ -51,44 +60,71 @@ codex exec resume --last "follow-up prompt"
 
 ### JSONL event schema (`--json` mode)
 
-Each line is a JSON object. Key event types:
+Each line is a JSON object. Key top-level event types:
 
-| Type | Meaning |
-|------|---------|
-| `thread.started` | Session started; contains `session_id` |
-| `turn.started` | Agent began a reasoning turn |
-| `turn.completed` | Turn finished successfully |
-| `turn.failed` | Turn failed; contains `error` |
-| `item.started` / `item.completed` | Individual work item (see item types below) |
-| `error` | Top-level error |
+| Type | Schema | Notes |
+|------|--------|-------|
+| `thread.started` | `{ type, thread_id: string }` | Session started; use `thread_id` for resume |
+| `turn.started` | `{ type }` | Agent began a reasoning turn |
+| `turn.completed` | `{ type, usage: { input_tokens, cached_input_tokens, output_tokens } }` | Token usage only, no message |
+| `turn.failed` | `{ type, error: { message: string } }` | Turn failed; error is a nested object |
+| `item.started` | `{ type, item: ThreadItem }` | Item work began |
+| `item.updated` | `{ type, item: ThreadItem }` | Partial update (streaming) |
+| `item.completed` | `{ type, item: ThreadItem }` | Item finished |
+| `error` | `{ type, message: string }` | Top-level error |
 
-Key item types inside `item.*` events:
+Key `ThreadItem` types (discriminated by `item.type`):
 
-- `message` — agent text output (maps to `assistant` in Claude schema)
-- `reasoning` — chain-of-thought text
-- `tool_call` / `command` — shell command executed
-- `file_change` — file write/edit
-- `web_search` — web search performed
-- `plan_update` — planning step
+| `item.type` | Key fields | Maps to |
+|-------------|-----------|---------|
+| `agent_message` | `text: string` | Agent text output (→ `assistant` event) |
+| `reasoning` | `text: string` | Chain-of-thought (→ `assistant` with `[thinking]` prefix) |
+| `command_execution` | `command: string`, `aggregated_output: string`, `exit_code: int?`, `status` | Shell command |
+| `file_change` | `changes: [{path, kind}]`, `status` | File write/edit |
+| `mcp_tool_call` | `server`, `tool`, `arguments`, `result?`, `error?`, `status` | MCP tool |
+| `web_search` | `id`, `query`, `action` | Web search |
+| `todo_list` | `items: [{text, completed}]` | Planning steps |
+| `error` | `message: string` | Item-level error |
+
+> **Note:** Items go through `started` → zero or more `updated` → `completed`. Parsers must handle all three; only `completed` is used for storage.
 
 ### Approval mode
 
-`--ask-for-approval never` is the non-interactive equivalent of Claude's `--permission-mode bypassPermissions`.
+`--ask-for-approval never` (default for `codex exec`) is the non-interactive equivalent of Claude's `--permission-mode bypassPermissions`.
+
+Other values: `untrusted`, `on-request`.
 
 ### Authentication
 
-Requires `CODEX_API_KEY` environment variable (OpenAI API key).
+Requires `CODEX_API_KEY` or `OPENAI_API_KEY` environment variable.
 
 ### Exit codes
 
 - `0` — success
-- Non-zero — failure (error message on stderr)
+- `1` — any failure (auth error, exec policy, fatal turn error, etc.)
+
+### Sandbox flag (optional)
+
+`--sandbox` accepts `read-only`, `workspace-write`, or `danger-full-access`. If omitted, no sandbox is applied.
+
+### Git repo requirement
+
+Codex requires a Git repository by default. Pass `--skip-git-repo-check` to allow execution outside a Git repo.
 
 ### Limitations vs Claude CLI
 
-- No `--input-format stream-json` for multimodal stdin input (images must be passed as `--image <path>` flags)
-- No `--verbose` flag; progress always goes to stderr
-- Session resume works differently: `codex exec resume <id>` rather than `--resume <id>` inline
+| Feature | Codex CLI | Claude CLI |
+|---------|-----------|-----------|
+| Output format flag | `--json` | `--output-format stream-json --verbose` |
+| Agent text event | `item.completed` + `item.type == "agent_message"`, field `text` | `type == "assistant"`, nested content |
+| Session ID field | `thread.started.thread_id` | `result.session_id` |
+| Session resume | `codex exec resume <THREAD_ID>` | `--resume <SESSION_ID>` inline |
+| Working dir | `--cd` | No equivalent flag |
+| Approval mode flag | `--ask-for-approval` | `--permission-mode` |
+| Final message location | Last `agent_message` item | `result` event |
+| Token usage | `turn.completed.usage` | `result` event |
+| Git repo check | Required by default | No requirement |
+| Auth env var | `CODEX_API_KEY` / `OPENAI_API_KEY` | `ANTHROPIC_API_KEY` |
 
 ---
 
@@ -96,145 +132,114 @@ Requires `CODEX_API_KEY` environment variable (OpenAI API key).
 
 ### Principle
 
-Keep the per-agent logic entirely in `TaskScheduler._execute_task`. Introduce a private helper `_build_codex_command` alongside the existing Claude command-building logic. Event normalization is handled in `_parse_and_store_event` by detecting the active agent.
+Keep the per-agent logic entirely in `TaskScheduler._execute_task`. Introduce a private helper `_parse_codex_event` alongside the existing Claude parsing logic. Event normalization handles the schema differences transparently.
 
 ### No new abstraction layer
 
 An `AgentBackend` base class would be over-engineered for two agents. The branching is contained in three methods:
 
-1. `_execute_task` — command construction
-2. `_parse_and_store_event` — JSONL → internal event schema normalization
-3. `_extract_error_summary` — error extraction from Codex events
+1. `_execute_task` — command construction and result extraction
+2. `_parse_codex_event` — JSONL → internal event schema normalization
+3. `_parse_and_store_event` — routes to the appropriate parser
 
 ---
 
-## Implementation Plan
+## Implementation
 
-### 1. Backend — `taskboard.py`
+### Backend — `taskboard.py`
 
-#### 1a. Command construction in `_execute_task`
-
-Replace the current single code path with an agent branch:
+#### Command construction
 
 ```python
 agent = task.get("agent", "claude")
 
 if agent == "codex":
-    cmd = [
-        "codex", "exec",
-        "--json",
-        "--ask-for-approval", "never",
-        "--cd", os.path.expanduser(task["working_dir"]),
-    ]
+    working_dir_expanded = os.path.expanduser(task["working_dir"])
     if task.get("session_id"):
-        # codex exec resume <id> [prompt]
-        cmd = ["codex", "exec", "resume", task["session_id"]] + [prompt]
+        cmd = [
+            "codex", "exec", "resume",
+            "--json",
+            "--ask-for-approval", "never",
+            task["session_id"],
+            prompt,
+        ]
     else:
-        cmd.append(prompt)
-    # Images: pass each as --image flag
+        cmd = [
+            "codex", "exec",
+            "--json",
+            "--ask-for-approval", "never",
+            "--cd", working_dir_expanded,
+            prompt,
+        ]
     for img_path in image_paths or []:
         cmd.extend(["--image", img_path])
-    use_stdin = False  # codex does not support stream-json stdin
-else:
-    # existing Claude logic (unchanged)
-    ...
 ```
 
-Note: when `--cd` is passed to Codex, the `cwd` argument to `subprocess.Popen` still needs to be set to the same directory for consistent process group behaviour.
-
-#### 1b. JSONL normalization in `_parse_and_store_event`
-
-Codex events are mapped to the internal schema that the frontend already understands:
-
-| Codex event | Internal type | Notes |
-|-------------|---------------|-------|
-| `item.completed` where item type = `message` | `assistant` | Agent text response |
-| `item.completed` where item type = `reasoning` | `assistant` | Prefixed with `[thinking] ` |
-| `item.completed` where item type = `command` | raw JSON stored as-is | Tool use event |
-| `turn.completed` | `result` | `content` = final message if present |
-| `turn.failed` / `error` | `error` | `content` = error message |
-| `thread.started` | skip (session_id extracted separately) | |
-| other | store raw JSON | |
+#### JSONL normalization (`_parse_codex_event`)
 
 ```python
-def _parse_codex_event(self, event: dict) -> tuple[str, str] | None:
-    """Return (event_type, content) for storage, or None to skip."""
+def _parse_codex_event(self, event: dict) -> tuple:
     etype = event.get("type", "")
     if etype == "item.completed":
         item = event.get("item", {})
         itype = item.get("type", "")
-        if itype == "message":
-            return "assistant", item.get("content", "")
+        if itype == "agent_message":
+            return "assistant", item.get("text", "")
         elif itype == "reasoning":
-            return "assistant", f"[thinking] {item.get('content', '')}"
+            text = item.get("text", "")
+            return ("assistant", f"[thinking] {text}") if text else (None, None)
+        elif itype == "command_execution":
+            cmd = item.get("command", "")
+            out = item.get("aggregated_output", "")
+            return etype, f"$ {cmd}\n{out}".strip()
         else:
             return etype, json.dumps(event, ensure_ascii=False)
-    elif etype in ("turn.failed", "error"):
-        return "error", event.get("error", event.get("message", ""))
+    elif etype == "turn.failed":
+        err = event.get("error", {})
+        msg = err.get("message", "") if isinstance(err, dict) else str(err)
+        return "error", msg
+    elif etype == "error":
+        return "error", event.get("message", "")
     elif etype == "turn.completed":
-        msg = event.get("message", "")
-        if msg:
-            return "result", msg
-        return None
-    elif etype == "thread.started":
-        return None  # handled by session_id extraction
+        # turn.completed only carries usage stats; skip it
+        return None, None
+    elif etype in ("thread.started", "turn.started", "item.started", "item.updated"):
+        return None, None
     else:
         return etype, json.dumps(event, ensure_ascii=False)
 ```
 
-#### 1c. Session ID extraction
-
-After execution, extract `session_id` from the `thread.started` event in stdout:
+#### Session ID extraction
 
 ```python
+# Codex emits thread_id in the thread.started event
+if event.get("type") == "thread.started" and event.get("thread_id"):
+    extracted_session_id = event["thread_id"]
+```
+
+> **Key difference from original RFC:** The field is `thread_id`, not `session_id`. The `thread.started` event does not have a `session_id` field.
+
+#### Final output extraction
+
+```python
+# Codex: final output is the last agent_message item text
+out = ""
 for line in raw_stdout.splitlines():
     try:
-        event = json.loads(line)
-        if event.get("type") == "thread.started" and event.get("session_id"):
-            extracted_session_id = event["session_id"]
-            break
+        event = json.loads(line.strip())
+        if (event.get("type") == "item.completed"
+                and event.get("item", {}).get("type") == "agent_message"):
+            out = event["item"].get("text", "")
     except json.JSONDecodeError:
         pass
+success, output = True, out or raw_stdout
 ```
 
-#### 1d. Success/output extraction
+> **Key difference from original RFC:** The final message is NOT in `turn.completed.message` (that field does not exist). It comes from the last `agent_message` item.
 
-For Codex, the final stdout line after `turn.completed` is the plain-text final message. With `--json`, walk events to find the last `turn.completed` with a message:
+### Frontend — `App.jsx`
 
-```python
-if agent == "codex":
-    for line in reversed(raw_stdout.splitlines()):
-        try:
-            event = json.loads(line)
-            if event.get("type") == "turn.completed" and event.get("message"):
-                out = event["message"]
-                break
-        except json.JSONDecodeError:
-            pass
-    success, output = True, out or raw_stdout
-```
-
-#### 1e. Validation helper
-
-Extend `AgentExecutor.run` (used for pre-flight checks) to handle `codex`:
-
-```python
-except FileNotFoundError:
-    if agent == "codex":
-        success, output = False, "codex CLI not found. Install with: npm install -g @openai/codex"
-    else:
-        success, output = False, "claude CLI not found. Is it installed?"
-```
-
-#### 1f. Settings API
-
-No schema changes needed. `default_agent` already stored in settings. Expose `codex` as a valid value in the `/api/settings` response.
-
----
-
-### 2. Frontend — `App.jsx`
-
-#### 2a. Agent selector in task creation form
+#### Agent selector in task creation form
 
 ```jsx
 <select name="agent" value={form.agent} onChange={handleChange}>
@@ -243,13 +248,13 @@ No schema changes needed. `default_agent` already stored in settings. Expose `co
 </select>
 ```
 
-#### 2b. Settings panel
+#### Settings panel
 
-Add `codex` to the default agent dropdown alongside `claude`.
+`codex` added to the default agent dropdown alongside `claude`.
 
-#### 2c. Output rendering
+#### Output rendering
 
-No changes needed. The `FormattedOutput` component already handles `assistant`, `result`, and `error` event types, which are the normalized types Codex events will be stored as.
+No changes needed. The `FormattedOutput` component already handles `assistant`, `result`, and `error` event types.
 
 ---
 
@@ -267,14 +272,15 @@ TaskScheduler._execute_task()
   subprocess.Popen(cmd, stdout=PIPE, stderr=PIPE, start_new_session=True)
         │
         ├── stdout (JSONL) → _parse_codex_event() → db.add_output_event()
-        └── stderr (progress) → stderr_thread (discarded, not stored)
+        └── stderr (progress) → discarded
         │
         ▼
-  turn.completed → success=True, output=final message
-  turn.failed    → success=False, output=error message
+  turn.completed → (usage stats only)
+  turn.failed    → success=False, output=error.message
+  last agent_message item → success=True, output=item.text
         │
         ▼
-  session_id extracted from thread.started event
+  thread_id extracted from thread.started event
   task.status → completed / failed
 ```
 
@@ -282,29 +288,31 @@ TaskScheduler._execute_task()
 
 ## Open Questions
 
-| # | Question | Impact |
+| # | Question | Status |
 |---|----------|--------|
-| 1 | Does `codex exec` reliably exit 0 on success? Need to verify exit code convention across versions. | Error detection |
-| 2 | Are multimodal `--image` paths passed inline to `codex exec`? Need to test with actual binary. | Image support |
-| 3 | Does Codex spawn sub-agents (like Claude's Task tool)? | Sub-agent wait loop |
-| 4 | Is there a `--timeout` flag or does Codex rely on the caller to kill the process? | Timeout handling |
+| 1 | Does `codex exec` exit 0 reliably on success? | Confirmed: exit 0 on success, exit 1 on any error |
+| 2 | Are `--image` paths passed inline to resume? | Supported: `-i` flag works on both `exec` and `exec resume` |
+| 3 | Does Codex spawn sub-agents? | Yes: `collab_tool_call` item type with `spawn_agent` tool |
+| 4 | Is there a `--timeout` flag? | No native flag; caller must kill the process |
+| 5 | Git repo required? | Yes by default; `--skip-git-repo-check` to bypass |
 
 ---
 
 ## Acceptance Criteria
 
-- [ ] Task with `agent: "codex"` executes via `codex exec --json ...` in `working_dir`
-- [ ] Live output displayed in kanban board output panel during execution
-- [ ] Task status transitions correctly: pending → running → completed / failed
-- [ ] `session_id` extracted and stored for session resume
-- [ ] Error shown in UI when codex CLI is not installed
-- [ ] `codex` selectable in task creation form and settings panel
-- [ ] Claude tasks unaffected (full backward compatibility)
+- [x] Task with `agent: "codex"` executes via `codex exec --json ...` in `working_dir`
+- [x] Live output displayed in kanban board output panel during execution
+- [x] Task status transitions correctly: pending → running → completed / failed
+- [x] `thread_id` extracted from `thread.started` event and stored as `session_id`
+- [x] Error shown in UI when codex CLI is not installed
+- [x] `codex` selectable in task creation form and settings panel
+- [x] Claude tasks unaffected (full backward compatibility)
 
 ---
 
 ## Non-Goals
 
-- Cloud-mode (`codex cloud`) — out of scope for this RFC
+- Cloud-mode (`codex cloud`) — out of scope
 - Gemini CLI, Aider, or other agents — separate RFC
 - Result output schema validation (`--output-schema`) — future enhancement
+- Sub-agent (`collab_tool_call`) orchestration — future enhancement
