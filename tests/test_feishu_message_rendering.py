@@ -46,8 +46,7 @@ class TestFeishuNotificationCards:
         assert card["config"]["summary"]["content"] == "已完成优化。"
         assert len(card["body"]["elements"]) == 1
         assert any(
-            element.get("tag") == "markdown"
-            and "增加摘要" in element.get("content", "")
+            element.get("tag") == "markdown" and "增加摘要" in element.get("content", "")
             for element in card["body"]["elements"]
         )
         assert not any(
@@ -73,8 +72,7 @@ class TestFeishuNotificationCards:
         )
 
         assert any(
-            element.get("tag") == "markdown"
-            and "/status 7" in element.get("content", "")
+            element.get("tag") == "markdown" and "/status 7" in element.get("content", "")
             for element in card["body"]["elements"]
         )
 
@@ -95,7 +93,9 @@ class TestFeishuNotificationCards:
             body_text=long_text,
         )
 
-        assert any(element.get("tag") == "collapsible_panel" for element in card["body"]["elements"])
+        assert any(
+            element.get("tag") == "collapsible_panel" for element in card["body"]["elements"]
+        )
         assert any(
             element.get("tag") == "markdown" and "AAAA" in element.get("content", "")
             for element in card["body"]["elements"]

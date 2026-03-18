@@ -326,7 +326,9 @@ class FeishuChannel(Channel):
             traceback.print_exc()
             return None
 
-    def _create_message(self, receive_id_type: str, chat_id: str, card: dict[str, Any]) -> Optional[str]:
+    def _create_message(
+        self, receive_id_type: str, chat_id: str, card: dict[str, Any]
+    ) -> Optional[str]:
         print("[Feishu] Building CreateMessageRequest...")
         request = (
             CreateMessageRequest.builder()
