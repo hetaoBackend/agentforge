@@ -48,25 +48,28 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
-from typing import Optional, Callable, TYPE_CHECKING
+from typing import TYPE_CHECKING, Callable, Optional
 
 if TYPE_CHECKING:
-    from taskboard import TaskDB, TaskScheduler
+    from taskboard import TaskDB
 
 
 # ──────────────────────────── Message Types ────────────────────────────
 
+
 class InboundMessageType(str, Enum):
     """Inbound message 的动作类型。"""
-    CREATE_TASK = "create_task"      # 创建新任务
-    RESUME_TASK = "resume_task"      # 恢复已有任务（使用 session_id）
-    RESPOND_TASK = "respond_task"    # 回答任务等待的问题
-    CANCEL_TASK = "cancel_task"      # 取消任务
-    STATUS_QUERY = "status_query"    # 查询任务状态
+
+    CREATE_TASK = "create_task"  # 创建新任务
+    RESUME_TASK = "resume_task"  # 恢复已有任务（使用 session_id）
+    RESPOND_TASK = "respond_task"  # 回答任务等待的问题
+    CANCEL_TASK = "cancel_task"  # 取消任务
+    STATUS_QUERY = "status_query"  # 查询任务状态
 
 
 class OutboundMessageType(str, Enum):
     """Outbound message 的事件类型。"""
+
     TASK_COMPLETED = "task_completed"
     TASK_FAILED = "task_failed"
     TASK_STARTED = "task_started"
@@ -91,6 +94,7 @@ class InboundMessage:
         metadata:    扩展字段，Channel 可存放任意上下文（如 Feishu message_id）。
         created_at:  消息创建时间（UTC ISO 格式）。
     """
+
     type: InboundMessageType
     source: str
     payload: dict = field(default_factory=dict)
@@ -111,6 +115,7 @@ class OutboundMessage:
         metadata:    扩展字段。
         created_at:  消息创建时间（UTC ISO 格式）。
     """
+
     type: OutboundMessageType
     task_id: int
     payload: dict = field(default_factory=dict)
@@ -120,6 +125,7 @@ class OutboundMessage:
 
 
 # ──────────────────────────── Message Bus ────────────────────────────
+
 
 class MessageBus:
     """AgentForge 的消息总线。
@@ -146,7 +152,9 @@ class MessageBus:
         """Channel 调用此方法将入站消息放入队列。"""
         self.inbound_queue.put_nowait(msg)
 
-    def get_inbound(self, block: bool = True, timeout: Optional[float] = None) -> Optional[InboundMessage]:
+    def get_inbound(
+        self, block: bool = True, timeout: Optional[float] = None
+    ) -> Optional[InboundMessage]:
         """Scheduler 调用此方法取出下一条入站消息（可选使用）。"""
         try:
             return self.inbound_queue.get(block=block, timeout=timeout)
@@ -177,7 +185,9 @@ class MessageBus:
         except ValueError:
             pass
 
-    def get_outbound(self, block: bool = True, timeout: Optional[float] = None) -> Optional[OutboundMessage]:
+    def get_outbound(
+        self, block: bool = True, timeout: Optional[float] = None
+    ) -> Optional[OutboundMessage]:
         """Channel 轮询模式下调用此方法取出出站消息。"""
         try:
             return self.outbound_queue.get(block=block, timeout=timeout)
@@ -186,6 +196,7 @@ class MessageBus:
 
 
 # ──────────────────────────── Channel ABC ────────────────────────────
+
 
 class Channel(ABC):
     """消息通道抽象基类。
@@ -270,6 +281,7 @@ class Channel(ABC):
 
 # ──────────────────────────── UIChannel ────────────────────────────
 
+
 class UIChannel(Channel):
     """HTTP REST API channel（包装现有 TaskAPIHandler + TaskScheduler）。
 
@@ -307,21 +319,30 @@ class UIChannel(Channel):
         with self._cache_lock:
             return list(self._outbound_cache.get(task_id, []))
 
-    def notify_task_created(self, task_id: int, prompt: str,
-                             working_dir: str = ".", **kwargs) -> None:
+    def notify_task_created(
+        self, task_id: int, prompt: str, working_dir: str = ".", **kwargs
+    ) -> None:
         """HTTP handler 创建任务后调用，发布 InboundMessage 到 bus。"""
-        self.bus.publish_inbound(self._make_inbound(
-            InboundMessageType.CREATE_TASK,
-            payload={"task_id": task_id, "prompt": prompt,
-                     "working_dir": working_dir, **kwargs},
-        ))
+        self.bus.publish_inbound(
+            self._make_inbound(
+                InboundMessageType.CREATE_TASK,
+                payload={
+                    "task_id": task_id,
+                    "prompt": prompt,
+                    "working_dir": working_dir,
+                    **kwargs,
+                },
+            )
+        )
 
     def notify_task_resumed(self, task_id: int, message: str) -> None:
         """HTTP handler 恢复任务后调用。"""
-        self.bus.publish_inbound(self._make_inbound(
-            InboundMessageType.RESUME_TASK,
-            payload={"task_id": task_id, "message": message},
-        ))
+        self.bus.publish_inbound(
+            self._make_inbound(
+                InboundMessageType.RESUME_TASK,
+                payload={"task_id": task_id, "message": message},
+            )
+        )
 
     def _on_outbound(self, msg: OutboundMessage) -> None:
         """订阅回调：将出站消息写入本地缓存。"""
@@ -329,6 +350,7 @@ class UIChannel(Channel):
 
 
 # ──────────────────────────── BusAwareSchedulerMixin ────────────────────────────
+
 
 class BusAwareSchedulerMixin:
     """可混入 TaskScheduler 的工具方法，让 _notify() 同时发布到 MessageBus。
@@ -346,7 +368,9 @@ class BusAwareSchedulerMixin:
 
     bus: Optional[MessageBus] = None
 
-    def _bus_notify(self, task_id: int, override_type: "Optional[OutboundMessageType]" = None) -> None:
+    def _bus_notify(
+        self, task_id: int, override_type: "Optional[OutboundMessageType]" = None
+    ) -> None:
         """根据任务状态向 bus 发布对应的 OutboundMessage。
 
         override_type: 强制使用指定消息类型（用于 cron 任务重调度场景，

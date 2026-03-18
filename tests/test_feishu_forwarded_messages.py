@@ -3,15 +3,15 @@ Tests for Feishu forwarded/quoted message handling functionality.
 """
 
 import json
+from unittest.mock import Mock, patch
+
 import pytest
-from unittest.mock import Mock, MagicMock, patch
-from datetime import datetime
 
 
 @pytest.fixture
 def mock_feishu_channel():
     """Create a mock FeishuChannel instance for testing."""
-    with patch('channels.feishu_channel.FEISHU_AVAILABLE', True):
+    with patch("channels.feishu_channel.FEISHU_AVAILABLE", True):
         from channels.feishu_channel import FeishuChannel
 
         bus = Mock()
@@ -33,13 +33,15 @@ class TestForwardedMessageDetection:
         """Test extraction of 'forward' type messages."""
         message = Mock()
         message.message_type = "forward"
-        message.content = json.dumps({
-            "sender_name": "张三",
-            "sender_id": "ou_123456789",
-            "create_time": 1738080000,
-            "text": "这是一条转发的消息",
-            "images": []
-        })
+        message.content = json.dumps(
+            {
+                "sender_name": "张三",
+                "sender_id": "ou_123456789",
+                "create_time": 1738080000,
+                "text": "这是一条转发的消息",
+                "images": [],
+            }
+        )
 
         result = mock_feishu_channel._extract_forwarded_content(message)
 
@@ -54,21 +56,22 @@ class TestForwardedMessageDetection:
         """Test extraction of quote type messages."""
         message = Mock()
         message.message_type = "post"
-        message.content = json.dumps({
-            "zh_cn": {
-                "content": [[
-                    {
-                        "tag": "quote",
-                        "text": "被引用的文本内容",
-                        "user": {
-                            "name": "李四",
-                            "open_id": "ou_987654321"
-                        },
-                        "create_time": 1738083600
-                    }
-                ]]
+        message.content = json.dumps(
+            {
+                "zh_cn": {
+                    "content": [
+                        [
+                            {
+                                "tag": "quote",
+                                "text": "被引用的文本内容",
+                                "user": {"name": "李四", "open_id": "ou_987654321"},
+                                "create_time": 1738083600,
+                            }
+                        ]
+                    ]
+                }
             }
-        })
+        )
 
         result = mock_feishu_channel._extract_forwarded_content(message)
 
@@ -83,22 +86,24 @@ class TestForwardedMessageDetection:
         """Test extraction of nested_message type (forward) in post."""
         message = Mock()
         message.message_type = "post"
-        message.content = json.dumps({
-            "content": [[
-                {
-                    "tag": "nested_message",
-                    "nested_message": {
-                        "sender_name": "王五",
-                        "sender_id": "ou_555555555",
-                        "create_time": 1738087200,
-                        "text": "嵌套消息内容",
-                        "images": [
-                            {"image_key": "img_v2_abcd1234"}
-                        ]
-                    }
-                }
-            ]]
-        })
+        message.content = json.dumps(
+            {
+                "content": [
+                    [
+                        {
+                            "tag": "nested_message",
+                            "nested_message": {
+                                "sender_name": "王五",
+                                "sender_id": "ou_555555555",
+                                "create_time": 1738087200,
+                                "text": "嵌套消息内容",
+                                "images": [{"image_key": "img_v2_abcd1234"}],
+                            },
+                        }
+                    ]
+                ]
+            }
+        )
 
         result = mock_feishu_channel._extract_forwarded_content(message)
 
@@ -141,7 +146,7 @@ class TestForwardedPromptFormatting:
             "sender_id": "ou_123456",
             "timestamp": 1738080000,
             "text": "这是转发的内容",
-            "images": []
+            "images": [],
         }
         original_content = "请帮我分析上述消息"
 
@@ -161,7 +166,7 @@ class TestForwardedPromptFormatting:
             "type": "forward",
             "sender_name": "李四",
             "text": "无时间戳的转发",
-            "images": []
+            "images": [],
         }
         original_content = "看看这个"
 
@@ -176,10 +181,7 @@ class TestForwardedPromptFormatting:
             "type": "forward",
             "sender_name": "王五",
             "text": "一张图片",
-            "images": [
-                {"image_key": "img1"},
-                {"image_key": "img2"}
-            ]
+            "images": [{"image_key": "img1"}, {"image_key": "img2"}],
         }
         original_content = ""
 
@@ -193,7 +195,7 @@ class TestForwardedPromptFormatting:
             "type": "quote",
             "sender_name": "赵六",
             "text": "只是引用没有附加消息",
-            "images": []
+            "images": [],
         }
         original_content = "   "  # Only spaces
 
@@ -223,19 +225,14 @@ class TestForwardedPromptFormatting:
 class TestForwardedImageHandling:
     """Test handling of images in forwarded messages."""
 
-    def test_download_image_called_for_forwarded_images(
-        self, mock_feishu_channel
-    ):
+    def test_download_image_called_for_forwarded_images(self, mock_feishu_channel):
         """Test that images in forwarded messages are downloaded."""
         # Simulate forwarded message with images
         forwarded = {
             "type": "forward",
             "sender_name": "测试用户",
             "text": "带图片的转发",
-            "images": [
-                {"image_key": "img_key_1"},
-                {"image_key": "img_key_2"}
-            ]
+            "images": [{"image_key": "img_key_1"}, {"image_key": "img_key_2"}],
         }
 
         message = Mock()
@@ -270,7 +267,7 @@ class TestForwardedMessageScenarios:
             "sender_id": "telegram_user_12345",
             "timestamp": 1738080000,
             "text": "Hey, did you see the new feature?",
-            "images": []
+            "images": [],
         }
         original_content = "Can you explain this feature?"
 
@@ -286,10 +283,8 @@ class TestForwardedMessageScenarios:
             "type": "forward",
             "sender_name": "技术资讯频道",
             "text": "发布了一个新的AI模型，效果惊人...\n\nLink: https://example.com",
-            "images": [
-                {"image_key": "chart_123"}
-            ],
-            "timestamp": 1738087200
+            "images": [{"image_key": "chart_123"}],
+            "timestamp": 1738087200,
         }
         original_content = "帮我总结一下这个新闻"
 
@@ -307,7 +302,7 @@ class TestForwardedMessageScenarios:
             "sender_name": "传播者B",
             "text": "传播者A: 原始发布者: 这是最初的消息",
             "timestamp": 1738090800,
-            "images": []
+            "images": [],
         }
         original_content = ""
 

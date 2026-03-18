@@ -31,13 +31,12 @@ Examples:
 
 import argparse
 import json
-import sys
 import os
-import urllib.request
+import sys
 import urllib.error
 import urllib.parse
+import urllib.request
 from datetime import datetime
-
 
 API_BASE = "http://127.0.0.1:9712/api"
 

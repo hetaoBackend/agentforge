@@ -2,8 +2,8 @@ import json
 
 from taskboard import (
     Heartbeat,
-    HeartbeatScheduleType,
     HeartbeatDecisionType,
+    HeartbeatScheduleType,
     ScheduleType,
     TaskDB,
     TaskScheduler,
@@ -56,11 +56,13 @@ def test_heartbeat_trigger_creates_task_and_tick(tmp_path, monkeypatch):
         "prompt": "Review commit abc123.",
         "metadata": {},
     }
+
     def fake_run(agent, cmd, cwd, on_stdout_line=None, on_stderr_line=None):
         payload = json.dumps(decision)
         if on_stdout_line:
             on_stdout_line(payload)
         return True, payload
+
     monkeypatch.setattr(scheduler, "_run_agent_command", fake_run)
 
     scheduler._execute_heartbeat(heartbeat)
@@ -97,11 +99,13 @@ def test_heartbeat_duplicate_signal_is_suppressed(tmp_path, monkeypatch):
         "prompt": "Review commit abc123.",
         "metadata": {},
     }
+
     def fake_run(agent, cmd, cwd, on_stdout_line=None, on_stderr_line=None):
         payload = json.dumps(decision)
         if on_stdout_line:
             on_stdout_line(payload)
         return True, payload
+
     monkeypatch.setattr(scheduler, "_run_agent_command", fake_run)
 
     scheduler._execute_heartbeat(heartbeat)
@@ -129,6 +133,7 @@ def test_heartbeat_invalid_json_records_error(tmp_path, monkeypatch):
         if on_stdout_line:
             on_stdout_line("not json")
         return True, "not json"
+
     monkeypatch.setattr(scheduler, "_run_agent_command", fake_run)
 
     scheduler._execute_heartbeat(heartbeat)

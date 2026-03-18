@@ -1,6 +1,7 @@
 """
 Test configuration for AgentForge.
 """
+
 import sys
 from pathlib import Path
 

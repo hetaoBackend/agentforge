@@ -3,24 +3,32 @@ AgentForge - macOS App
 A kanban-style task board for orchestrating AI coding agents with cron scheduling and delayed execution.
 """
 
+import json
+import logging
+import os
+import secrets
+import signal
 import sqlite3
 import subprocess
-import json
+import sys
 import threading
 import time
-import os
-import signal
-import sys
-import shutil
-import secrets
-import logging
 from contextlib import contextmanager
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-from dataclasses import dataclass, field, asdict
 from enum import Enum
-from typing import Optional, Callable
-from pathlib import Path
+from http.server import BaseHTTPRequestHandler, HTTPServer
+from typing import Callable, Optional
+from urllib.parse import parse_qs, urlparse
+
 from croniter import croniter
+
+from taskboard_bus import (
+    BusAwareSchedulerMixin,
+    MessageBus,
+    OutboundMessageType,
+    UIChannel,
+)
 
 log_level = os.environ.get("AGENTFORGE_LOG_LEVEL", "INFO").upper()
 logging.basicConfig(
@@ -29,15 +37,10 @@ logging.basicConfig(
     datefmt="%Y-%m-%d %H:%M:%S",
 )
 logger = logging.getLogger("agentforge")
-from taskboard_bus import (
-    MessageBus,
-    BusAwareSchedulerMixin,
-    OutboundMessageType,
-    UIChannel,
-)
 
 try:
     from channels.feishu_channel import FeishuChannel
+
     FEISHU_CHANNEL_AVAILABLE = True
 except ImportError:
     FEISHU_CHANNEL_AVAILABLE = False
@@ -45,6 +48,7 @@ except ImportError:
 
 try:
     from channels.telegram_channel import create_telegram_channel
+
     TELEGRAM_CHANNEL_AVAILABLE = True
 except ImportError:
     TELEGRAM_CHANNEL_AVAILABLE = False
@@ -52,6 +56,7 @@ except ImportError:
 
 try:
     from channels.slack_channel import SlackChannel
+
     SLACK_CHANNEL_AVAILABLE = True
 except ImportError:
     SLACK_CHANNEL_AVAILABLE = False
@@ -59,6 +64,7 @@ except ImportError:
 
 
 # ──────────────────────────── Helpers ────────────────────────────
+
 
 def _get_env() -> dict:
     """Return os.environ augmented with common macOS tool install paths.
@@ -70,7 +76,7 @@ def _get_env() -> dict:
     extra = [
         f"{home}/.local/bin",
         "/usr/local/bin",
-        "/opt/homebrew/bin",       # Apple-silicon Homebrew
+        "/opt/homebrew/bin",  # Apple-silicon Homebrew
         "/usr/local/opt/node/bin",
         f"{home}/.npm/bin",
         f"{home}/.nvm/current/bin",
@@ -78,11 +84,14 @@ def _get_env() -> dict:
         "/bin",
     ]
     current = env.get("PATH", "")
-    env["PATH"] = ":".join(p for p in extra if p not in current) + (f":{current}" if current else "")
+    env["PATH"] = ":".join(p for p in extra if p not in current) + (
+        f":{current}" if current else ""
+    )
     return env
 
 
 # ──────────────────────────── Models ────────────────────────────
+
 
 class TaskStatus(str, Enum):
     PENDING = "pending"
@@ -91,14 +100,14 @@ class TaskStatus(str, Enum):
     COMPLETED = "completed"
     FAILED = "failed"
     CANCELLED = "cancelled"
-    BLOCKED = "blocked"          # has unmet upstream dependencies
+    BLOCKED = "blocked"  # has unmet upstream dependencies
 
 
 class ScheduleType(str, Enum):
     IMMEDIATE = "immediate"
-    DELAYED = "delayed"      # run after N seconds
+    DELAYED = "delayed"  # run after N seconds
     SCHEDULED_AT = "scheduled_at"  # run at a specific datetime
-    CRON = "cron"            # recurring cron expression
+    CRON = "cron"  # recurring cron expression
 
 
 class HeartbeatScheduleType(str, Enum):
@@ -122,24 +131,24 @@ class Task:
     working_dir: str = "."
     status: TaskStatus = TaskStatus.PENDING
     schedule_type: ScheduleType = ScheduleType.IMMEDIATE
-    cron_expr: Optional[str] = None          # e.g. "*/30 * * * *"
-    delay_seconds: Optional[int] = None      # e.g. 300
-    next_run_at: Optional[str] = None        # ISO timestamp
+    cron_expr: Optional[str] = None  # e.g. "*/30 * * * *"
+    delay_seconds: Optional[int] = None  # e.g. 300
+    next_run_at: Optional[str] = None  # ISO timestamp
     last_run_at: Optional[str] = None
     result: Optional[str] = None
     error: Optional[str] = None
     run_count: int = 0
-    max_runs: Optional[int] = None           # None = unlimited for cron
+    max_runs: Optional[int] = None  # None = unlimited for cron
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
-    tags: str = ""                           # comma-separated
+    tags: str = ""  # comma-separated
     agent: str = "claude"
-    question: Optional[str] = None           # question the agent asked
-    answer: Optional[str] = None             # user's answer
-    session_id: Optional[str] = None         # claude session id for --resume
+    question: Optional[str] = None  # question the agent asked
+    answer: Optional[str] = None  # user's answer
+    session_id: Optional[str] = None  # claude session id for --resume
     prompt_images: list = field(default_factory=list)  # [{media_type, data, name}]
-    image_paths: list = field(default_factory=list)    # list of local image file paths
-    dag_id: Optional[str] = None             # optional DAG workflow group label
+    image_paths: list = field(default_factory=list)  # list of local image file paths
+    dag_id: Optional[str] = None  # optional DAG workflow group label
     feishu_root_msg_id: Optional[str] = None  # Feishu root message_id that created this task
 
 
@@ -167,6 +176,7 @@ class Heartbeat:
 
 
 # ──────────────────────────── Database ────────────────────────────
+
 
 class TaskDB:
     def __init__(self, db_path: str = "~/.agentforge/tasks.db"):
@@ -409,21 +419,27 @@ class TaskDB:
         # interrupted by a process kill (e.g. hot reload) and will never
         # self-transition to completed/failed without this reset.
         now = datetime.now().isoformat()
-        self.conn.execute("""
+        self.conn.execute(
+            """
             UPDATE tasks
             SET status = 'failed',
                 error  = 'Interrupted: process was restarted while task was running',
                 updated_at = ?
             WHERE status = 'running'
-        """, (now,))
+        """,
+            (now,),
+        )
         # Also close out any open task_runs rows that have no finished_at
-        self.conn.execute("""
+        self.conn.execute(
+            """
             UPDATE task_runs
             SET status = 'failed',
                 finished_at = ?,
                 error = 'Interrupted: process was restarted while task was running'
             WHERE finished_at IS NULL
-        """, (now,))
+        """,
+            (now,),
+        )
         self.conn.commit()
 
     @contextmanager
@@ -449,15 +465,32 @@ class TaskDB:
             logger.debug(f"add_task called with image_paths: {task.image_paths}")
             image_paths_json = json.dumps(task.image_paths, ensure_ascii=False)
             logger.debug(f"image_paths JSON: {image_paths_json}")
-            cur = self.conn.execute("""
+            cur = self.conn.execute(
+                """
                 INSERT INTO tasks (title, prompt, working_dir, status, schedule_type,
                     cron_expr, delay_seconds, next_run_at, max_runs, created_at, updated_at, tags, agent, prompt_images, image_paths, dag_id, feishu_root_msg_id)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (task.title, task.prompt, task.working_dir, task.status.value,
-                  task.schedule_type.value, task.cron_expr, task.delay_seconds,
-                  task.next_run_at, task.max_runs, now, now, task.tags, task.agent,
-                  json.dumps(task.prompt_images, ensure_ascii=False),
-                  image_paths_json, task.dag_id, task.feishu_root_msg_id))
+            """,
+                (
+                    task.title,
+                    task.prompt,
+                    task.working_dir,
+                    task.status.value,
+                    task.schedule_type.value,
+                    task.cron_expr,
+                    task.delay_seconds,
+                    task.next_run_at,
+                    task.max_runs,
+                    now,
+                    now,
+                    task.tags,
+                    task.agent,
+                    json.dumps(task.prompt_images, ensure_ascii=False),
+                    image_paths_json,
+                    task.dag_id,
+                    task.feishu_root_msg_id,
+                ),
+            )
             self.conn.commit()
             task_id = cur.lastrowid
             logger.debug(f"Task {task_id} inserted with image_paths")
@@ -468,7 +501,7 @@ class TaskDB:
         with self.lock:
             row = self.conn.execute(
                 "SELECT * FROM tasks WHERE feishu_root_msg_id = ? ORDER BY id DESC LIMIT 1",
-                (root_msg_id,)
+                (root_msg_id,),
             ).fetchone()
             return dict(row) if row else None
 
@@ -480,8 +513,8 @@ class TaskDB:
     def set_setting(self, key: str, value: str):
         with self.lock:
             self.conn.execute(
-                "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
-                (key, value))
+                "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", (key, value)
+            )
             self.conn.commit()
 
     def _deserialize_heartbeat(self, row) -> dict:
@@ -489,7 +522,9 @@ class TaskDB:
         d["enabled"] = bool(d.get("enabled"))
         return d
 
-    def _compute_heartbeat_next_run_at(self, heartbeat: Heartbeat, now: Optional[datetime] = None) -> str:
+    def _compute_heartbeat_next_run_at(
+        self, heartbeat: Heartbeat, now: Optional[datetime] = None
+    ) -> str:
         now = now or datetime.now()
         if heartbeat.schedule_type == HeartbeatScheduleType.CRON:
             if not heartbeat.cron_expr:
@@ -505,8 +540,11 @@ class TaskDB:
         with self.lock:
             now = datetime.now().isoformat()
             if heartbeat.next_run_at is None:
-                heartbeat.next_run_at = self._compute_heartbeat_next_run_at(heartbeat, datetime.now())
-            cur = self.conn.execute("""
+                heartbeat.next_run_at = self._compute_heartbeat_next_run_at(
+                    heartbeat, datetime.now()
+                )
+            cur = self.conn.execute(
+                """
                 INSERT INTO heartbeats (
                     name, enabled, working_dir, schedule_type, cron_expr,
                     interval_seconds, check_prompt, action_prompt_template,
@@ -514,36 +552,52 @@ class TaskDB:
                     last_decision, last_error, last_triggered_at, last_dedupe_key,
                     created_at, updated_at
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (
-                heartbeat.name,
-                1 if heartbeat.enabled else 0,
-                heartbeat.working_dir,
-                heartbeat.schedule_type.value,
-                heartbeat.cron_expr,
-                heartbeat.interval_seconds,
-                heartbeat.check_prompt,
-                heartbeat.action_prompt_template,
-                heartbeat.default_agent,
-                heartbeat.cooldown_seconds,
-                heartbeat.next_run_at,
-                heartbeat.last_tick_at,
-                heartbeat.last_decision,
-                heartbeat.last_error,
-                heartbeat.last_triggered_at,
-                heartbeat.last_dedupe_key,
-                now,
-                now,
-            ))
+            """,
+                (
+                    heartbeat.name,
+                    1 if heartbeat.enabled else 0,
+                    heartbeat.working_dir,
+                    heartbeat.schedule_type.value,
+                    heartbeat.cron_expr,
+                    heartbeat.interval_seconds,
+                    heartbeat.check_prompt,
+                    heartbeat.action_prompt_template,
+                    heartbeat.default_agent,
+                    heartbeat.cooldown_seconds,
+                    heartbeat.next_run_at,
+                    heartbeat.last_tick_at,
+                    heartbeat.last_decision,
+                    heartbeat.last_error,
+                    heartbeat.last_triggered_at,
+                    heartbeat.last_dedupe_key,
+                    now,
+                    now,
+                ),
+            )
             self.conn.commit()
             return cur.lastrowid
 
-    ALLOWED_HEARTBEAT_COLUMNS = frozenset({
-        "name", "enabled", "working_dir", "schedule_type", "cron_expr",
-        "interval_seconds", "check_prompt", "action_prompt_template",
-        "default_agent", "cooldown_seconds", "next_run_at", "last_tick_at",
-        "last_decision", "last_error", "last_triggered_at", "last_dedupe_key",
-        "updated_at",
-    })
+    ALLOWED_HEARTBEAT_COLUMNS = frozenset(
+        {
+            "name",
+            "enabled",
+            "working_dir",
+            "schedule_type",
+            "cron_expr",
+            "interval_seconds",
+            "check_prompt",
+            "action_prompt_template",
+            "default_agent",
+            "cooldown_seconds",
+            "next_run_at",
+            "last_tick_at",
+            "last_decision",
+            "last_error",
+            "last_triggered_at",
+            "last_dedupe_key",
+            "updated_at",
+        }
+    )
 
     def update_heartbeat(self, heartbeat_id: int, **kwargs):
         invalid = set(kwargs) - self.ALLOWED_HEARTBEAT_COLUMNS
@@ -558,7 +612,9 @@ class TaskDB:
 
     def get_heartbeat(self, heartbeat_id: int) -> Optional[dict]:
         with self.lock:
-            row = self.conn.execute("SELECT * FROM heartbeats WHERE id = ?", (heartbeat_id,)).fetchone()
+            row = self.conn.execute(
+                "SELECT * FROM heartbeats WHERE id = ?", (heartbeat_id,)
+            ).fetchone()
             return self._deserialize_heartbeat(row) if row else None
 
     def get_all_heartbeats(self) -> list[dict]:
@@ -569,12 +625,15 @@ class TaskDB:
     def get_due_heartbeats(self) -> list[dict]:
         now = datetime.now().isoformat()
         with self.lock:
-            rows = self.conn.execute("""
+            rows = self.conn.execute(
+                """
                 SELECT * FROM heartbeats
                 WHERE enabled = 1
                   AND next_run_at IS NOT NULL
                   AND next_run_at <= ?
-            """, (now,)).fetchall()
+            """,
+                (now,),
+            ).fetchall()
             return [self._deserialize_heartbeat(r) for r in rows]
 
     def delete_heartbeat(self, heartbeat_id: int):
@@ -585,88 +644,139 @@ class TaskDB:
 
     def add_heartbeat_tick(self, heartbeat_id: int) -> int:
         with self.lock:
-            cur = self.conn.execute("""
+            cur = self.conn.execute(
+                """
                 INSERT INTO heartbeat_ticks (heartbeat_id, started_at, status)
                 VALUES (?, ?, 'running')
-            """, (heartbeat_id, datetime.now().isoformat()))
+            """,
+                (heartbeat_id, datetime.now().isoformat()),
+            )
             self.conn.commit()
             return cur.lastrowid
 
-    def finish_heartbeat_tick(self, tick_id: int, status: str, decision_type: Optional[str] = None,
-                              decision_payload: Optional[dict] = None, task_id: Optional[int] = None,
-                              raw_output: Optional[str] = None, error: Optional[str] = None):
-        payload_json = json.dumps(decision_payload, ensure_ascii=False) if decision_payload is not None else None
+    def finish_heartbeat_tick(
+        self,
+        tick_id: int,
+        status: str,
+        decision_type: Optional[str] = None,
+        decision_payload: Optional[dict] = None,
+        task_id: Optional[int] = None,
+        raw_output: Optional[str] = None,
+        error: Optional[str] = None,
+    ):
+        payload_json = (
+            json.dumps(decision_payload, ensure_ascii=False)
+            if decision_payload is not None
+            else None
+        )
         with self.lock:
-            self.conn.execute("""
+            self.conn.execute(
+                """
                 UPDATE heartbeat_ticks
                 SET finished_at = ?, status = ?, decision_type = ?, decision_payload = ?, task_id = ?, raw_output = ?, error = ?
                 WHERE id = ?
-            """, (
-                datetime.now().isoformat(),
-                status,
-                decision_type,
-                payload_json,
-                task_id,
-                raw_output,
-                error,
-                tick_id,
-            ))
+            """,
+                (
+                    datetime.now().isoformat(),
+                    status,
+                    decision_type,
+                    payload_json,
+                    task_id,
+                    raw_output,
+                    error,
+                    tick_id,
+                ),
+            )
             self.conn.commit()
 
     def get_heartbeat_ticks(self, heartbeat_id: int, limit: int = 50) -> list[dict]:
         with self.lock:
-            rows = self.conn.execute("""
+            rows = self.conn.execute(
+                """
                 SELECT * FROM heartbeat_ticks
                 WHERE heartbeat_id = ?
                 ORDER BY started_at DESC
                 LIMIT ?
-            """, (heartbeat_id, limit)).fetchall()
+            """,
+                (heartbeat_id, limit),
+            ).fetchall()
             return [dict(r) for r in rows]
 
     def get_heartbeat_tick(self, heartbeat_id: int, tick_id: int) -> Optional[dict]:
         with self.lock:
-            row = self.conn.execute("""
+            row = self.conn.execute(
+                """
                 SELECT * FROM heartbeat_ticks
                 WHERE heartbeat_id = ? AND id = ?
-            """, (heartbeat_id, tick_id)).fetchone()
+            """,
+                (heartbeat_id, tick_id),
+            ).fetchone()
             return dict(row) if row else None
 
     def get_latest_heartbeat_tick(self, heartbeat_id: int) -> Optional[dict]:
         with self.lock:
-            row = self.conn.execute("""
+            row = self.conn.execute(
+                """
                 SELECT * FROM heartbeat_ticks
                 WHERE heartbeat_id = ?
                 ORDER BY started_at DESC
                 LIMIT 1
-            """, (heartbeat_id,)).fetchone()
+            """,
+                (heartbeat_id,),
+            ).fetchone()
             return dict(row) if row else None
 
     def get_heartbeat_dedup(self, heartbeat_id: int, dedupe_key: str) -> Optional[dict]:
         with self.lock:
-            row = self.conn.execute("""
+            row = self.conn.execute(
+                """
                 SELECT * FROM heartbeat_dedup
                 WHERE heartbeat_id = ? AND dedupe_key = ?
-            """, (heartbeat_id, dedupe_key)).fetchone()
+            """,
+                (heartbeat_id, dedupe_key),
+            ).fetchone()
             return dict(row) if row else None
 
     def upsert_heartbeat_dedup(self, heartbeat_id: int, dedupe_key: str, task_id: Optional[int]):
         with self.lock:
             now = datetime.now().isoformat()
-            self.conn.execute("""
+            self.conn.execute(
+                """
                 INSERT INTO heartbeat_dedup (heartbeat_id, dedupe_key, task_id, triggered_at)
                 VALUES (?, ?, ?, ?)
                 ON CONFLICT(heartbeat_id, dedupe_key)
                 DO UPDATE SET task_id = excluded.task_id, triggered_at = excluded.triggered_at
-            """, (heartbeat_id, dedupe_key, task_id, now))
+            """,
+                (heartbeat_id, dedupe_key, task_id, now),
+            )
             self.conn.commit()
 
-    ALLOWED_TASK_COLUMNS = frozenset({
-        "title", "prompt", "working_dir", "status", "schedule_type",
-        "cron_expr", "delay_seconds", "next_run_at", "last_run_at",
-        "result", "error", "run_count", "max_runs",
-        "updated_at", "tags", "agent", "question", "answer",
-        "session_id", "prompt_images", "image_paths", "dag_id",
-    })
+    ALLOWED_TASK_COLUMNS = frozenset(
+        {
+            "title",
+            "prompt",
+            "working_dir",
+            "status",
+            "schedule_type",
+            "cron_expr",
+            "delay_seconds",
+            "next_run_at",
+            "last_run_at",
+            "result",
+            "error",
+            "run_count",
+            "max_runs",
+            "updated_at",
+            "tags",
+            "agent",
+            "question",
+            "answer",
+            "session_id",
+            "prompt_images",
+            "image_paths",
+            "dag_id",
+        }
+    )
 
     def update_task(self, task_id: int, **kwargs):
         invalid = set(kwargs) - self.ALLOWED_TASK_COLUMNS
@@ -714,90 +824,129 @@ class TaskDB:
     def get_due_tasks(self) -> list[dict]:
         now = datetime.now().isoformat()
         with self.lock:
-            rows = self.conn.execute("""
+            rows = self.conn.execute(
+                """
                 SELECT * FROM tasks
                 WHERE status IN ('pending', 'scheduled')
                   AND (next_run_at IS NULL OR next_run_at <= ?)
-            """, (now,)).fetchall()
+            """,
+                (now,),
+            ).fetchall()
             return [self._deserialize_task(r) for r in rows]
 
     def add_run(self, task_id: int) -> int:
         with self.lock:
             cur = self.conn.execute(
-                "INSERT INTO task_runs (task_id, status) VALUES (?, 'running')",
-                (task_id,))
+                "INSERT INTO task_runs (task_id, status) VALUES (?, 'running')", (task_id,)
+            )
             self.conn.commit()
             return cur.lastrowid
 
-    def finish_run(self, run_id: int, status: str, result: str = None, error: str = None, raw_output: str = None):
+    def finish_run(
+        self,
+        run_id: int,
+        status: str,
+        result: str = None,
+        error: str = None,
+        raw_output: str = None,
+    ):
         with self.lock:
-            self.conn.execute("""
+            self.conn.execute(
+                """
                 UPDATE task_runs SET finished_at = datetime('now'),
                     status = ?, result = ?, error = ?, raw_output = ?
                 WHERE id = ?
-            """, (status, result, error, raw_output, run_id))
+            """,
+                (status, result, error, raw_output, run_id),
+            )
             self.conn.commit()
 
-    def finish_run_and_update_task(self, run_id: int, run_status: str, task_id: int, task_updates: dict,
-                                   run_result: str = None, run_error: str = None, raw_output: str = None):
+    def finish_run_and_update_task(
+        self,
+        run_id: int,
+        run_status: str,
+        task_id: int,
+        task_updates: dict,
+        run_result: str = None,
+        run_error: str = None,
+        raw_output: str = None,
+    ):
         """Atomically finish a run record and update the parent task in one transaction."""
         task_updates = dict(task_updates)
         task_updates["updated_at"] = datetime.now().isoformat()
         sets = ", ".join(f"{k} = ?" for k in task_updates)
         vals = list(task_updates.values()) + [task_id]
         with self.transaction():
-            self.conn.execute("""
+            self.conn.execute(
+                """
                 UPDATE task_runs SET finished_at = datetime('now'),
                     status = ?, result = ?, error = ?, raw_output = ?
                 WHERE id = ?
-            """, (run_status, run_result, run_error, raw_output, run_id))
+            """,
+                (run_status, run_result, run_error, raw_output, run_id),
+            )
             self.conn.execute(f"UPDATE tasks SET {sets} WHERE id = ?", vals)
 
     def get_task_runs(self, task_id: int, limit: int = 20) -> list[dict]:
         with self.lock:
-            rows = self.conn.execute("""
+            rows = self.conn.execute(
+                """
                 SELECT * FROM task_runs WHERE task_id = ?
                 ORDER BY started_at DESC LIMIT ?
-            """, (task_id, limit)).fetchall()
+            """,
+                (task_id, limit),
+            ).fetchall()
             return [dict(r) for r in rows]
 
     def add_output_event(self, task_id: int, run_id: int, event_type: str, content: str):
         """Add a new output event to the database."""
         with self.lock:
-            self.conn.execute("""
+            self.conn.execute(
+                """
                 INSERT INTO task_output_events (task_id, run_id, event_type, content)
                 VALUES (?, ?, ?, ?)
-            """, (task_id, run_id, event_type, content))
+            """,
+                (task_id, run_id, event_type, content),
+            )
             self.conn.commit()
 
     def get_output_events(self, task_id: int, limit: int = 1000, offset: int = 0) -> list[dict]:
         """Get output events for a task, ordered by timestamp."""
         with self.lock:
-            rows = self.conn.execute("""
+            rows = self.conn.execute(
+                """
                 SELECT * FROM task_output_events
                 WHERE task_id = ?
                 ORDER BY timestamp DESC
                 LIMIT ? OFFSET ?
-            """, (task_id, limit, offset)).fetchall()
+            """,
+                (task_id, limit, offset),
+            ).fetchall()
             return [dict(r) for r in rows]
 
     def get_run_output_events(self, run_id: int, limit: int = 1000) -> list[dict]:
         """Get output events for a specific run."""
         with self.lock:
-            rows = self.conn.execute("""
+            rows = self.conn.execute(
+                """
                 SELECT * FROM task_output_events
                 WHERE run_id = ?
                 ORDER BY timestamp ASC
                 LIMIT ?
-            """, (run_id, limit)).fetchall()
+            """,
+                (run_id, limit),
+            ).fetchall()
             return [dict(r) for r in rows]
 
     def add_dependency(self, task_id: int, depends_on_task_id: int, inject_result: bool = False):
         with self.lock:
-            self.conn.execute("""
+            self.conn.execute(
+                """
                 INSERT OR IGNORE INTO task_dependencies (task_id, depends_on_task_id, inject_result)
                 VALUES (?, ?, ?)
-            """, (task_id, depends_on_task_id, 1 if inject_result else 0))
+            """,
+                (task_id, depends_on_task_id, 1 if inject_result else 0),
+            )
             self.conn.commit()
 
     def add_dependencies_batch(self, task_id: int, dep_list: list):
@@ -808,45 +957,56 @@ class TaskDB:
         """
         with self.transaction():
             for dep in dep_list:
-                self.conn.execute("""
+                self.conn.execute(
+                    """
                     INSERT OR IGNORE INTO task_dependencies (task_id, depends_on_task_id, inject_result)
                     VALUES (?, ?, ?)
-                """, (task_id, dep["task_id"], 1 if dep["inject_result"] else 0))
+                """,
+                    (task_id, dep["task_id"], 1 if dep["inject_result"] else 0),
+                )
 
     def remove_dependency(self, task_id: int, depends_on_task_id: int):
         with self.lock:
-            self.conn.execute("""
+            self.conn.execute(
+                """
                 DELETE FROM task_dependencies WHERE task_id = ? AND depends_on_task_id = ?
-            """, (task_id, depends_on_task_id))
+            """,
+                (task_id, depends_on_task_id),
+            )
             self.conn.commit()
 
     def clear_dependencies(self, task_id: int):
         """Remove all upstream dependencies for a task."""
         with self.lock:
-            self.conn.execute(
-                "DELETE FROM task_dependencies WHERE task_id = ?", (task_id,))
+            self.conn.execute("DELETE FROM task_dependencies WHERE task_id = ?", (task_id,))
             self.conn.commit()
 
     def get_dependencies(self, task_id: int) -> list[dict]:
         """Return upstream tasks that task_id depends on."""
         with self.lock:
-            rows = self.conn.execute("""
+            rows = self.conn.execute(
+                """
                 SELECT td.*, t.title as depends_on_title, t.status as depends_on_status
                 FROM task_dependencies td
                 JOIN tasks t ON t.id = td.depends_on_task_id
                 WHERE td.task_id = ?
-            """, (task_id,)).fetchall()
+            """,
+                (task_id,),
+            ).fetchall()
             return [dict(r) for r in rows]
 
     def get_dependents(self, task_id: int) -> list[dict]:
         """Return downstream tasks that depend on task_id."""
         with self.lock:
-            rows = self.conn.execute("""
+            rows = self.conn.execute(
+                """
                 SELECT td.*, t.title as task_title, t.status as task_status
                 FROM task_dependencies td
                 JOIN tasks t ON t.id = td.task_id
                 WHERE td.depends_on_task_id = ?
-            """, (task_id,)).fetchall()
+            """,
+                (task_id,),
+            ).fetchall()
             return [dict(r) for r in rows]
 
     def get_dag_tasks(self, dag_id: str) -> list[dict]:
@@ -860,17 +1020,23 @@ class TaskDB:
         with self.transaction():
             self.conn.execute("DELETE FROM task_output_events WHERE task_id = ?", (task_id,))
             self.conn.execute("DELETE FROM task_runs WHERE task_id = ?", (task_id,))
-            self.conn.execute("DELETE FROM task_dependencies WHERE task_id = ? OR depends_on_task_id = ?", (task_id, task_id))
+            self.conn.execute(
+                "DELETE FROM task_dependencies WHERE task_id = ? OR depends_on_task_id = ?",
+                (task_id, task_id),
+            )
             self.conn.execute("DELETE FROM tasks WHERE id = ?", (task_id,))
 
 
 # ──────────────────────────── Agent Executor ────────────────────────────
 
+
 class AgentExecutor:
     """Executes prompts via configurable AI agent CLIs."""
 
     @staticmethod
-    def run(prompt: str, working_dir: str = ".", timeout: int = 600, image_paths: list[str] = None) -> tuple[bool, str]:
+    def run(
+        prompt: str, working_dir: str = ".", timeout: int = 600, image_paths: list[str] = None
+    ) -> tuple[bool, str]:
         """
         Run a prompt through Claude Code CLI.
         Returns (success: bool, output: str)
@@ -889,7 +1055,15 @@ class AgentExecutor:
                 for img_path in image_paths:
                     cmd.extend(["-i", img_path])
 
-            cmd.extend(["--output-format", "stream-json", "--verbose", "--permission-mode", "bypassPermissions"])
+            cmd.extend(
+                [
+                    "--output-format",
+                    "stream-json",
+                    "--verbose",
+                    "--permission-mode",
+                    "bypassPermissions",
+                ]
+            )
 
             result = subprocess.run(
                 cmd,
@@ -902,16 +1076,16 @@ class AgentExecutor:
             if result.returncode == 0:
                 output = result.stdout
                 for line in reversed(result.stdout.splitlines()):
-                        line = line.strip()
-                        if not line:
-                            continue
-                        try:
-                            event = json.loads(line)
-                            if event.get("type") == "result":
-                                output = event.get("result", result.stdout)
-                                break
-                        except json.JSONDecodeError:
-                            pass
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        event = json.loads(line)
+                        if event.get("type") == "result":
+                            output = event.get("result", result.stdout)
+                            break
+                    except json.JSONDecodeError:
+                        pass
                 return True, output
             else:
                 return False, result.stderr or result.stdout
@@ -923,14 +1097,18 @@ class AgentExecutor:
             return False, str(e)
 
 
-
 # ──────────────────────────── Scheduler ────────────────────────────
+
 
 class TaskScheduler(BusAwareSchedulerMixin):
     """Background scheduler that checks and runs due tasks."""
 
-    def __init__(self, db: TaskDB, on_task_update: Optional[Callable] = None,
-                 bus: Optional[MessageBus] = None):
+    def __init__(
+        self,
+        db: TaskDB,
+        on_task_update: Optional[Callable] = None,
+        bus: Optional[MessageBus] = None,
+    ):
         self.db = db
         self.executor = AgentExecutor()
         self.on_task_update = on_task_update
@@ -961,13 +1139,13 @@ class TaskScheduler(BusAwareSchedulerMixin):
         running = {tid: t for tid, t in self._active_tasks.items() if t.is_alive()}
         if running:
             logger.info(f"Waiting for {len(running)} running task(s) to finish...")
-            for tid, t in running.items():
+            for _tid, t in running.items():
                 remaining = max(0, deadline - time.time())
                 t.join(timeout=remaining)
         heartbeat_running = {hid: t for hid, t in self._active_heartbeats.items() if t.is_alive()}
         if heartbeat_running:
             logger.info(f"Waiting for {len(heartbeat_running)} heartbeat(s) to finish...")
-            for hid, t in heartbeat_running.items():
+            for _hid, t in heartbeat_running.items():
                 remaining = max(0, deadline - time.time())
                 t.join(timeout=remaining)
         # Gracefully terminate any processes still alive, then force-kill if needed
@@ -1037,9 +1215,7 @@ class TaskScheduler(BusAwareSchedulerMixin):
     def _schedule_delayed(self, task: dict):
         delay = task.get("delay_seconds", 0) or 0
         run_at = datetime.now() + timedelta(seconds=delay)
-        self.db.update_task(task["id"],
-                            status="scheduled",
-                            next_run_at=run_at.isoformat())
+        self.db.update_task(task["id"], status="scheduled", next_run_at=run_at.isoformat())
         self._notify(task["id"])
 
     def _spawn_heartbeat(self, heartbeat: dict):
@@ -1075,11 +1251,13 @@ class TaskScheduler(BusAwareSchedulerMixin):
             heartbeat["check_prompt"],
         ]
         if heartbeat.get("action_prompt_template"):
-            lines.extend([
-                "",
-                "When decision is trigger_task, use this action prompt template as the base prompt to expand or adapt:",
-                heartbeat["action_prompt_template"],
-            ])
+            lines.extend(
+                [
+                    "",
+                    "When decision is trigger_task, use this action prompt template as the base prompt to expand or adapt:",
+                    heartbeat["action_prompt_template"],
+                ]
+            )
         return "\n".join(lines)
 
     def _parse_heartbeat_decision(self, raw_text: str) -> dict:
@@ -1091,7 +1269,7 @@ class TaskScheduler(BusAwareSchedulerMixin):
             start = text.find("{")
             end = text.rfind("}")
             if start != -1 and end != -1 and end > start:
-                text = text[start:end + 1]
+                text = text[start : end + 1]
         payload = json.loads(text)
         decision = payload.get("decision")
         if decision not in {d.value for d in HeartbeatDecisionType}:
@@ -1112,25 +1290,36 @@ class TaskScheduler(BusAwareSchedulerMixin):
         working_dir_expanded = os.path.expanduser(working_dir)
         if agent == "codex":
             cmd = [
-                "codex", "exec",
+                "codex",
+                "exec",
                 "--json",
                 "--dangerously-bypass-approvals-and-sandbox",
                 "--skip-git-repo-check",
-                "--cd", working_dir_expanded,
+                "--cd",
+                working_dir_expanded,
                 prompt,
             ]
         else:
             cmd = [
-                "claude", "-p", prompt,
-                "--output-format", "stream-json",
+                "claude",
+                "-p",
+                prompt,
+                "--output-format",
+                "stream-json",
                 "--verbose",
-                "--permission-mode", "bypassPermissions",
+                "--permission-mode",
+                "bypassPermissions",
             ]
         return self._run_agent_command(agent, cmd, working_dir_expanded)
 
-    def _run_agent_command(self, agent: str, cmd: list[str], working_dir_expanded: str,
-                           on_stdout_line: Optional[Callable[[str], None]] = None,
-                           on_stderr_line: Optional[Callable[[str], None]] = None) -> tuple[bool, str]:
+    def _run_agent_command(
+        self,
+        agent: str,
+        cmd: list[str],
+        working_dir_expanded: str,
+        on_stdout_line: Optional[Callable[[str], None]] = None,
+        on_stderr_line: Optional[Callable[[str], None]] = None,
+    ) -> tuple[bool, str]:
         try:
             proc = subprocess.Popen(
                 cmd,
@@ -1194,8 +1383,10 @@ class TaskScheduler(BusAwareSchedulerMixin):
                     event = json.loads(line)
                 except json.JSONDecodeError:
                     continue
-                if (event.get("type") == "item.completed"
-                        and event.get("item", {}).get("type") == "agent_message"):
+                if (
+                    event.get("type") == "item.completed"
+                    and event.get("item", {}).get("type") == "agent_message"
+                ):
                     out = event["item"].get("text", "")
             return True, out or raw_stdout
 
@@ -1271,6 +1462,7 @@ class TaskScheduler(BusAwareSchedulerMixin):
             now,
         )
         try:
+
             def _append_tick_output(line: str):
                 output_chunks.append(line)
                 self._live_heartbeat_output[tick_id] = "".join(output_chunks)
@@ -1280,19 +1472,25 @@ class TaskScheduler(BusAwareSchedulerMixin):
             working_dir_expanded = os.path.expanduser(heartbeat["working_dir"])
             if agent == "codex":
                 cmd = [
-                    "codex", "exec",
+                    "codex",
+                    "exec",
                     "--json",
                     "--dangerously-bypass-approvals-and-sandbox",
                     "--skip-git-repo-check",
-                    "--cd", working_dir_expanded,
+                    "--cd",
+                    working_dir_expanded,
                     prompt,
                 ]
             else:
                 cmd = [
-                    "claude", "-p", prompt,
-                    "--output-format", "stream-json",
+                    "claude",
+                    "-p",
+                    prompt,
+                    "--output-format",
+                    "stream-json",
                     "--verbose",
-                    "--permission-mode", "bypassPermissions",
+                    "--permission-mode",
+                    "bypassPermissions",
                 ]
             success, raw_output = self._run_agent_command(
                 agent,
@@ -1310,9 +1508,15 @@ class TaskScheduler(BusAwareSchedulerMixin):
                 if self._heartbeat_trigger_suppressed(heartbeat, dedupe_key):
                     decision_type = HeartbeatDecisionType.IDLE.value
                     decision["decision"] = decision_type
-                    decision["reason"] = "Suppressed duplicate signal during cooldown or while prior task is still active"
+                    decision["reason"] = (
+                        "Suppressed duplicate signal during cooldown or while prior task is still active"
+                    )
                 else:
-                    task_prompt = decision.get("prompt") or heartbeat.get("action_prompt_template") or heartbeat["check_prompt"]
+                    task_prompt = (
+                        decision.get("prompt")
+                        or heartbeat.get("action_prompt_template")
+                        or heartbeat["check_prompt"]
+                    )
                     task_title = decision.get("title") or f"Heartbeat: {heartbeat['name']}"
                     task = Task(
                         title=task_title,
@@ -1353,7 +1557,9 @@ class TaskScheduler(BusAwareSchedulerMixin):
             )
             self.db.finish_heartbeat_tick(
                 tick_id,
-                status="idle" if decision_type == HeartbeatDecisionType.IDLE.value else decision_type,
+                status="idle"
+                if decision_type == HeartbeatDecisionType.IDLE.value
+                else decision_type,
                 decision_type=decision_type,
                 decision_payload=decision,
                 raw_output=("".join(output_chunks)[:500000] if output_chunks else None),
@@ -1395,7 +1601,9 @@ class TaskScheduler(BusAwareSchedulerMixin):
             elif itype == "command_execution":
                 cmd = item.get("command", "")
                 out = item.get("aggregated_output", "")
-                content = f"$ {cmd}\n{out}".strip() if cmd else json.dumps(event, ensure_ascii=False)
+                content = (
+                    f"$ {cmd}\n{out}".strip() if cmd else json.dumps(event, ensure_ascii=False)
+                )
                 return etype, content
             else:
                 return etype, json.dumps(event, ensure_ascii=False)
@@ -1472,10 +1680,13 @@ class TaskScheduler(BusAwareSchedulerMixin):
                 elif item.get("type") == "image":
                     source = item.get("source", {})
                     if source.get("type") == "base64":
-                        img_json = json.dumps({
-                            "media_type": source.get("media_type", "image/jpeg"),
-                            "data": source.get("data", ""),
-                        }, ensure_ascii=False)
+                        img_json = json.dumps(
+                            {
+                                "media_type": source.get("media_type", "image/jpeg"),
+                                "data": source.get("data", ""),
+                            },
+                            ensure_ascii=False,
+                        )
                         image_events.append(img_json)
                     # Non-base64 image sources (url, etc.) are ignored silently
 
@@ -1489,8 +1700,8 @@ class TaskScheduler(BusAwareSchedulerMixin):
         """
         # If stderr is short and not JSON, it's likely a plain error message
         if raw_stderr and len(raw_stderr) < 2000:
-            first_line = raw_stderr.strip().split('\n')[0].strip()
-            if first_line and not first_line.startswith('{'):
+            first_line = raw_stderr.strip().split("\n")[0].strip()
+            if first_line and not first_line.startswith("{"):
                 return raw_stderr.strip()[:1000]
 
         # Try to parse stdout as stream-json to find error events
@@ -1574,7 +1785,9 @@ class TaskScheduler(BusAwareSchedulerMixin):
 
             for img_path in image_paths:
                 if not _is_safe_image_path(img_path):
-                    logger.warning(f"Task {tid}: Rejected image path outside allowed directories: {img_path}")
+                    logger.warning(
+                        f"Task {tid}: Rejected image path outside allowed directories: {img_path}"
+                    )
                     continue
                 try:
                     with open(img_path, "rb") as f:
@@ -1594,23 +1807,27 @@ class TaskScheduler(BusAwareSchedulerMixin):
                         # Try to detect from magic bytes
                         with open(img_path, "rb") as f:
                             header = f.read(12)
-                        if header.startswith(b'\xff\xd8\xff'):
+                        if header.startswith(b"\xff\xd8\xff"):
                             media_type = "image/jpeg"
-                        elif header.startswith(b'\x89PNG\r\n\x1a\n'):
+                        elif header.startswith(b"\x89PNG\r\n\x1a\n"):
                             media_type = "image/png"
-                        elif header.startswith(b'GIF87a') or header.startswith(b'GIF89a'):
+                        elif header.startswith(b"GIF87a") or header.startswith(b"GIF89a"):
                             media_type = "image/gif"
-                        elif header.startswith(b'RIFF') and b'WEBP' in header:
+                        elif header.startswith(b"RIFF") and b"WEBP" in header:
                             media_type = "image/webp"
                         else:
                             media_type = "image/jpeg"  # default fallback
 
-                    prompt_images.append({
-                        "media_type": media_type,
-                        "data": img_data,
-                        "name": os.path.basename(img_path)
-                    })
-                    logger.debug(f"Task {tid}: Loaded image {img_path} as {media_type} ({len(img_data)} bytes base64)")
+                    prompt_images.append(
+                        {
+                            "media_type": media_type,
+                            "data": img_data,
+                            "name": os.path.basename(img_path),
+                        }
+                    )
+                    logger.debug(
+                        f"Task {tid}: Loaded image {img_path} as {media_type} ({len(img_data)} bytes base64)"
+                    )
                 except Exception as e:
                     logger.error(f"Task {tid}: Failed to load image {img_path}: {e}")
 
@@ -1621,7 +1838,9 @@ class TaskScheduler(BusAwareSchedulerMixin):
             working_dir_expanded = os.path.expanduser(task["working_dir"])
             if task.get("session_id"):
                 cmd = [
-                    "codex", "exec", "resume",
+                    "codex",
+                    "exec",
+                    "resume",
                     "--json",
                     "--dangerously-bypass-approvals-and-sandbox",
                     "--skip-git-repo-check",
@@ -1630,23 +1849,41 @@ class TaskScheduler(BusAwareSchedulerMixin):
                 ]
             else:
                 cmd = [
-                    "codex", "exec",
+                    "codex",
+                    "exec",
                     "--json",
                     "--dangerously-bypass-approvals-and-sandbox",
                     "--skip-git-repo-check",
-                    "--cd", working_dir_expanded,
+                    "--cd",
+                    working_dir_expanded,
                     prompt,
                 ]
             for img_path in image_paths or []:
                 cmd.extend(["--image", img_path])
         elif use_stdin:
             # Claude multimodal input: pass via stdin with --input-format stream-json
-            cmd = ["claude", "-p", "--input-format", "stream-json",
-                   "--output-format", "stream-json", "--verbose",
-                   "--permission-mode", "bypassPermissions"]
+            cmd = [
+                "claude",
+                "-p",
+                "--input-format",
+                "stream-json",
+                "--output-format",
+                "stream-json",
+                "--verbose",
+                "--permission-mode",
+                "bypassPermissions",
+            ]
         else:
-            cmd = ["claude", "-p", prompt, "--output-format", "stream-json",
-                   "--verbose", "--permission-mode", "bypassPermissions"]
+            cmd = [
+                "claude",
+                "-p",
+                prompt,
+                "--output-format",
+                "stream-json",
+                "--verbose",
+                "--permission-mode",
+                "bypassPermissions",
+            ]
         if agent == "claude" and task.get("session_id"):
             cmd.extend(["--resume", task["session_id"]])
         raw_stdout = ""
@@ -1668,18 +1905,19 @@ class TaskScheduler(BusAwareSchedulerMixin):
                 # Build multimodal message content
                 content = [{"type": "text", "text": prompt}]
                 for img in prompt_images:
-                    content.append({
-                        "type": "image",
-                        "source": {
-                            "type": "base64",
-                            "media_type": img.get("media_type", "image/jpeg"),
-                            "data": img.get("data", ""),
+                    content.append(
+                        {
+                            "type": "image",
+                            "source": {
+                                "type": "base64",
+                                "media_type": img.get("media_type", "image/jpeg"),
+                                "data": img.get("data", ""),
+                            },
                         }
-                    })
-                stdin_msg = json.dumps({
-                    "type": "user",
-                    "message": {"role": "user", "content": content}
-                })
+                    )
+                stdin_msg = json.dumps(
+                    {"type": "user", "message": {"role": "user", "content": content}}
+                )
                 proc.stdin.write(stdin_msg + "\n")
                 proc.stdin.close()
             pgid = os.getpgid(proc.pid)
@@ -1687,24 +1925,30 @@ class TaskScheduler(BusAwareSchedulerMixin):
 
             # Read stderr in a background thread so it never blocks stdout reading
             stderr_chunks = []
+
             def _read_stderr():
                 for line in proc.stderr:
                     stderr_chunks.append(line)
+
             stderr_thread = threading.Thread(target=_read_stderr, daemon=True)
             stderr_thread.start()
 
             # Timer that kills the entire process group if it exceeds the configured timeout
             timed_out = [False]
+
             def _kill():
                 timed_out[0] = True
                 try:
                     os.killpg(pgid, signal.SIGKILL)
                 except OSError as e:
-                    logger.error(f"Task {tid}: killpg({pgid}) failed: {e}, falling back to kill({proc.pid})")
+                    logger.error(
+                        f"Task {tid}: killpg({pgid}) failed: {e}, falling back to kill({proc.pid})"
+                    )
                     try:
                         os.kill(proc.pid, signal.SIGKILL)
                     except OSError as e2:
                         logger.error(f"Task {tid}: kill({proc.pid}) also failed: {e2}")
+
             timer = threading.Timer(timeout_secs, _kill)
             timer.start()
 
@@ -1735,7 +1979,9 @@ class TaskScheduler(BusAwareSchedulerMixin):
                     if not waiting_logged:
                         waiting_logged = True
                         logger.info(f"Task {tid}: main process exited, waiting for sub-agents...")
-                    self._live_output[tid] = "".join(chunks) + "\n[⏳ Waiting for sub-agents to complete...]"
+                    self._live_output[tid] = (
+                        "".join(chunks) + "\n[⏳ Waiting for sub-agents to complete...]"
+                    )
                     time.sleep(1)
                 else:
                     # Sub-agents exceeded remaining timeout — kill the group
@@ -1762,8 +2008,10 @@ class TaskScheduler(BusAwareSchedulerMixin):
                             continue
                         try:
                             event = json.loads(line)
-                            if (event.get("type") == "item.completed"
-                                    and event.get("item", {}).get("type") == "agent_message"):
+                            if (
+                                event.get("type") == "item.completed"
+                                and event.get("item", {}).get("type") == "agent_message"
+                            ):
                                 out = event["item"].get("text", "")
                         except json.JSONDecodeError:
                             pass
@@ -1804,7 +2052,11 @@ class TaskScheduler(BusAwareSchedulerMixin):
                 success, output = False, raw_stderr or raw_stdout
         except FileNotFoundError:
             cli_name = "codex" if task.get("agent") == "codex" else "claude"
-            install_hint = "Install with: npm install -g @openai/codex" if cli_name == "codex" else "Is it installed?"
+            install_hint = (
+                "Install with: npm install -g @openai/codex"
+                if cli_name == "codex"
+                else "Is it installed?"
+            )
             success, output = False, f"{cli_name} CLI not found. {install_hint}"
             self._active_pgids.pop(tid, None)
         except (OSError, subprocess.SubprocessError) as e:
@@ -1868,8 +2120,9 @@ class TaskScheduler(BusAwareSchedulerMixin):
                     cron_will_reschedule = True
             else:
                 updates["status"] = "completed"
-            self.db.finish_run_and_update_task(run_id, "completed", tid, updates,
-                                               run_result=output, raw_output=raw_output_stored)
+            self.db.finish_run_and_update_task(
+                run_id, "completed", tid, updates, run_result=output, raw_output=raw_output_stored
+            )
             # For cron tasks that get rescheduled, notify channels with TASK_COMPLETED
             # before the status flips to "scheduled", so channels actually fire.
             if cron_will_reschedule:
@@ -1877,18 +2130,23 @@ class TaskScheduler(BusAwareSchedulerMixin):
         else:
             # Extract a clean, human-readable error summary for task.error and
             # notification channels. The full raw output is preserved in run_error.
-            error_summary = self._extract_error_summary(raw_stderr, raw_stdout) if (
-                raw_stderr or raw_stdout
-            ) else (output or "Unknown error")
+            error_summary = (
+                self._extract_error_summary(raw_stderr, raw_stdout)
+                if (raw_stderr or raw_stdout)
+                else (output or "Unknown error")
+            )
             self.db.finish_run_and_update_task(
-                run_id, "failed", tid,
+                run_id,
+                "failed",
+                tid,
                 {
                     "status": "failed",
                     "error": error_summary,
                     "last_run_at": datetime.now().isoformat(),
                     "run_count": new_count,
                 },
-                run_error=output, raw_output=raw_output_stored,
+                run_error=output,
+                raw_output=raw_output_stored,
             )
 
         self._notify(tid)
@@ -1927,10 +2185,12 @@ class TaskScheduler(BusAwareSchedulerMixin):
                 if isinstance(dep, int):
                     dep_list.append({"task_id": dep, "inject_result": False})
                 elif isinstance(dep, dict):
-                    dep_list.append({
-                        "task_id": dep["task_id"],
-                        "inject_result": bool(dep.get("inject_result", False)),
-                    })
+                    dep_list.append(
+                        {
+                            "task_id": dep["task_id"],
+                            "inject_result": bool(dep.get("inject_result", False)),
+                        }
+                    )
 
         # Determine initial status: BLOCKED if any upstream not completed
         has_unmet = False
@@ -2037,7 +2297,9 @@ class TaskScheduler(BusAwareSchedulerMixin):
                 status="cancelled",
                 error=f"Cancelled: upstream task #{origin_id} failed",
             )
-            logger.info(f"DAG: Task {downstream_id} cascade-cancelled (upstream #{origin_id} failed)")
+            logger.info(
+                f"DAG: Task {downstream_id} cascade-cancelled (upstream #{origin_id} failed)"
+            )
             self._notify(downstream_id)
 
     # ─────────────────────────────────────────────────────────────
@@ -2060,7 +2322,10 @@ class TaskScheduler(BusAwareSchedulerMixin):
         heartbeat = self.db.get_heartbeat(heartbeat_id)
         if not heartbeat:
             raise ValueError("heartbeat not found")
-        if heartbeat_id in self._active_heartbeats and self._active_heartbeats[heartbeat_id].is_alive():
+        if (
+            heartbeat_id in self._active_heartbeats
+            and self._active_heartbeats[heartbeat_id].is_alive()
+        ):
             raise ValueError("heartbeat already running")
         self._spawn_heartbeat(heartbeat)
 
@@ -2094,11 +2359,6 @@ class TaskScheduler(BusAwareSchedulerMixin):
 
 
 # ──────────────────────────── HTTP API Server ────────────────────────────
-
-from http.server import HTTPServer, BaseHTTPRequestHandler
-from urllib.parse import urlparse, parse_qs
-import json
-
 # Single CSRF token for the lifetime of this server process.
 # The frontend fetches it once via GET /api/csrf-token and includes it as
 # the X-CSRF-Token header on all state-changing requests.
@@ -2129,7 +2389,9 @@ class TaskAPIHandler(BaseHTTPRequestHandler):
         self._cors_headers()
         self.end_headers()
 
-    def _validate_heartbeat_payload(self, body: dict, existing: Optional[dict] = None) -> tuple[Optional[Heartbeat], Optional[tuple[dict, int]]]:
+    def _validate_heartbeat_payload(
+        self, body: dict, existing: Optional[dict] = None
+    ) -> tuple[Optional[Heartbeat], Optional[tuple[dict, int]]]:
         def _coerce_bool(value):
             if isinstance(value, bool):
                 return value
@@ -2146,50 +2408,106 @@ class TaskAPIHandler(BaseHTTPRequestHandler):
         if working_dir and working_dir != ".":
             expanded = os.path.expanduser(working_dir)
             if not os.path.isdir(expanded):
-                return None, ({"error": f"working_dir does not exist or is not a directory: {working_dir}", "field": "working_dir"}, 400)
+                return None, (
+                    {
+                        "error": f"working_dir does not exist or is not a directory: {working_dir}",
+                        "field": "working_dir",
+                    },
+                    400,
+                )
 
-        schedule_value = body.get("schedule_type", existing.get("schedule_type") if existing else "interval")
+        schedule_value = body.get(
+            "schedule_type", existing.get("schedule_type") if existing else "interval"
+        )
         try:
             schedule_type = HeartbeatScheduleType(schedule_value)
         except ValueError:
-            return None, ({"error": f"invalid heartbeat schedule_type: {schedule_value}", "field": "schedule_type"}, 400)
+            return None, (
+                {
+                    "error": f"invalid heartbeat schedule_type: {schedule_value}",
+                    "field": "schedule_type",
+                },
+                400,
+            )
 
         cron_expr = body.get("cron_expr", existing.get("cron_expr") if existing else None)
-        interval_seconds = body.get("interval_seconds", existing.get("interval_seconds") if existing else None)
+        interval_seconds = body.get(
+            "interval_seconds", existing.get("interval_seconds") if existing else None
+        )
         if schedule_type == HeartbeatScheduleType.CRON:
             if not cron_expr or not str(cron_expr).strip():
-                return None, ({"error": "cron_expr is required for cron heartbeat", "field": "cron_expr"}, 400)
+                return None, (
+                    {"error": "cron_expr is required for cron heartbeat", "field": "cron_expr"},
+                    400,
+                )
             if not croniter.is_valid(cron_expr):
-                return None, ({"error": f"invalid cron expression: {cron_expr}", "field": "cron_expr"}, 400)
+                return None, (
+                    {"error": f"invalid cron expression: {cron_expr}", "field": "cron_expr"},
+                    400,
+                )
             interval_seconds = None
         else:
             try:
                 interval_seconds = int(interval_seconds)
             except (TypeError, ValueError):
-                return None, ({"error": "interval_seconds must be a positive integer", "field": "interval_seconds"}, 400)
+                return None, (
+                    {
+                        "error": "interval_seconds must be a positive integer",
+                        "field": "interval_seconds",
+                    },
+                    400,
+                )
             if interval_seconds <= 0:
-                return None, ({"error": "interval_seconds must be a positive integer", "field": "interval_seconds"}, 400)
+                return None, (
+                    {
+                        "error": "interval_seconds must be a positive integer",
+                        "field": "interval_seconds",
+                    },
+                    400,
+                )
             cron_expr = None
 
-        cooldown_seconds = body.get("cooldown_seconds", existing.get("cooldown_seconds") if existing else 0)
+        cooldown_seconds = body.get(
+            "cooldown_seconds", existing.get("cooldown_seconds") if existing else 0
+        )
         try:
             cooldown_seconds = int(cooldown_seconds or 0)
         except (TypeError, ValueError):
-            return None, ({"error": "cooldown_seconds must be an integer", "field": "cooldown_seconds"}, 400)
+            return None, (
+                {"error": "cooldown_seconds must be an integer", "field": "cooldown_seconds"},
+                400,
+            )
         if cooldown_seconds < 0:
-            return None, ({"error": "cooldown_seconds cannot be negative", "field": "cooldown_seconds"}, 400)
+            return None, (
+                {"error": "cooldown_seconds cannot be negative", "field": "cooldown_seconds"},
+                400,
+            )
 
         heartbeat = Heartbeat(
             id=existing.get("id") if existing else None,
             name=name,
-            enabled=_coerce_bool(body.get("enabled", existing.get("enabled") if existing else True)),
+            enabled=_coerce_bool(
+                body.get("enabled", existing.get("enabled") if existing else True)
+            ),
             working_dir=working_dir,
             schedule_type=schedule_type,
             cron_expr=cron_expr,
             interval_seconds=interval_seconds,
             check_prompt=str(check_prompt),
-            action_prompt_template=str(body.get("action_prompt_template", existing.get("action_prompt_template") if existing else "")),
-            default_agent=str(body.get("default_agent", existing.get("default_agent") if existing else self.db.get_setting("default_agent", "claude"))),
+            action_prompt_template=str(
+                body.get(
+                    "action_prompt_template",
+                    existing.get("action_prompt_template") if existing else "",
+                )
+            ),
+            default_agent=str(
+                body.get(
+                    "default_agent",
+                    existing.get("default_agent")
+                    if existing
+                    else self.db.get_setting("default_agent", "claude"),
+                )
+            ),
             cooldown_seconds=cooldown_seconds,
             next_run_at=existing.get("next_run_at") if existing else None,
             last_tick_at=existing.get("last_tick_at") if existing else None,
@@ -2217,7 +2535,9 @@ class TaskAPIHandler(BaseHTTPRequestHandler):
                 self._json_response({"error": "not found"}, 404)
                 return
             live = self.scheduler._live_heartbeat_output.get(tick_id, tick.get("raw_output") or "")
-            self._json_response({"output": live, "is_running": tick_id in self.scheduler._live_heartbeat_output})
+            self._json_response(
+                {"output": live, "is_running": tick_id in self.scheduler._live_heartbeat_output}
+            )
 
         elif path.startswith("/api/heartbeats/") and path.endswith("/ticks"):
             hid = int(path.split("/")[3])
@@ -2284,7 +2604,9 @@ class TaskAPIHandler(BaseHTTPRequestHandler):
                                 elif isinstance(c, str):
                                     text += c
                             if text.strip():
-                                run_messages.append({"role": "user", "text": text, "run_id": run["id"]})
+                                run_messages.append(
+                                    {"role": "user", "text": text, "run_id": run["id"]}
+                                )
                         elif etype == "assistant":
                             msg = event.get("message", {})
                             content = msg.get("content", [])
@@ -2293,7 +2615,9 @@ class TaskAPIHandler(BaseHTTPRequestHandler):
                                 if isinstance(c, dict) and c.get("type") == "text":
                                     text += c.get("text", "")
                             if text.strip():
-                                run_messages.append({"role": "assistant", "text": text, "run_id": run["id"]})
+                                run_messages.append(
+                                    {"role": "assistant", "text": text, "run_id": run["id"]}
+                                )
                     except json.JSONDecodeError:
                         pass
                 messages.extend(run_messages)
@@ -2308,7 +2632,7 @@ class TaskAPIHandler(BaseHTTPRequestHandler):
             self._json_response(self.db.get_dependents(tid))
 
         elif path.startswith("/api/dag/"):
-            dag_id = path[len("/api/dag/"):]
+            dag_id = path[len("/api/dag/") :]
             tasks = self.db.get_dag_tasks(dag_id)
             for t in tasks:
                 t["dependencies"] = self.db.get_dependencies(t["id"])
@@ -2332,48 +2656,74 @@ class TaskAPIHandler(BaseHTTPRequestHandler):
             self._json_response({"status": "ok", "tasks": len(self.db.get_all_tasks())})
 
         elif path == "/api/settings":
-            self._json_response({
-                "default_agent": self.db.get_setting("default_agent", "claude"),
-                "timeout": int(self.db.get_setting("timeout", "600")),
-            })
+            self._json_response(
+                {
+                    "default_agent": self.db.get_setting("default_agent", "claude"),
+                    "timeout": int(self.db.get_setting("timeout", "600")),
+                }
+            )
 
         elif path == "/api/feishu/settings":
-            self._json_response({
-                "feishu_app_id": self.db.get_setting("feishu_app_id", ""),
-                "feishu_app_secret": self.db.get_setting("feishu_app_secret", ""),
-                "feishu_default_chat_id": self.db.get_setting("feishu_default_chat_id", ""),
-                "feishu_default_working_dir": self.db.get_setting("feishu_default_working_dir", "~"),
-                "feishu_enabled": self.db.get_setting("feishu_enabled", "false"),
-            })
+            self._json_response(
+                {
+                    "feishu_app_id": self.db.get_setting("feishu_app_id", ""),
+                    "feishu_app_secret": self.db.get_setting("feishu_app_secret", ""),
+                    "feishu_default_chat_id": self.db.get_setting("feishu_default_chat_id", ""),
+                    "feishu_default_working_dir": self.db.get_setting(
+                        "feishu_default_working_dir", "~"
+                    ),
+                    "feishu_enabled": self.db.get_setting("feishu_enabled", "false"),
+                }
+            )
 
         elif path == "/api/channels/status":
             import os as _os
+
             # Tokens can come from settings DB or env vars
-            tg_token = self.db.get_setting("telegram_bot_token", "") or _os.environ.get("TELEGRAM_BOT_TOKEN", "")
-            sl_bot = self.db.get_setting("slack_bot_token", "") or _os.environ.get("SLACK_BOT_TOKEN", "")
-            sl_app = self.db.get_setting("slack_app_token", "") or _os.environ.get("SLACK_APP_TOKEN", "")
-            self._json_response({
-                "telegram": {
-                    "enabled": self.db.get_setting("telegram_enabled", "false") == "true",
-                    "configured": bool(tg_token),
-                    "running": bool(self.telegram_channel and getattr(self.telegram_channel, "_running", False)),
-                    "default_working_dir": self.db.get_setting("telegram_default_working_dir", "~"),
-                    "default_chat_id": self.db.get_setting("telegram_default_chat_id", ""),
-                    "allowed_users": self.db.get_setting("telegram_allowed_users", ""),
-                },
-                "slack": {
-                    "enabled": self.db.get_setting("slack_enabled", "false") == "true",
-                    "configured": bool(sl_bot and sl_app),
-                    "running": bool(self.slack_channel and getattr(self.slack_channel, "_running", False)),
-                    "default_working_dir": self.db.get_setting("slack_default_working_dir", "~"),
-                    "default_channel": self.db.get_setting("slack_default_channel", ""),
-                    "default_user": self.db.get_setting("slack_default_user", ""),
-                },
-                "feishu": {
-                    "configured": self.db.get_setting("feishu_enabled", "false") == "true",
-                    "running": bool(self.feishu_channel and getattr(self.feishu_channel, "_running", False)),
-                },
-            })
+            tg_token = self.db.get_setting("telegram_bot_token", "") or _os.environ.get(
+                "TELEGRAM_BOT_TOKEN", ""
+            )
+            sl_bot = self.db.get_setting("slack_bot_token", "") or _os.environ.get(
+                "SLACK_BOT_TOKEN", ""
+            )
+            sl_app = self.db.get_setting("slack_app_token", "") or _os.environ.get(
+                "SLACK_APP_TOKEN", ""
+            )
+            self._json_response(
+                {
+                    "telegram": {
+                        "enabled": self.db.get_setting("telegram_enabled", "false") == "true",
+                        "configured": bool(tg_token),
+                        "running": bool(
+                            self.telegram_channel
+                            and getattr(self.telegram_channel, "_running", False)
+                        ),
+                        "default_working_dir": self.db.get_setting(
+                            "telegram_default_working_dir", "~"
+                        ),
+                        "default_chat_id": self.db.get_setting("telegram_default_chat_id", ""),
+                        "allowed_users": self.db.get_setting("telegram_allowed_users", ""),
+                    },
+                    "slack": {
+                        "enabled": self.db.get_setting("slack_enabled", "false") == "true",
+                        "configured": bool(sl_bot and sl_app),
+                        "running": bool(
+                            self.slack_channel and getattr(self.slack_channel, "_running", False)
+                        ),
+                        "default_working_dir": self.db.get_setting(
+                            "slack_default_working_dir", "~"
+                        ),
+                        "default_channel": self.db.get_setting("slack_default_channel", ""),
+                        "default_user": self.db.get_setting("slack_default_user", ""),
+                    },
+                    "feishu": {
+                        "configured": self.db.get_setting("feishu_enabled", "false") == "true",
+                        "running": bool(
+                            self.feishu_channel and getattr(self.feishu_channel, "_running", False)
+                        ),
+                    },
+                }
+            )
 
         else:
             self._json_response({"error": "not found"}, 404)
@@ -2435,7 +2785,10 @@ class TaskAPIHandler(BaseHTTPRequestHandler):
                 expanded = os.path.expanduser(working_dir)
                 if not os.path.isdir(expanded):
                     self._json_response(
-                        {"error": f"working_dir does not exist or is not a directory: {working_dir}", "field": "working_dir"},
+                        {
+                            "error": f"working_dir does not exist or is not a directory: {working_dir}",
+                            "field": "working_dir",
+                        },
                         400,
                     )
                     return
@@ -2444,10 +2797,16 @@ class TaskAPIHandler(BaseHTTPRequestHandler):
             cron_expr = body.get("cron_expr")
             if schedule_type == "cron":
                 if not cron_expr or not cron_expr.strip():
-                    self._json_response({"error": "cron_expr is required for cron schedule", "field": "cron_expr"}, 400)
+                    self._json_response(
+                        {"error": "cron_expr is required for cron schedule", "field": "cron_expr"},
+                        400,
+                    )
                     return
                 if not croniter.is_valid(cron_expr):
-                    self._json_response({"error": f"invalid cron expression: {cron_expr}", "field": "cron_expr"}, 400)
+                    self._json_response(
+                        {"error": f"invalid cron expression: {cron_expr}", "field": "cron_expr"},
+                        400,
+                    )
                     return
             # ─────────────────────────────────────────────────────────
 
@@ -2476,10 +2835,12 @@ class TaskAPIHandler(BaseHTTPRequestHandler):
                     if isinstance(item, int):
                         depends_on.append({"task_id": item, "inject_result": False})
                     elif isinstance(item, dict) and "task_id" in item:
-                        depends_on.append({
-                            "task_id": int(item["task_id"]),
-                            "inject_result": bool(item.get("inject_result", False)),
-                        })
+                        depends_on.append(
+                            {
+                                "task_id": int(item["task_id"]),
+                                "inject_result": bool(item.get("inject_result", False)),
+                            }
+                        )
             # Shorthand: global inject_result flag applies to all deps if not per-dep
             if body.get("inject_result") and depends_on:
                 for d in depends_on:
@@ -2510,12 +2871,21 @@ class TaskAPIHandler(BaseHTTPRequestHandler):
 
         elif path == "/api/feishu/settings":
             logger.info("POST /api/feishu/settings - updating Feishu settings")
-            allowed = {"feishu_app_id", "feishu_app_secret", "feishu_default_chat_id",
-                       "feishu_default_working_dir", "feishu_enabled"}
+            allowed = {
+                "feishu_app_id",
+                "feishu_app_secret",
+                "feishu_default_chat_id",
+                "feishu_default_working_dir",
+                "feishu_enabled",
+            }
             for key, value in body.items():
                 if key in allowed:
                     # Mask sensitive values in logs
-                    display_value = value[:8] + "..." if key in ("feishu_app_id", "feishu_app_secret") else value
+                    display_value = (
+                        value[:8] + "..."
+                        if key in ("feishu_app_id", "feishu_app_secret")
+                        else value
+                    )
                     logger.debug(f"  Setting {key} = {display_value}")
                     self.db.set_setting(key, str(value))
             # Restart the Feishu channel with new credentials
@@ -2526,7 +2896,8 @@ class TaskAPIHandler(BaseHTTPRequestHandler):
                 self.__class__.feishu_channel = None
             if FEISHU_CHANNEL_AVAILABLE and body.get("feishu_enabled", "").lower() == "true":
                 channel = FeishuChannel(
-                    bus=self.__class__.bus, db=self.db,
+                    bus=self.__class__.bus,
+                    db=self.db,
                     scheduler=self.__class__.scheduler,
                 )
                 logger.info("Starting new Feishu channel (enabled)...")
@@ -2540,32 +2911,50 @@ class TaskAPIHandler(BaseHTTPRequestHandler):
         elif path == "/api/channels/settings":
             logger.info("POST /api/channels/settings - updating channel settings")
             allowed = {
-                "telegram_bot_token", "telegram_allowed_users",
-                "telegram_default_working_dir", "telegram_enabled", "telegram_default_chat_id",
-                "slack_bot_token", "slack_app_token",
-                "slack_default_working_dir", "slack_default_channel", "slack_default_user", "slack_enabled",
+                "telegram_bot_token",
+                "telegram_allowed_users",
+                "telegram_default_working_dir",
+                "telegram_enabled",
+                "telegram_default_chat_id",
+                "slack_bot_token",
+                "slack_app_token",
+                "slack_default_working_dir",
+                "slack_default_channel",
+                "slack_default_user",
+                "slack_enabled",
             }
             for key, value in body.items():
                 if key in allowed:
                     # Mask sensitive values in logs
-                    display_value = value[:8] + "..." if "token" in key or "secret" in key else value
+                    display_value = (
+                        value[:8] + "..." if "token" in key or "secret" in key else value
+                    )
                     logger.debug(f"  Setting {key} = {display_value}")
                     self.db.set_setting(key, str(value))
 
             # ── Restart Telegram channel ──
-            tg_enabled = (body.get("telegram_enabled") or self.db.get_setting("telegram_enabled", "false")) == "true"
+            tg_enabled = (
+                body.get("telegram_enabled") or self.db.get_setting("telegram_enabled", "false")
+            ) == "true"
             if self.__class__.telegram_channel:
                 logger.info("Stopping existing Telegram channel...")
                 self.__class__.telegram_channel.stop()
                 self.__class__.telegram_channel = None
             if tg_enabled and TELEGRAM_CHANNEL_AVAILABLE:
-                tg_token = self.db.get_setting("telegram_bot_token", "") or os.environ.get("TELEGRAM_BOT_TOKEN", "")
-                tg_allowed = self.db.get_setting("telegram_allowed_users", "") or os.environ.get("TELEGRAM_ALLOWED_USERS", "")
+                tg_token = self.db.get_setting("telegram_bot_token", "") or os.environ.get(
+                    "TELEGRAM_BOT_TOKEN", ""
+                )
+                tg_allowed = self.db.get_setting("telegram_allowed_users", "") or os.environ.get(
+                    "TELEGRAM_ALLOWED_USERS", ""
+                )
                 if tg_token:
                     logger.info("Starting Telegram channel with new settings...")
                     ch = create_telegram_channel(
-                        self.db, self.__class__.scheduler, bus=self.__class__.bus,
-                        token=tg_token, allowed_users_str=tg_allowed,
+                        self.db,
+                        self.__class__.scheduler,
+                        bus=self.__class__.bus,
+                        token=tg_token,
+                        allowed_users_str=tg_allowed,
                     )
                     if ch:
                         ch.start()
@@ -2579,20 +2968,28 @@ class TaskAPIHandler(BaseHTTPRequestHandler):
                 logger.info("Telegram channel disabled")
 
             # ── Restart Slack channel ──
-            sl_enabled = (body.get("slack_enabled") or self.db.get_setting("slack_enabled", "false")) == "true"
+            sl_enabled = (
+                body.get("slack_enabled") or self.db.get_setting("slack_enabled", "false")
+            ) == "true"
             if self.__class__.slack_channel:
                 logger.info("Stopping existing Slack channel...")
                 self.__class__.slack_channel.stop()
                 self.__class__.slack_channel = None
             if sl_enabled and SLACK_CHANNEL_AVAILABLE:
-                sl_bot = self.db.get_setting("slack_bot_token", "") or os.environ.get("SLACK_BOT_TOKEN", "")
-                sl_app = self.db.get_setting("slack_app_token", "") or os.environ.get("SLACK_APP_TOKEN", "")
+                sl_bot = self.db.get_setting("slack_bot_token", "") or os.environ.get(
+                    "SLACK_BOT_TOKEN", ""
+                )
+                sl_app = self.db.get_setting("slack_app_token", "") or os.environ.get(
+                    "SLACK_APP_TOKEN", ""
+                )
                 if sl_bot and sl_app:
                     logger.info("Starting Slack channel with new settings...")
                     ch = SlackChannel(
-                        bus=self.__class__.bus, db=self.db,
+                        bus=self.__class__.bus,
+                        db=self.db,
                         scheduler=self.__class__.scheduler,
-                        bot_token=sl_bot, app_token=sl_app,
+                        bot_token=sl_bot,
+                        app_token=sl_app,
                     )
                     ch.start()
                     self.__class__.slack_channel = ch
@@ -2623,12 +3020,17 @@ class TaskAPIHandler(BaseHTTPRequestHandler):
                 depends_on = []
                 for r in depends_on_refs:
                     if r not in ref_to_id:
-                        self._json_response({"error": f"ref '{r}' not found — declare tasks in topological order"}, 400)
+                        self._json_response(
+                            {"error": f"ref '{r}' not found — declare tasks in topological order"},
+                            400,
+                        )
                         return
-                    depends_on.append({
-                        "task_id": ref_to_id[r],
-                        "inject_result": bool(tdef.get("inject_result", False)),
-                    })
+                    depends_on.append(
+                        {
+                            "task_id": ref_to_id[r],
+                            "inject_result": bool(tdef.get("inject_result", False)),
+                        }
+                    )
 
                 prompt_images = tdef.get("prompt_images", [])
                 if isinstance(prompt_images, str):
@@ -2670,13 +3072,19 @@ class TaskAPIHandler(BaseHTTPRequestHandler):
                 self._json_response({"error": "task not found"}, 404)
                 return
             inject_result = bool(body.get("inject_result", False))
-            should_block = upstream["status"] != "completed" and task["status"] in ("pending", "scheduled")
+            should_block = upstream["status"] != "completed" and task["status"] in (
+                "pending",
+                "scheduled",
+            )
             # Insert dependency and (if needed) update task status atomically.
             with self.db.transaction():
-                self.db.conn.execute("""
+                self.db.conn.execute(
+                    """
                     INSERT OR IGNORE INTO task_dependencies (task_id, depends_on_task_id, inject_result)
                     VALUES (?, ?, ?)
-                """, (tid, int(dep_task_id), 1 if inject_result else 0))
+                """,
+                    (tid, int(dep_task_id), 1 if inject_result else 0),
+                )
                 if should_block:
                     self.db.conn.execute(
                         "UPDATE tasks SET status = ?, updated_at = ? WHERE id = ?",
@@ -2701,12 +3109,9 @@ class TaskAPIHandler(BaseHTTPRequestHandler):
             answer = body.get("answer", "")
             task = self.db.get_task(tid)
             if task:
-                self.db.update_task(tid,
-                                    status="pending",
-                                    prompt=answer,
-                                    answer=answer,
-                                    question=None,
-                                    error=None)
+                self.db.update_task(
+                    tid, status="pending", prompt=answer, answer=answer, question=None, error=None
+                )
                 self._json_response({"status": "responding"})
             else:
                 self._json_response({"error": "not found"}, 404)
@@ -2722,12 +3127,9 @@ class TaskAPIHandler(BaseHTTPRequestHandler):
             elif not task.get("session_id"):
                 self._json_response({"error": "no session_id — cannot resume"}, 400)
             else:
-                self.db.update_task(tid,
-                                    status="pending",
-                                    prompt=message,
-                                    result=None,
-                                    error=None,
-                                    question=None)
+                self.db.update_task(
+                    tid, status="pending", prompt=message, result=None, error=None, question=None
+                )
                 self._json_response({"status": "resuming"})
 
         else:
@@ -2792,7 +3194,9 @@ class TaskAPIHandler(BaseHTTPRequestHandler):
 
             if task["status"] not in ("pending", "scheduled", "blocked"):
                 self._json_response(
-                    {"error": f"Cannot edit task with status '{task['status']}'. Only pending, scheduled, or blocked tasks can be edited."},
+                    {
+                        "error": f"Cannot edit task with status '{task['status']}'. Only pending, scheduled, or blocked tasks can be edited."
+                    },
                     409,
                 )
                 return
@@ -2809,7 +3213,10 @@ class TaskAPIHandler(BaseHTTPRequestHandler):
                 expanded = os.path.expanduser(working_dir)
                 if not os.path.isdir(expanded):
                     self._json_response(
-                        {"error": f"working_dir does not exist: {working_dir}", "field": "working_dir"},
+                        {
+                            "error": f"working_dir does not exist: {working_dir}",
+                            "field": "working_dir",
+                        },
                         400,
                     )
                     return
@@ -2819,17 +3226,29 @@ class TaskAPIHandler(BaseHTTPRequestHandler):
             cron_expr = body.get("cron_expr", task.get("cron_expr"))
             if schedule_type == "cron":
                 if not cron_expr or not cron_expr.strip():
-                    self._json_response({"error": "cron_expr required for cron schedule", "field": "cron_expr"}, 400)
+                    self._json_response(
+                        {"error": "cron_expr required for cron schedule", "field": "cron_expr"}, 400
+                    )
                     return
                 if not croniter.is_valid(cron_expr):
-                    self._json_response({"error": f"invalid cron expression: {cron_expr}", "field": "cron_expr"}, 400)
+                    self._json_response(
+                        {"error": f"invalid cron expression: {cron_expr}", "field": "cron_expr"},
+                        400,
+                    )
                     return
 
             # ── Build updates from editable fields ──
             EDITABLE_FIELDS = {
-                "title", "prompt", "working_dir", "schedule_type",
-                "cron_expr", "delay_seconds", "max_runs", "tags",
-                "agent", "dag_id",
+                "title",
+                "prompt",
+                "working_dir",
+                "schedule_type",
+                "cron_expr",
+                "delay_seconds",
+                "max_runs",
+                "tags",
+                "agent",
+                "dag_id",
             }
             updates = {}
             for field in EDITABLE_FIELDS:
@@ -2872,7 +3291,10 @@ class TaskAPIHandler(BaseHTTPRequestHandler):
             elif new_stype == "scheduled_at":
                 nra = body.get("next_run_at", task.get("next_run_at"))
                 if not nra:
-                    self._json_response({"error": "next_run_at required for scheduled_at", "field": "next_run_at"}, 400)
+                    self._json_response(
+                        {"error": "next_run_at required for scheduled_at", "field": "next_run_at"},
+                        400,
+                    )
                     return
                 updates["next_run_at"] = nra
                 updates["status"] = "scheduled"
@@ -2895,10 +3317,12 @@ class TaskAPIHandler(BaseHTTPRequestHandler):
                         if isinstance(item, int):
                             dep_list.append({"task_id": item, "inject_result": False})
                         elif isinstance(item, dict) and "task_id" in item:
-                            dep_list.append({
-                                "task_id": int(item["task_id"]),
-                                "inject_result": bool(item.get("inject_result", False)),
-                            })
+                            dep_list.append(
+                                {
+                                    "task_id": int(item["task_id"]),
+                                    "inject_result": bool(item.get("inject_result", False)),
+                                }
+                            )
                 if dep_list:
                     self.db.add_dependencies_batch(tid, dep_list)
                     # Check if any deps are unmet → set blocked
@@ -2976,10 +3400,10 @@ class TaskAPIHandler(BaseHTTPRequestHandler):
     @staticmethod
     def _is_allowed_origin(origin: str) -> bool:
         """Return True for file:// (Electron production) and localhost origins."""
-        if origin == "null":           # Electron / file://
+        if origin == "null":  # Electron / file://
             return True
         if not origin:
-            return True                # same-origin request with no Origin header
+            return True  # same-origin request with no Origin header
         # Accept http://localhost or http://localhost:<any port>
         if origin == "http://localhost" or origin.startswith("http://localhost:"):
             return True
@@ -3006,12 +3430,12 @@ class TaskAPIHandler(BaseHTTPRequestHandler):
         pass
 
 
-
 class QuietHTTPServer(HTTPServer):
     allow_reuse_address = True
 
     def handle_error(self, request, client_address):
         import sys
+
         if isinstance(sys.exc_info()[1], BrokenPipeError):
             return
         super().handle_error(request, client_address)
@@ -3020,6 +3444,7 @@ class QuietHTTPServer(HTTPServer):
 def _kill_stale_process_on_port(port: int):
     """Kill any leftover process occupying the port (e.g. orphaned from a previous run)."""
     import socket
+
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     try:
         sock.settimeout(1)
@@ -3030,8 +3455,7 @@ def _kill_stale_process_on_port(port: int):
     # Port is occupied — try to find and kill the process
     try:
         result = subprocess.run(
-            ["lsof", "-ti", f":{port}"],
-            capture_output=True, text=True, timeout=5
+            ["lsof", "-ti", f":{port}"], capture_output=True, text=True, timeout=5
         )
         pids = []
         for pid_str in result.stdout.strip().split("\n"):
@@ -3095,15 +3519,20 @@ def run_server(port: int = 9712):
     telegram_channel = None
     tg_enabled = db.get_setting("telegram_enabled", "false") == "true"
     tg_token = db.get_setting("telegram_bot_token", "") or os.environ.get("TELEGRAM_BOT_TOKEN", "")
-    tg_allowed = db.get_setting("telegram_allowed_users", "") or os.environ.get("TELEGRAM_ALLOWED_USERS", "")
+    tg_allowed = db.get_setting("telegram_allowed_users", "") or os.environ.get(
+        "TELEGRAM_ALLOWED_USERS", ""
+    )
     # Auto-enable if env var set but settings not yet configured
     if not tg_enabled and os.environ.get("TELEGRAM_BOT_TOKEN"):
         tg_enabled = True
     if TELEGRAM_CHANNEL_AVAILABLE and tg_enabled and tg_token:
         logger.info("Starting Telegram channel...")
         telegram_channel = create_telegram_channel(
-            db, scheduler, bus=bus,
-            token=tg_token, allowed_users_str=tg_allowed,
+            db,
+            scheduler,
+            bus=bus,
+            token=tg_token,
+            allowed_users_str=tg_allowed,
         )
         if telegram_channel:
             telegram_channel.start()
@@ -3122,8 +3551,11 @@ def run_server(port: int = 9712):
     if SLACK_CHANNEL_AVAILABLE and sl_enabled and sl_bot and sl_app:
         logger.info("Starting Slack channel...")
         slack_channel = SlackChannel(
-            bus=bus, db=db, scheduler=scheduler,
-            bot_token=sl_bot, app_token=sl_app,
+            bus=bus,
+            db=db,
+            scheduler=scheduler,
+            bot_token=sl_bot,
+            app_token=sl_app,
         )
         slack_channel.start()
     else:
@@ -3171,7 +3603,9 @@ def run_server(port: int = 9712):
 
 if __name__ == "__main__":
     port = int(sys.argv[1]) if len(sys.argv) > 1 else 9712
-    logger.info(f"=== Python backend starting at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} on port {port} ===")
+    logger.info(
+        f"=== Python backend starting at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} on port {port} ==="
+    )
     run_server(port)
 # Test comment for hot reload 2026年 2月13日 星期五 23时08分26秒 CST
 # Hot reload test at 23:09:11

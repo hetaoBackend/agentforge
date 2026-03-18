@@ -12,9 +12,9 @@ Configure via settings API:
     feishu_default_working_dir  (working directory for tasks created from bot)
 """
 
+import base64
 import json
 import threading
-import base64
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 
@@ -27,15 +27,16 @@ if TYPE_CHECKING:
 try:
     import lark_oapi as lark
     from lark_oapi.api.im.v1 import (
-        CreateMessageRequest,
-        CreateMessageRequestBody,
         CreateMessageReactionRequest,
         CreateMessageReactionRequestBody,
+        CreateMessageRequest,
+        CreateMessageRequestBody,
+        Emoji,
         GetMessageResourceRequest,
         ReplyMessageRequest,
         ReplyMessageRequestBody,
-        Emoji,
     )
+
     FEISHU_AVAILABLE = True
 except ImportError:
     FEISHU_AVAILABLE = False
@@ -143,6 +144,7 @@ class FeishuChannel(Channel):
         except Exception as e:
             print(f"[Feishu] ERROR during initialization: {e}")
             import traceback
+
             traceback.print_exc()
 
     def stop(self) -> None:
@@ -169,6 +171,7 @@ class FeishuChannel(Channel):
         except Exception as e:
             print(f"[Feishu] WebSocket error: {e}")
             import traceback
+
             traceback.print_exc()
         finally:
             print("[Feishu] WebSocket thread exiting")
@@ -190,8 +193,10 @@ class FeishuChannel(Channel):
             print(f"[Feishu] Task {task_id} not found in database")
             return
 
-        is_completed = (msg.type == OutboundMessageType.TASK_COMPLETED)
-        print(f"[Feishu] Sending notification for task {task_id} ({'completed' if is_completed else 'failed'})")
+        is_completed = msg.type == OutboundMessageType.TASK_COMPLETED
+        print(
+            f"[Feishu] Sending notification for task {task_id} ({'completed' if is_completed else 'failed'})"
+        )
 
         if is_completed:
             result_text = (msg.payload.get("result") or task.get("result") or "").strip()
@@ -199,7 +204,9 @@ class FeishuChannel(Channel):
                 result_text = result_text[:10000] + "\n…(truncated)"
             content = result_text or "Done."
         else:
-            error_text = (msg.payload.get("error") or task.get("error") or "Unknown error").strip()[:800]
+            error_text = (msg.payload.get("error") or task.get("error") or "Unknown error").strip()[
+                :800
+            ]
             content = error_text
 
         # Try to reply in thread if we have an origin message
@@ -251,7 +258,7 @@ class FeishuChannel(Channel):
                 "config": {"wide_screen_mode": True},
                 "elements": [{"tag": "markdown", "content": content}],
             }
-            print(f"[Feishu] Building CreateMessageRequest...")
+            print("[Feishu] Building CreateMessageRequest...")
             request = (
                 CreateMessageRequest.builder()
                 .receive_id_type(receive_id_type)
@@ -264,9 +271,11 @@ class FeishuChannel(Channel):
                 )
                 .build()
             )
-            print(f"[Feishu] Calling im.v1.message.create()...")
+            print("[Feishu] Calling im.v1.message.create()...")
             response = self._client.im.v1.message.create(request)
-            print(f"[Feishu] Response received: success={response.success()}, code={response.code}, msg={response.msg}")
+            print(
+                f"[Feishu] Response received: success={response.success()}, code={response.code}, msg={response.msg}"
+            )
             if response.success():
                 message_id = response.data.message_id
                 print(f"[Feishu] Message sent successfully, message_id: {message_id}")
@@ -277,12 +286,15 @@ class FeishuChannel(Channel):
         except Exception as e:
             print(f"[Feishu] Error sending message: {e}")
             import traceback
+
             traceback.print_exc()
             return None
 
     def _reply_message(self, parent_message_id: str, content: str) -> Optional[str]:
         """Reply to a specific message (thread-style). Returns the sent message_id or None."""
-        print(f"[Feishu] _reply_message called, parent_message_id: {parent_message_id}, content length: {len(content)}")
+        print(
+            f"[Feishu] _reply_message called, parent_message_id: {parent_message_id}, content length: {len(content)}"
+        )
         if not self._client:
             print("[Feishu] Client not initialized in _reply_message")
             return None
@@ -303,9 +315,11 @@ class FeishuChannel(Channel):
                 )
                 .build()
             )
-            print(f"[Feishu] Calling im.v1.message.reply()...")
+            print("[Feishu] Calling im.v1.message.reply()...")
             response = self._client.im.v1.message.reply(request)
-            print(f"[Feishu] Reply response: success={response.success()}, code={response.code}, msg={response.msg}")
+            print(
+                f"[Feishu] Reply response: success={response.success()}, code={response.code}, msg={response.msg}"
+            )
             if response.success():
                 message_id = response.data.message_id
                 print(f"[Feishu] Reply sent successfully, message_id: {message_id}")
@@ -316,6 +330,7 @@ class FeishuChannel(Channel):
         except Exception as e:
             print(f"[Feishu] Error replying to message: {e}")
             import traceback
+
             traceback.print_exc()
             return None
 
@@ -348,8 +363,9 @@ class FeishuChannel(Channel):
         """Compute current 5-hour block usage via claude-monitor library."""
         try:
             from datetime import datetime, timezone
-            from claude_monitor.data.analysis import analyze_usage
+
             from claude_monitor.core.plans import Plans
+            from claude_monitor.data.analysis import analyze_usage
             from claude_monitor.utils.time_utils import TimezoneHandler
 
             data = analyze_usage(hours_back=192, quick_start=False, use_cache=False)
@@ -449,7 +465,7 @@ class FeishuChannel(Channel):
                     "sender_id": content.get("sender_id"),
                     "timestamp": content.get("create_time"),
                     "text": content.get("text", ""),
-                    "images": content.get("images", [])
+                    "images": content.get("images", []),
                 }
             except json.JSONDecodeError:
                 pass
@@ -469,7 +485,9 @@ class FeishuChannel(Channel):
 
                 # 如果 lang_body 是列表（简化的 content 格式），直接遍历
                 # 否则从 lang_body 中获取 content
-                paragraphs = lang_body if isinstance(lang_body, list) else lang_body.get("content", [])
+                paragraphs = (
+                    lang_body if isinstance(lang_body, list) else lang_body.get("content", [])
+                )
 
                 # 遍历内容查找引用 block
                 for para in paragraphs:
@@ -485,7 +503,7 @@ class FeishuChannel(Channel):
                                 "sender_name": sender_name,
                                 "sender_id": quote_user.get("open_id"),
                                 "text": quote_text,
-                                "timestamp": elem.get("create_time")
+                                "timestamp": elem.get("create_time"),
                             }
 
                         # 嵌套消息（可能是转发）
@@ -497,7 +515,7 @@ class FeishuChannel(Channel):
                                 "sender_id": nested.get("sender_id"),
                                 "timestamp": nested.get("create_time"),
                                 "text": nested.get("text", ""),
-                                "images": nested.get("images", [])
+                                "images": nested.get("images", []),
                             }
 
             except (json.JSONDecodeError, AttributeError):
@@ -528,6 +546,7 @@ class FeishuChannel(Channel):
 
         if forwarded.get("timestamp"):
             from datetime import datetime
+
             ts = datetime.fromtimestamp(forwarded["timestamp"])
             parts.append(f"时间: {ts.strftime('%Y-%m-%d %H:%M')}")
 
@@ -578,13 +597,13 @@ class FeishuChannel(Channel):
             image_data = response.raw.content
 
             # Detect actual image format from magic bytes
-            if image_data.startswith(b'\xff\xd8\xff'):
+            if image_data.startswith(b"\xff\xd8\xff"):
                 extension = "jpg"
-            elif image_data.startswith(b'\x89PNG\r\n\x1a\n'):
+            elif image_data.startswith(b"\x89PNG\r\n\x1a\n"):
                 extension = "png"
-            elif image_data.startswith(b'GIF87a') or image_data.startswith(b'GIF89a'):
+            elif image_data.startswith(b"GIF87a") or image_data.startswith(b"GIF89a"):
                 extension = "gif"
-            elif image_data.startswith(b'RIFF') and b'WEBP' in image_data[:12]:
+            elif image_data.startswith(b"RIFF") and b"WEBP" in image_data[:12]:
                 extension = "webp"
             else:
                 # Default to jpg if unknown
@@ -602,6 +621,7 @@ class FeishuChannel(Channel):
         except Exception as e:
             print(f"[Feishu] Error downloading image {image_key}: {e}")
             import traceback
+
             traceback.print_exc()
             return None
 
@@ -609,7 +629,7 @@ class FeishuChannel(Channel):
 
     def _on_bot_added(self, data) -> None:
         """Called when the bot is added to a chat (including P2P when a user follows the bot)."""
-        print(f"[Feishu] _on_bot_added called")
+        print("[Feishu] _on_bot_added called")
         try:
             event = data.event
             chat_id = getattr(event, "chat_id", None)
@@ -621,6 +641,7 @@ class FeishuChannel(Channel):
         except Exception as e:
             print(f"[Feishu] _on_bot_added error: {e}")
             import traceback
+
             traceback.print_exc()
 
     def _on_message_sync(self, data) -> None:
@@ -628,21 +649,22 @@ class FeishuChannel(Channel):
         print(f"[Feishu] _on_message_sync called, data type: {type(data)}")
         try:
             self._handle_inbound(data)
-            print(f"[Feishu] Message handled successfully")
+            print("[Feishu] Message handled successfully")
         except Exception as e:
             print(f"[Feishu] Inbound handler error: {e}")
             import traceback
+
             traceback.print_exc()
 
     def _handle_inbound(self, data) -> None:
         """Parse incoming Feishu message and act on it."""
-        print(f"[Feishu] _handle_inbound processing message...")
+        print("[Feishu] _handle_inbound processing message...")
         event = data.event
         message = event.message
         sender = event.sender
 
         if sender.sender_type == "bot":
-            print(f"[Feishu] Ignoring message from bot (self)")
+            print("[Feishu] Ignoring message from bot (self)")
             return  # ignore self-messages
 
         msg_type = message.message_type
@@ -665,9 +687,9 @@ class FeishuChannel(Channel):
                 else:
                     # Try language-specific keys
                     lang_body = (
-                        post_body.get("zh_cn") or
-                        post_body.get("en_us") or
-                        next(iter(post_body.values()), {})
+                        post_body.get("zh_cn")
+                        or post_body.get("en_us")
+                        or next(iter(post_body.values()), {})
                     )
 
                 title_part = lang_body.get("title", "").strip()
@@ -703,6 +725,7 @@ class FeishuChannel(Channel):
             except (json.JSONDecodeError, AttributeError, StopIteration) as e:
                 print(f"[Feishu] Failed to parse post message: {e}")
                 import traceback
+
                 traceback.print_exc()
                 # Don't use raw content as fallback - it's the JSON structure
                 content = ""
@@ -733,7 +756,9 @@ class FeishuChannel(Channel):
         # ── 检测转发/引用消息 ───────────────────────────────────
         forwarded = self._extract_forwarded_content(message)
         if forwarded:
-            print(f"[Feishu] Detected forwarded/quoted message from {forwarded.get('sender_name', 'unknown')}")
+            print(
+                f"[Feishu] Detected forwarded/quoted message from {forwarded.get('sender_name', 'unknown')}"
+            )
             content = self._format_forwarded_prompt(content, forwarded)
             # 处理转发中包含的图片（如果有）
             for img_info in forwarded.get("images", []):
@@ -744,11 +769,11 @@ class FeishuChannel(Channel):
                         image_paths.append(img_path)
 
         if not content:
-            print(f"[Feishu] Empty content after processing, ignoring")
+            print("[Feishu] Empty content after processing, ignoring")
             return
 
         # Acknowledge with a "get" reaction
-        print(f"[Feishu] Adding reaction to message...")
+        print("[Feishu] Adding reaction to message...")
         self._add_reaction(message.message_id, "OK")
 
         sender_id = sender.sender_id.open_id if sender.sender_id else "unknown"
@@ -765,6 +790,7 @@ class FeishuChannel(Channel):
         # ── command: /dir <path> — switch working directory ──────
         if content.startswith("/dir ") or content.startswith("/cd "):
             from channels.dir_utils import handle_dir_command
+
             reply = handle_dir_command(content, "feishu", self.db)
             if reply:
                 self._send_message(reply_to, reply)
@@ -773,6 +799,7 @@ class FeishuChannel(Channel):
         # ── command: /agent <name> — switch coding agent ─────────
         if content.startswith("/agent "):
             from channels.agent_utils import handle_agent_command
+
             reply = handle_agent_command(content, "feishu", self.db)
             if reply:
                 self._send_message(reply_to, reply)
@@ -786,7 +813,7 @@ class FeishuChannel(Channel):
 
         # ── command: /resume <task_id> <message> ────────────────
         if content.startswith("/resume "):
-            print(f"[Feishu] Processing /resume command")
+            print("[Feishu] Processing /resume command")
             parts = content[8:].strip().split(" ", 1)
             if len(parts) >= 2 and parts[0].isdigit():
                 tid = int(parts[0])
@@ -816,20 +843,25 @@ class FeishuChannel(Channel):
                     print(f"[Feishu] Task {tid} not found or no session_id")
             else:
                 self._send_message(reply_to, "Usage: `/resume <task_id> <message>`")
-                print(f"[Feishu] Invalid /resume syntax")
+                print("[Feishu] Invalid /resume syntax")
             return
 
         # ── command: /status <task_id> ───────────────────────────
         if content.startswith("/status "):
-            print(f"[Feishu] Processing /status command")
+            print("[Feishu] Processing /status command")
             parts = content[8:].strip().split()
             if parts and parts[0].isdigit():
                 tid = int(parts[0])
                 task = self.db.get_task(tid)
                 if task:
                     s = task["status"]
-                    icon = {"completed": "✅", "failed": "❌", "running": "⏳",
-                            "pending": "🕐", "cancelled": "🚫"}.get(s, "❓")
+                    icon = {
+                        "completed": "✅",
+                        "failed": "❌",
+                        "running": "⏳",
+                        "pending": "🕐",
+                        "cancelled": "🚫",
+                    }.get(s, "❓")
                     self._send_message(
                         reply_to,
                         f"{icon} **Task #{tid}** — {s}\n\n**{task['title']}**",
@@ -841,17 +873,26 @@ class FeishuChannel(Channel):
             return
 
         # ── filter system notifications ───────────────────────────
-        if any(keyword in content.lower() for keyword in [
-            "notification", "任务完成", "任务失败", "任务状态",
-            "任务已", "task completed", "task failed", "task status"
-        ]):
-            print(f"[Feishu] Ignoring system notification")
+        if any(
+            keyword in content.lower()
+            for keyword in [
+                "notification",
+                "任务完成",
+                "任务失败",
+                "任务状态",
+                "任务已",
+                "task completed",
+                "task failed",
+                "task status",
+            ]
+        ):
+            print("[Feishu] Ignoring system notification")
             return
 
         # ── detect reply in thread → resume task session ─────────
         # Check parent_id (direct reply) and root_id (any message in thread)
-        parent_id = getattr(message, 'parent_id', None) or None
-        root_id = getattr(message, 'root_id', None) or None
+        parent_id = getattr(message, "parent_id", None) or None
+        root_id = getattr(message, "root_id", None) or None
         is_thread_msg = bool(parent_id or root_id)
 
         if is_thread_msg:
@@ -876,7 +917,9 @@ class FeishuChannel(Channel):
                     db_task = self.db.get_task_by_feishu_root_msg(msg_id)
                     if db_task:
                         task_id = db_task["id"]
-                        print(f"[Feishu] Recovered task {task_id} from DB via feishu_root_msg_id={msg_id}")
+                        print(
+                            f"[Feishu] Recovered task {task_id} from DB via feishu_root_msg_id={msg_id}"
+                        )
                         break
 
             # Determine which message to reply to in the thread
@@ -910,14 +953,15 @@ class FeishuChannel(Channel):
                     print(f"[Feishu] Task {task_id} cannot be resumed")
                     return
             else:
-                print(f"[Feishu] Thread message but no matching task found, creating new task")
+                print("[Feishu] Thread message but no matching task found, creating new task")
         else:
-            print(f"[Feishu] Message is not a reply (no parent_id or root_id)")
+            print("[Feishu] Message is not a reply (no parent_id or root_id)")
 
         # ── default: create a new task from message text ─────────
-        print(f"[Feishu] Creating new task from message")
+        print("[Feishu] Creating new task from message")
         print(f"[Feishu] image_paths to attach: {image_paths}")
         from channels.dir_utils import resolve_working_dir
+
         working_dir = resolve_working_dir(content, "feishu", self.db)
         title = content[:60] + ("…" if len(content) > 60 else "")
 
@@ -932,22 +976,26 @@ class FeishuChannel(Channel):
                     # Detect media type from file extension
                     ext = Path(img_path).suffix.lower()
                     media_type_map = {
-                        ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
-                        ".png": "image/png", ".gif": "image/gif", ".webp": "image/webp"
+                        ".jpg": "image/jpeg",
+                        ".jpeg": "image/jpeg",
+                        ".png": "image/png",
+                        ".gif": "image/gif",
+                        ".webp": "image/webp",
                     }
                     media_type = media_type_map.get(ext, "image/jpeg")
 
-                    prompt_images.append({
-                        "name": Path(img_path).name,
-                        "media_type": media_type,
-                        "data": img_data
-                    })
-                    print(f"[Feishu] Converted {img_path} to prompt_images ({media_type}, {len(img_data)} bytes)")
+                    prompt_images.append(
+                        {"name": Path(img_path).name, "media_type": media_type, "data": img_data}
+                    )
+                    print(
+                        f"[Feishu] Converted {img_path} to prompt_images ({media_type}, {len(img_data)} bytes)"
+                    )
                 except Exception as e:
                     print(f"[Feishu] Failed to convert image {img_path} to base64: {e}")
 
-        from taskboard import Task, ScheduleType
         from channels.agent_utils import resolve_agent
+        from taskboard import ScheduleType, Task
+
         new_task = Task(
             title=f"[Feishu] {title}",
             prompt=content,
@@ -959,12 +1007,20 @@ class FeishuChannel(Channel):
             feishu_root_msg_id=message.message_id,
             agent=resolve_agent("feishu", self.db),
         )
-        print(f"[Feishu] Task object created with {len(image_paths)} image_paths and {len(prompt_images)} prompt_images")
+        print(
+            f"[Feishu] Task object created with {len(image_paths)} image_paths and {len(prompt_images)} prompt_images"
+        )
         task_id = self.scheduler.submit_task(new_task)
         print(f"[Feishu] Task {task_id} submitted, verifying in DB...")
         created_task = self.db.get_task(task_id)
-        print(f"[Feishu] Task {task_id} in DB has image_paths: {created_task.get('image_paths')}, prompt_images: {len(created_task.get('prompt_images', []))} items")
-        img_info = f" (with {len(image_paths)} image{'s' if len(image_paths) != 1 else ''})" if image_paths else ""
+        print(
+            f"[Feishu] Task {task_id} in DB has image_paths: {created_task.get('image_paths')}, prompt_images: {len(created_task.get('prompt_images', []))} items"
+        )
+        img_info = (
+            f" (with {len(image_paths)} image{'s' if len(image_paths) != 1 else ''})"
+            if image_paths
+            else ""
+        )
 
         # Reply with a brief running hint and track origin for completion notification
         self._reply_message(message.message_id, f"Task #{task_id} is running…")
@@ -972,5 +1028,7 @@ class FeishuChannel(Channel):
             self._task_origin[task_id] = (reply_to, message.message_id, message.message_id)
         with self._root_msg_lock:
             self._root_msg_map[message.message_id] = task_id
-        print(f"[Feishu] Task {task_id} origin tracked: reply_to={reply_to}, root_msg={message.message_id}")
+        print(
+            f"[Feishu] Task {task_id} origin tracked: reply_to={reply_to}, root_msg={message.message_id}"
+        )
         print(f"[Feishu] New task {task_id} created and queued with {len(image_paths)} images")

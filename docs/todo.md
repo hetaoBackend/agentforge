@@ -2,6 +2,12 @@
 
 ## In Progress
 
+- [x] **建立后端 lint/test/CI 基线** — 为 Python 后端接入 `ruff`、`pytest` 覆盖率和 GitHub Actions 质量门禁
+  - ✅ 已完成：`pyproject.toml` 新增 `ruff` / `pytest-cov` 与 lint、pytest、coverage 配置
+  - ✅ 已完成：`Makefile` 新增 `lint` / `format` / `format-check` / `test` / `test-cov` / `check`
+  - ✅ 已完成：新增 `.github/workflows/ci.yml`，在 `pull_request` 和 `main` push 时执行 `make check`
+  - ✅ 已完成：补充 `tests/test_channel_utils.py` 和 `tests/test_taskboard_bus.py`，提升后端基线覆盖率
+  - ✅ 验证：`make check` 通过，`54 passed`，总覆盖率 `20.02%`
 - [x] **Install superpowers for Codex** — followed `https://raw.githubusercontent.com/obra/superpowers/refs/heads/main/.codex/INSTALL.md`
   - ✅ Cloned `obra/superpowers` to `~/.codex/superpowers`
   - ✅ Created `~/.agents/skills/superpowers` symlink to `~/.codex/superpowers/skills`
