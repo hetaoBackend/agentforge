@@ -2,6 +2,11 @@
 
 ## In Progress
 
+- [ ] **修复 Feishu 默认通知接收人 `open_id cross app`** — 排查默认通知 fallback 使用 `open_id` 发送时的跨应用问题，并补充更安全的接收人解析与提示文案
+- [x] **优化 Feishu 结果展示** — 参考 `agentara` 的消息渲染实现，梳理当前 Feishu 输出格式并改进可读性与结构化展示
+  - ✅ 已完成：`channels/feishu_channel.py` 改为生成更简洁的结构化 Feishu 卡片，成功时直接展示最终结果，长文本使用折叠面板承载完整内容
+  - ✅ 已完成：发送/回复链路增加 legacy markdown 卡片回退，避免新卡片不兼容时通知直接失败
+  - ✅ 验证：`uv run pytest tests/test_feishu_message_rendering.py tests/test_feishu_forwarded_messages.py -q` 通过，`19 passed`
 - [x] **修复转发消息时间格式测试失败** — 统一 Feishu / Telegram 转发时间按北京时间 `UTC+8` 格式化
   - ✅ 已修复：`channels/feishu_channel.py` 与 `channels/telegram_channel.py` 不再依赖进程本地时区
   - ✅ 验证：相关 3 个失败用例通过；`tests/test_feishu_forwarded_messages.py` 和 `tests/test_telegram_forwarded_messages.py` 全部通过
