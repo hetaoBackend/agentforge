@@ -1,5 +1,22 @@
 # AgentForge TODO
 
+## In Progress
+
+- [x] **Install superpowers for Codex** — followed `https://raw.githubusercontent.com/obra/superpowers/refs/heads/main/.codex/INSTALL.md`
+  - ✅ Cloned `obra/superpowers` to `~/.codex/superpowers`
+  - ✅ Created `~/.agents/skills/superpowers` symlink to `~/.codex/superpowers/skills`
+  - ✅ Verified symlink with `ls -la ~/.agents/skills/superpowers`
+- [x] **起草 Heartbeat RFC** — 明确 heartbeat 与现有 cron task 的边界、数据模型、调度行为和第一版实现范围
+  - ✅ 已完成：新增 `docs/rfc-heartbeat.md`，覆盖目标/非目标、cron vs heartbeat、数据模型、决策协议、调度与去重、API/UI 草案和 rollout plan
+- [x] **实现 Heartbeat MVP** — 提供后端调度、decision tick、REST API 和 macOS App 管理界面
+  - ✅ 后端：新增 heartbeat schema、ticks、dedupe、scheduler decision tick 和 `/api/heartbeats*` 端点
+  - ✅ 前端：新增 Tasks / Heartbeats 双视图、Heartbeat 创建/编辑 modal、run/pause/resume/delete 操作和 tick detail panel
+  - ✅ 验证：`uv run pytest tests/test_heartbeat.py -q` 通过，renderer `vite build` 通过
+- [x] **增加 Heartbeat Tick 日志观测性** — 支持查看 running/completed heartbeat tick 的实时输出与历史日志
+  - ✅ 后端：heartbeat tick 新增 `raw_output` 持久化和 live output cache，提供 `/api/heartbeats/:id/ticks/:tick_id/output`
+  - ✅ 前端：Heartbeat detail 新增 Tick Log 面板，可查看选中 tick 的实时日志和历史输出
+  - ✅ 验证：`uv run pytest tests/test_heartbeat.py -q` 通过，renderer `vite build` 通过
+
 ## Critical - Security
 
 - [x] **SQL 注入防护** — `taskboard.py:319` `update_task` 方法中 kwargs key 直接拼入 SQL，需对列名做白名单校验

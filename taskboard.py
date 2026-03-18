@@ -101,6 +101,19 @@ class ScheduleType(str, Enum):
     CRON = "cron"            # recurring cron expression
 
 
+class HeartbeatScheduleType(str, Enum):
+    CRON = "cron"
+    INTERVAL = "interval"
+
+
+class HeartbeatDecisionType(str, Enum):
+    IDLE = "idle"
+    TRIGGER_TASK = "trigger_task"
+    RESUME_TASK = "resume_task"
+    NOTIFY_ONLY = "notify_only"
+    ERROR = "error"
+
+
 @dataclass
 class Task:
     id: Optional[int] = None
@@ -128,6 +141,29 @@ class Task:
     image_paths: list = field(default_factory=list)    # list of local image file paths
     dag_id: Optional[str] = None             # optional DAG workflow group label
     feishu_root_msg_id: Optional[str] = None  # Feishu root message_id that created this task
+
+
+@dataclass
+class Heartbeat:
+    id: Optional[int] = None
+    name: str = ""
+    enabled: bool = True
+    working_dir: str = "."
+    schedule_type: HeartbeatScheduleType = HeartbeatScheduleType.INTERVAL
+    cron_expr: Optional[str] = None
+    interval_seconds: Optional[int] = None
+    check_prompt: str = ""
+    action_prompt_template: str = ""
+    default_agent: str = "claude"
+    cooldown_seconds: int = 0
+    next_run_at: Optional[str] = None
+    last_tick_at: Optional[str] = None
+    last_decision: Optional[str] = None
+    last_error: Optional[str] = None
+    last_triggered_at: Optional[str] = None
+    last_dedupe_key: Optional[str] = None
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
 
 
 # ──────────────────────────── Database ────────────────────────────
@@ -234,6 +270,75 @@ class TaskDB:
             self.conn.commit()
         except sqlite3.OperationalError:
             pass  # Column already exists
+
+        self.conn.execute("""
+            CREATE TABLE IF NOT EXISTS heartbeats (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                enabled INTEGER NOT NULL DEFAULT 1,
+                working_dir TEXT DEFAULT '.',
+                schedule_type TEXT NOT NULL,
+                cron_expr TEXT,
+                interval_seconds INTEGER,
+                check_prompt TEXT NOT NULL,
+                action_prompt_template TEXT DEFAULT '',
+                default_agent TEXT DEFAULT 'claude',
+                cooldown_seconds INTEGER DEFAULT 0,
+                next_run_at TEXT,
+                last_tick_at TEXT,
+                last_decision TEXT,
+                last_error TEXT,
+                last_triggered_at TEXT,
+                last_dedupe_key TEXT,
+                created_at TEXT DEFAULT (datetime('now')),
+                updated_at TEXT DEFAULT (datetime('now'))
+            )
+        """)
+        self.conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_heartbeats_next_run
+            ON heartbeats(enabled, next_run_at)
+        """)
+        self.conn.execute("""
+            CREATE TABLE IF NOT EXISTS heartbeat_ticks (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                heartbeat_id INTEGER NOT NULL,
+                started_at TEXT NOT NULL,
+                finished_at TEXT,
+                status TEXT NOT NULL,
+                decision_type TEXT,
+                decision_payload TEXT,
+                task_id INTEGER,
+                raw_output TEXT,
+                error TEXT,
+                FOREIGN KEY (heartbeat_id) REFERENCES heartbeats(id),
+                FOREIGN KEY (task_id) REFERENCES tasks(id)
+            )
+        """)
+        self.conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_heartbeat_ticks_heartbeat_id
+            ON heartbeat_ticks(heartbeat_id, started_at DESC)
+        """)
+        try:
+            self.conn.execute("ALTER TABLE heartbeat_ticks ADD COLUMN raw_output TEXT")
+            self.conn.commit()
+        except sqlite3.OperationalError:
+            pass  # Column already exists
+        self.conn.execute("""
+            CREATE TABLE IF NOT EXISTS heartbeat_dedup (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                heartbeat_id INTEGER NOT NULL,
+                dedupe_key TEXT NOT NULL,
+                task_id INTEGER,
+                triggered_at TEXT NOT NULL,
+                FOREIGN KEY (heartbeat_id) REFERENCES heartbeats(id),
+                FOREIGN KEY (task_id) REFERENCES tasks(id),
+                UNIQUE(heartbeat_id, dedupe_key)
+            )
+        """)
+        self.conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_heartbeat_dedup_heartbeat_id
+            ON heartbeat_dedup(heartbeat_id, triggered_at DESC)
+        """)
 
         # Create task_output_events table for structured output recording
         self.conn.execute("""
@@ -377,6 +482,182 @@ class TaskDB:
             self.conn.execute(
                 "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
                 (key, value))
+            self.conn.commit()
+
+    def _deserialize_heartbeat(self, row) -> dict:
+        d = dict(row)
+        d["enabled"] = bool(d.get("enabled"))
+        return d
+
+    def _compute_heartbeat_next_run_at(self, heartbeat: Heartbeat, now: Optional[datetime] = None) -> str:
+        now = now or datetime.now()
+        if heartbeat.schedule_type == HeartbeatScheduleType.CRON:
+            if not heartbeat.cron_expr:
+                raise ValueError("cron heartbeat requires cron_expr")
+            return croniter(heartbeat.cron_expr, now).get_next(datetime).isoformat()
+        if heartbeat.schedule_type == HeartbeatScheduleType.INTERVAL:
+            if not heartbeat.interval_seconds or heartbeat.interval_seconds <= 0:
+                raise ValueError("interval heartbeat requires interval_seconds > 0")
+            return (now + timedelta(seconds=int(heartbeat.interval_seconds))).isoformat()
+        raise ValueError(f"Unsupported heartbeat schedule_type: {heartbeat.schedule_type}")
+
+    def add_heartbeat(self, heartbeat: Heartbeat) -> int:
+        with self.lock:
+            now = datetime.now().isoformat()
+            if heartbeat.next_run_at is None:
+                heartbeat.next_run_at = self._compute_heartbeat_next_run_at(heartbeat, datetime.now())
+            cur = self.conn.execute("""
+                INSERT INTO heartbeats (
+                    name, enabled, working_dir, schedule_type, cron_expr,
+                    interval_seconds, check_prompt, action_prompt_template,
+                    default_agent, cooldown_seconds, next_run_at, last_tick_at,
+                    last_decision, last_error, last_triggered_at, last_dedupe_key,
+                    created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                heartbeat.name,
+                1 if heartbeat.enabled else 0,
+                heartbeat.working_dir,
+                heartbeat.schedule_type.value,
+                heartbeat.cron_expr,
+                heartbeat.interval_seconds,
+                heartbeat.check_prompt,
+                heartbeat.action_prompt_template,
+                heartbeat.default_agent,
+                heartbeat.cooldown_seconds,
+                heartbeat.next_run_at,
+                heartbeat.last_tick_at,
+                heartbeat.last_decision,
+                heartbeat.last_error,
+                heartbeat.last_triggered_at,
+                heartbeat.last_dedupe_key,
+                now,
+                now,
+            ))
+            self.conn.commit()
+            return cur.lastrowid
+
+    ALLOWED_HEARTBEAT_COLUMNS = frozenset({
+        "name", "enabled", "working_dir", "schedule_type", "cron_expr",
+        "interval_seconds", "check_prompt", "action_prompt_template",
+        "default_agent", "cooldown_seconds", "next_run_at", "last_tick_at",
+        "last_decision", "last_error", "last_triggered_at", "last_dedupe_key",
+        "updated_at",
+    })
+
+    def update_heartbeat(self, heartbeat_id: int, **kwargs):
+        invalid = set(kwargs) - self.ALLOWED_HEARTBEAT_COLUMNS
+        if invalid:
+            raise ValueError(f"Invalid heartbeat column(s): {invalid}")
+        with self.lock:
+            kwargs["updated_at"] = datetime.now().isoformat()
+            sets = ", ".join(f"{k} = ?" for k in kwargs)
+            vals = list(kwargs.values()) + [heartbeat_id]
+            self.conn.execute(f"UPDATE heartbeats SET {sets} WHERE id = ?", vals)
+            self.conn.commit()
+
+    def get_heartbeat(self, heartbeat_id: int) -> Optional[dict]:
+        with self.lock:
+            row = self.conn.execute("SELECT * FROM heartbeats WHERE id = ?", (heartbeat_id,)).fetchone()
+            return self._deserialize_heartbeat(row) if row else None
+
+    def get_all_heartbeats(self) -> list[dict]:
+        with self.lock:
+            rows = self.conn.execute("SELECT * FROM heartbeats ORDER BY created_at DESC").fetchall()
+            return [self._deserialize_heartbeat(r) for r in rows]
+
+    def get_due_heartbeats(self) -> list[dict]:
+        now = datetime.now().isoformat()
+        with self.lock:
+            rows = self.conn.execute("""
+                SELECT * FROM heartbeats
+                WHERE enabled = 1
+                  AND next_run_at IS NOT NULL
+                  AND next_run_at <= ?
+            """, (now,)).fetchall()
+            return [self._deserialize_heartbeat(r) for r in rows]
+
+    def delete_heartbeat(self, heartbeat_id: int):
+        with self.transaction():
+            self.conn.execute("DELETE FROM heartbeat_ticks WHERE heartbeat_id = ?", (heartbeat_id,))
+            self.conn.execute("DELETE FROM heartbeat_dedup WHERE heartbeat_id = ?", (heartbeat_id,))
+            self.conn.execute("DELETE FROM heartbeats WHERE id = ?", (heartbeat_id,))
+
+    def add_heartbeat_tick(self, heartbeat_id: int) -> int:
+        with self.lock:
+            cur = self.conn.execute("""
+                INSERT INTO heartbeat_ticks (heartbeat_id, started_at, status)
+                VALUES (?, ?, 'running')
+            """, (heartbeat_id, datetime.now().isoformat()))
+            self.conn.commit()
+            return cur.lastrowid
+
+    def finish_heartbeat_tick(self, tick_id: int, status: str, decision_type: Optional[str] = None,
+                              decision_payload: Optional[dict] = None, task_id: Optional[int] = None,
+                              raw_output: Optional[str] = None, error: Optional[str] = None):
+        payload_json = json.dumps(decision_payload, ensure_ascii=False) if decision_payload is not None else None
+        with self.lock:
+            self.conn.execute("""
+                UPDATE heartbeat_ticks
+                SET finished_at = ?, status = ?, decision_type = ?, decision_payload = ?, task_id = ?, raw_output = ?, error = ?
+                WHERE id = ?
+            """, (
+                datetime.now().isoformat(),
+                status,
+                decision_type,
+                payload_json,
+                task_id,
+                raw_output,
+                error,
+                tick_id,
+            ))
+            self.conn.commit()
+
+    def get_heartbeat_ticks(self, heartbeat_id: int, limit: int = 50) -> list[dict]:
+        with self.lock:
+            rows = self.conn.execute("""
+                SELECT * FROM heartbeat_ticks
+                WHERE heartbeat_id = ?
+                ORDER BY started_at DESC
+                LIMIT ?
+            """, (heartbeat_id, limit)).fetchall()
+            return [dict(r) for r in rows]
+
+    def get_heartbeat_tick(self, heartbeat_id: int, tick_id: int) -> Optional[dict]:
+        with self.lock:
+            row = self.conn.execute("""
+                SELECT * FROM heartbeat_ticks
+                WHERE heartbeat_id = ? AND id = ?
+            """, (heartbeat_id, tick_id)).fetchone()
+            return dict(row) if row else None
+
+    def get_latest_heartbeat_tick(self, heartbeat_id: int) -> Optional[dict]:
+        with self.lock:
+            row = self.conn.execute("""
+                SELECT * FROM heartbeat_ticks
+                WHERE heartbeat_id = ?
+                ORDER BY started_at DESC
+                LIMIT 1
+            """, (heartbeat_id,)).fetchone()
+            return dict(row) if row else None
+
+    def get_heartbeat_dedup(self, heartbeat_id: int, dedupe_key: str) -> Optional[dict]:
+        with self.lock:
+            row = self.conn.execute("""
+                SELECT * FROM heartbeat_dedup
+                WHERE heartbeat_id = ? AND dedupe_key = ?
+            """, (heartbeat_id, dedupe_key)).fetchone()
+            return dict(row) if row else None
+
+    def upsert_heartbeat_dedup(self, heartbeat_id: int, dedupe_key: str, task_id: Optional[int]):
+        with self.lock:
+            now = datetime.now().isoformat()
+            self.conn.execute("""
+                INSERT INTO heartbeat_dedup (heartbeat_id, dedupe_key, task_id, triggered_at)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(heartbeat_id, dedupe_key)
+                DO UPDATE SET task_id = excluded.task_id, triggered_at = excluded.triggered_at
+            """, (heartbeat_id, dedupe_key, task_id, now))
             self.conn.commit()
 
     ALLOWED_TASK_COLUMNS = frozenset({
@@ -659,7 +940,9 @@ class TaskScheduler(BusAwareSchedulerMixin):
         self._shutting_down = False
         self._thread: Optional[threading.Thread] = None
         self._active_tasks: dict[int, threading.Thread] = {}
+        self._active_heartbeats: dict[int, threading.Thread] = {}
         self._live_output: dict[int, str] = {}  # task_id -> accumulated stdout
+        self._live_heartbeat_output: dict[int, str] = {}  # tick_id -> accumulated stdout/stderr
         self._active_pgids: dict[int, int] = {}  # task_id -> process group id
 
     def start(self):
@@ -679,6 +962,12 @@ class TaskScheduler(BusAwareSchedulerMixin):
         if running:
             logger.info(f"Waiting for {len(running)} running task(s) to finish...")
             for tid, t in running.items():
+                remaining = max(0, deadline - time.time())
+                t.join(timeout=remaining)
+        heartbeat_running = {hid: t for hid, t in self._active_heartbeats.items() if t.is_alive()}
+        if heartbeat_running:
+            logger.info(f"Waiting for {len(heartbeat_running)} heartbeat(s) to finish...")
+            for hid, t in heartbeat_running.items():
                 remaining = max(0, deadline - time.time())
                 t.join(timeout=remaining)
         # Gracefully terminate any processes still alive, then force-kill if needed
@@ -738,6 +1027,12 @@ class TaskScheduler(BusAwareSchedulerMixin):
                 nra = task.get("next_run_at")
                 if nra and datetime.fromisoformat(nra) <= datetime.now():
                     self._spawn_task(task)
+        due_heartbeats = self.db.get_due_heartbeats()
+        for heartbeat in due_heartbeats:
+            hid = heartbeat["id"]
+            if hid in self._active_heartbeats and self._active_heartbeats[hid].is_alive():
+                continue
+            self._spawn_heartbeat(heartbeat)
 
     def _schedule_delayed(self, task: dict):
         delay = task.get("delay_seconds", 0) or 0
@@ -747,6 +1042,11 @@ class TaskScheduler(BusAwareSchedulerMixin):
                             next_run_at=run_at.isoformat())
         self._notify(task["id"])
 
+    def _spawn_heartbeat(self, heartbeat: dict):
+        t = threading.Thread(target=self._execute_heartbeat, args=(heartbeat,), daemon=True)
+        self._active_heartbeats[heartbeat["id"]] = t
+        t.start()
+
     def _spawn_task(self, task: dict):
         # Register the thread in _active_tasks *before* updating the DB so
         # that if the thread crashes immediately after the DB write, the task
@@ -755,6 +1055,328 @@ class TaskScheduler(BusAwareSchedulerMixin):
         self._active_tasks[task["id"]] = t
         self.db.update_task(task["id"], status="running")
         t.start()
+
+    def _render_heartbeat_check_prompt(self, heartbeat: dict) -> str:
+        lines = [
+            "You are AgentForge heartbeat decision engine.",
+            "Return JSON only. No markdown, no explanation, no code fences.",
+            "JSON schema:",
+            '{"decision":"idle|trigger_task|error","reason":"string","dedupe_key":"string","title":"string","prompt":"string","metadata":{}}',
+            "",
+            f"Heartbeat name: {heartbeat['name']}",
+            f"Working directory: {heartbeat['working_dir']}",
+            f"Current time: {datetime.now().isoformat()}",
+            f"Last tick at: {heartbeat.get('last_tick_at') or ''}",
+            f"Last decision: {heartbeat.get('last_decision') or ''}",
+            f"Last triggered at: {heartbeat.get('last_triggered_at') or ''}",
+            f"Last dedupe key: {heartbeat.get('last_dedupe_key') or ''}",
+            "",
+            "User-defined check instructions:",
+            heartbeat["check_prompt"],
+        ]
+        if heartbeat.get("action_prompt_template"):
+            lines.extend([
+                "",
+                "When decision is trigger_task, use this action prompt template as the base prompt to expand or adapt:",
+                heartbeat["action_prompt_template"],
+            ])
+        return "\n".join(lines)
+
+    def _parse_heartbeat_decision(self, raw_text: str) -> dict:
+        text = raw_text.strip()
+        if text.startswith("```"):
+            lines = [line for line in text.splitlines() if not line.strip().startswith("```")]
+            text = "\n".join(lines).strip()
+        if not text.startswith("{"):
+            start = text.find("{")
+            end = text.rfind("}")
+            if start != -1 and end != -1 and end > start:
+                text = text[start:end + 1]
+        payload = json.loads(text)
+        decision = payload.get("decision")
+        if decision not in {d.value for d in HeartbeatDecisionType}:
+            raise ValueError(f"Invalid heartbeat decision: {decision}")
+        normalized = {
+            "decision": decision,
+            "reason": str(payload.get("reason", "")),
+            "dedupe_key": str(payload.get("dedupe_key", "")),
+            "title": str(payload.get("title", "")),
+            "prompt": str(payload.get("prompt", "")),
+            "metadata": payload.get("metadata", {}) or {},
+        }
+        if not isinstance(normalized["metadata"], dict):
+            raise ValueError("Heartbeat decision metadata must be an object")
+        return normalized
+
+    def _run_agent_prompt_once(self, agent: str, prompt: str, working_dir: str) -> tuple[bool, str]:
+        working_dir_expanded = os.path.expanduser(working_dir)
+        if agent == "codex":
+            cmd = [
+                "codex", "exec",
+                "--json",
+                "--dangerously-bypass-approvals-and-sandbox",
+                "--skip-git-repo-check",
+                "--cd", working_dir_expanded,
+                prompt,
+            ]
+        else:
+            cmd = [
+                "claude", "-p", prompt,
+                "--output-format", "stream-json",
+                "--verbose",
+                "--permission-mode", "bypassPermissions",
+            ]
+        return self._run_agent_command(agent, cmd, working_dir_expanded)
+
+    def _run_agent_command(self, agent: str, cmd: list[str], working_dir_expanded: str,
+                           on_stdout_line: Optional[Callable[[str], None]] = None,
+                           on_stderr_line: Optional[Callable[[str], None]] = None) -> tuple[bool, str]:
+        try:
+            proc = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                cwd=working_dir_expanded,
+                env=_get_env(),
+            )
+        except FileNotFoundError:
+            return False, f"{agent} CLI not found"
+        except OSError as e:
+            return False, str(e)
+        timeout_secs = int(self.db.get_setting("timeout", "600"))
+        stdout_chunks = []
+        stderr_chunks = []
+
+        def _read_stream(stream, chunks, callback):
+            for line in stream:
+                chunks.append(line)
+                if callback:
+                    callback(line)
+
+        stdout_thread = threading.Thread(
+            target=_read_stream,
+            args=(proc.stdout, stdout_chunks, on_stdout_line),
+            daemon=True,
+        )
+        stderr_thread = threading.Thread(
+            target=_read_stream,
+            args=(proc.stderr, stderr_chunks, on_stderr_line),
+            daemon=True,
+        )
+        stdout_thread.start()
+        stderr_thread.start()
+        try:
+            proc.wait(timeout=timeout_secs)
+        except subprocess.TimeoutExpired:
+            try:
+                proc.kill()
+            except OSError:
+                pass
+            stdout_thread.join(timeout=1)
+            stderr_thread.join(timeout=1)
+            return False, f"{agent} heartbeat decision timed out"
+
+        stdout_thread.join(timeout=1)
+        stderr_thread.join(timeout=1)
+        raw_stdout = "".join(stdout_chunks)
+        raw_stderr = "".join(stderr_chunks)
+        if proc.returncode != 0:
+            return False, raw_stderr or raw_stdout or f"{agent} heartbeat decision failed"
+
+        if agent == "codex":
+            out = ""
+            for line in raw_stdout.splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    event = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if (event.get("type") == "item.completed"
+                        and event.get("item", {}).get("type") == "agent_message"):
+                    out = event["item"].get("text", "")
+            return True, out or raw_stdout
+
+        out = ""
+        last_assistant_text = ""
+        for line in raw_stdout.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if event.get("type") == "assistant":
+                msg = event.get("message", {})
+                content = msg.get("content", [])
+                text_parts = []
+                for c in content:
+                    if isinstance(c, str):
+                        text_parts.append(c)
+                    elif isinstance(c, dict) and c.get("type") == "text":
+                        text_parts.append(c.get("text", ""))
+                if text_parts:
+                    last_assistant_text = "".join(text_parts)
+            elif event.get("type") == "result":
+                result_text = event.get("result")
+                if result_text:
+                    out = result_text
+        return True, out or last_assistant_text or raw_stdout
+
+    def _heartbeat_trigger_suppressed(self, heartbeat: dict, dedupe_key: str) -> bool:
+        if not dedupe_key:
+            return False
+        existing = self.db.get_heartbeat_dedup(heartbeat["id"], dedupe_key)
+        if not existing:
+            return False
+        cooldown = int(heartbeat.get("cooldown_seconds") or 0)
+        triggered_at = existing.get("triggered_at")
+        if triggered_at:
+            try:
+                triggered_dt = datetime.fromisoformat(triggered_at)
+                if cooldown > 0 and datetime.now() < triggered_dt + timedelta(seconds=cooldown):
+                    return True
+            except ValueError:
+                pass
+        existing_task_id = existing.get("task_id")
+        if existing_task_id:
+            task = self.db.get_task(existing_task_id)
+            if task and task.get("status") in ("pending", "scheduled", "blocked", "running"):
+                return True
+        return False
+
+    def _execute_heartbeat(self, heartbeat: dict):
+        hid = heartbeat["id"]
+        tick_id = self.db.add_heartbeat_tick(hid)
+        now = datetime.now()
+        output_chunks: list[str] = []
+        self._live_heartbeat_output[tick_id] = ""
+        next_run_at = self.db._compute_heartbeat_next_run_at(
+            Heartbeat(
+                id=hid,
+                name=heartbeat["name"],
+                enabled=heartbeat["enabled"],
+                working_dir=heartbeat["working_dir"],
+                schedule_type=HeartbeatScheduleType(heartbeat["schedule_type"]),
+                cron_expr=heartbeat.get("cron_expr"),
+                interval_seconds=heartbeat.get("interval_seconds"),
+                check_prompt=heartbeat["check_prompt"],
+                action_prompt_template=heartbeat.get("action_prompt_template") or "",
+                default_agent=heartbeat.get("default_agent") or "claude",
+                cooldown_seconds=int(heartbeat.get("cooldown_seconds") or 0),
+            ),
+            now,
+        )
+        try:
+            def _append_tick_output(line: str):
+                output_chunks.append(line)
+                self._live_heartbeat_output[tick_id] = "".join(output_chunks)
+
+            agent = heartbeat.get("default_agent") or "claude"
+            prompt = self._render_heartbeat_check_prompt(heartbeat)
+            working_dir_expanded = os.path.expanduser(heartbeat["working_dir"])
+            if agent == "codex":
+                cmd = [
+                    "codex", "exec",
+                    "--json",
+                    "--dangerously-bypass-approvals-and-sandbox",
+                    "--skip-git-repo-check",
+                    "--cd", working_dir_expanded,
+                    prompt,
+                ]
+            else:
+                cmd = [
+                    "claude", "-p", prompt,
+                    "--output-format", "stream-json",
+                    "--verbose",
+                    "--permission-mode", "bypassPermissions",
+                ]
+            success, raw_output = self._run_agent_command(
+                agent,
+                cmd,
+                working_dir_expanded,
+                on_stdout_line=_append_tick_output,
+                on_stderr_line=_append_tick_output,
+            )
+            if not success:
+                raise RuntimeError(raw_output)
+            decision = self._parse_heartbeat_decision(raw_output)
+            decision_type = decision["decision"]
+            if decision_type == HeartbeatDecisionType.TRIGGER_TASK.value:
+                dedupe_key = decision.get("dedupe_key", "")
+                if self._heartbeat_trigger_suppressed(heartbeat, dedupe_key):
+                    decision_type = HeartbeatDecisionType.IDLE.value
+                    decision["decision"] = decision_type
+                    decision["reason"] = "Suppressed duplicate signal during cooldown or while prior task is still active"
+                else:
+                    task_prompt = decision.get("prompt") or heartbeat.get("action_prompt_template") or heartbeat["check_prompt"]
+                    task_title = decision.get("title") or f"Heartbeat: {heartbeat['name']}"
+                    task = Task(
+                        title=task_title,
+                        prompt=task_prompt,
+                        working_dir=heartbeat["working_dir"],
+                        schedule_type=ScheduleType.IMMEDIATE,
+                        agent=heartbeat.get("default_agent") or "claude",
+                        tags="heartbeat",
+                    )
+                    task_id = self.submit_task(task)
+                    if dedupe_key:
+                        self.db.upsert_heartbeat_dedup(hid, dedupe_key, task_id)
+                    self.db.update_heartbeat(
+                        hid,
+                        next_run_at=next_run_at,
+                        last_tick_at=now.isoformat(),
+                        last_decision=decision_type,
+                        last_error=None,
+                        last_triggered_at=now.isoformat(),
+                        last_dedupe_key=dedupe_key,
+                    )
+                    self.db.finish_heartbeat_tick(
+                        tick_id,
+                        status="triggered",
+                        decision_type=decision_type,
+                        decision_payload=decision,
+                        task_id=task_id,
+                        raw_output=("".join(output_chunks)[:500000] if output_chunks else None),
+                    )
+                    return
+            self.db.update_heartbeat(
+                hid,
+                next_run_at=next_run_at,
+                last_tick_at=now.isoformat(),
+                last_decision=decision_type,
+                last_error=None,
+                last_dedupe_key=decision.get("dedupe_key", "") or heartbeat.get("last_dedupe_key"),
+            )
+            self.db.finish_heartbeat_tick(
+                tick_id,
+                status="idle" if decision_type == HeartbeatDecisionType.IDLE.value else decision_type,
+                decision_type=decision_type,
+                decision_payload=decision,
+                raw_output=("".join(output_chunks)[:500000] if output_chunks else None),
+            )
+        except Exception as e:
+            logger.error(f"Heartbeat {hid} failed: {e}")
+            self.db.update_heartbeat(
+                hid,
+                next_run_at=next_run_at,
+                last_tick_at=now.isoformat(),
+                last_decision=HeartbeatDecisionType.ERROR.value,
+                last_error=str(e),
+            )
+            self.db.finish_heartbeat_tick(
+                tick_id,
+                status="error",
+                decision_type=HeartbeatDecisionType.ERROR.value,
+                raw_output=("".join(output_chunks)[:500000] if output_chunks else None),
+                error=str(e),
+            )
+        finally:
+            self._live_heartbeat_output.pop(tick_id, None)
+            self._active_heartbeats.pop(hid, None)
 
     def _parse_codex_event(self, event: dict) -> tuple:
         """Normalize a Codex JSONL event into (event_type, content) for storage.
@@ -1434,6 +2056,42 @@ class TaskScheduler(BusAwareSchedulerMixin):
         self.db.update_task(task_id, status="pending", error=None)
         self._notify(task_id)
 
+    def trigger_heartbeat_now(self, heartbeat_id: int):
+        heartbeat = self.db.get_heartbeat(heartbeat_id)
+        if not heartbeat:
+            raise ValueError("heartbeat not found")
+        if heartbeat_id in self._active_heartbeats and self._active_heartbeats[heartbeat_id].is_alive():
+            raise ValueError("heartbeat already running")
+        self._spawn_heartbeat(heartbeat)
+
+    def pause_heartbeat(self, heartbeat_id: int):
+        heartbeat = self.db.get_heartbeat(heartbeat_id)
+        if not heartbeat:
+            raise ValueError("heartbeat not found")
+        self.db.update_heartbeat(heartbeat_id, enabled=0)
+
+    def resume_heartbeat(self, heartbeat_id: int):
+        heartbeat = self.db.get_heartbeat(heartbeat_id)
+        if not heartbeat:
+            raise ValueError("heartbeat not found")
+        next_run_at = self.db._compute_heartbeat_next_run_at(
+            Heartbeat(
+                id=heartbeat_id,
+                name=heartbeat["name"],
+                enabled=True,
+                working_dir=heartbeat["working_dir"],
+                schedule_type=HeartbeatScheduleType(heartbeat["schedule_type"]),
+                cron_expr=heartbeat.get("cron_expr"),
+                interval_seconds=heartbeat.get("interval_seconds"),
+                check_prompt=heartbeat["check_prompt"],
+                action_prompt_template=heartbeat.get("action_prompt_template") or "",
+                default_agent=heartbeat.get("default_agent") or "claude",
+                cooldown_seconds=int(heartbeat.get("cooldown_seconds") or 0),
+            ),
+            datetime.now(),
+        )
+        self.db.update_heartbeat(heartbeat_id, enabled=1, next_run_at=next_run_at)
+
 
 # ──────────────────────────── HTTP API Server ────────────────────────────
 
@@ -1471,11 +2129,111 @@ class TaskAPIHandler(BaseHTTPRequestHandler):
         self._cors_headers()
         self.end_headers()
 
+    def _validate_heartbeat_payload(self, body: dict, existing: Optional[dict] = None) -> tuple[Optional[Heartbeat], Optional[tuple[dict, int]]]:
+        def _coerce_bool(value):
+            if isinstance(value, bool):
+                return value
+            if isinstance(value, str):
+                return value.lower() == "true"
+            return bool(value)
+
+        name = body.get("name", existing.get("name") if existing else "Untitled heartbeat")
+        check_prompt = body.get("check_prompt", existing.get("check_prompt") if existing else "")
+        if not check_prompt or not str(check_prompt).strip():
+            return None, ({"error": "check_prompt cannot be empty", "field": "check_prompt"}, 400)
+
+        working_dir = body.get("working_dir", existing.get("working_dir") if existing else ".")
+        if working_dir and working_dir != ".":
+            expanded = os.path.expanduser(working_dir)
+            if not os.path.isdir(expanded):
+                return None, ({"error": f"working_dir does not exist or is not a directory: {working_dir}", "field": "working_dir"}, 400)
+
+        schedule_value = body.get("schedule_type", existing.get("schedule_type") if existing else "interval")
+        try:
+            schedule_type = HeartbeatScheduleType(schedule_value)
+        except ValueError:
+            return None, ({"error": f"invalid heartbeat schedule_type: {schedule_value}", "field": "schedule_type"}, 400)
+
+        cron_expr = body.get("cron_expr", existing.get("cron_expr") if existing else None)
+        interval_seconds = body.get("interval_seconds", existing.get("interval_seconds") if existing else None)
+        if schedule_type == HeartbeatScheduleType.CRON:
+            if not cron_expr or not str(cron_expr).strip():
+                return None, ({"error": "cron_expr is required for cron heartbeat", "field": "cron_expr"}, 400)
+            if not croniter.is_valid(cron_expr):
+                return None, ({"error": f"invalid cron expression: {cron_expr}", "field": "cron_expr"}, 400)
+            interval_seconds = None
+        else:
+            try:
+                interval_seconds = int(interval_seconds)
+            except (TypeError, ValueError):
+                return None, ({"error": "interval_seconds must be a positive integer", "field": "interval_seconds"}, 400)
+            if interval_seconds <= 0:
+                return None, ({"error": "interval_seconds must be a positive integer", "field": "interval_seconds"}, 400)
+            cron_expr = None
+
+        cooldown_seconds = body.get("cooldown_seconds", existing.get("cooldown_seconds") if existing else 0)
+        try:
+            cooldown_seconds = int(cooldown_seconds or 0)
+        except (TypeError, ValueError):
+            return None, ({"error": "cooldown_seconds must be an integer", "field": "cooldown_seconds"}, 400)
+        if cooldown_seconds < 0:
+            return None, ({"error": "cooldown_seconds cannot be negative", "field": "cooldown_seconds"}, 400)
+
+        heartbeat = Heartbeat(
+            id=existing.get("id") if existing else None,
+            name=name,
+            enabled=_coerce_bool(body.get("enabled", existing.get("enabled") if existing else True)),
+            working_dir=working_dir,
+            schedule_type=schedule_type,
+            cron_expr=cron_expr,
+            interval_seconds=interval_seconds,
+            check_prompt=str(check_prompt),
+            action_prompt_template=str(body.get("action_prompt_template", existing.get("action_prompt_template") if existing else "")),
+            default_agent=str(body.get("default_agent", existing.get("default_agent") if existing else self.db.get_setting("default_agent", "claude"))),
+            cooldown_seconds=cooldown_seconds,
+            next_run_at=existing.get("next_run_at") if existing else None,
+            last_tick_at=existing.get("last_tick_at") if existing else None,
+            last_decision=existing.get("last_decision") if existing else None,
+            last_error=existing.get("last_error") if existing else None,
+            last_triggered_at=existing.get("last_triggered_at") if existing else None,
+            last_dedupe_key=existing.get("last_dedupe_key") if existing else None,
+        )
+        heartbeat.next_run_at = self.db._compute_heartbeat_next_run_at(heartbeat, datetime.now())
+        return heartbeat, None
+
     def do_GET(self):
         parsed = urlparse(self.path)
         path = parsed.path
 
-        if path == "/api/tasks":
+        if path == "/api/heartbeats":
+            self._json_response(self.db.get_all_heartbeats())
+
+        elif path.startswith("/api/heartbeats/") and "/ticks/" in path and path.endswith("/output"):
+            parts = path.split("/")
+            hid = int(parts[3])
+            tick_id = int(parts[5])
+            tick = self.db.get_heartbeat_tick(hid, tick_id)
+            if not tick:
+                self._json_response({"error": "not found"}, 404)
+                return
+            live = self.scheduler._live_heartbeat_output.get(tick_id, tick.get("raw_output") or "")
+            self._json_response({"output": live, "is_running": tick_id in self.scheduler._live_heartbeat_output})
+
+        elif path.startswith("/api/heartbeats/") and path.endswith("/ticks"):
+            hid = int(path.split("/")[3])
+            query = parse_qs(urlparse(self.path).query)
+            limit = int(query.get("limit", ["50"])[0])
+            self._json_response({"ticks": self.db.get_heartbeat_ticks(hid, limit=limit)})
+
+        elif path.startswith("/api/heartbeats/"):
+            hid = int(path.split("/")[3])
+            heartbeat = self.db.get_heartbeat(hid)
+            if heartbeat:
+                self._json_response(heartbeat)
+            else:
+                self._json_response({"error": "not found"}, 404)
+
+        elif path == "/api/tasks":
             tasks = self.db.get_all_tasks()
             # Attach dependency metadata to each task
             for t in tasks:
@@ -1628,7 +2386,44 @@ class TaskAPIHandler(BaseHTTPRequestHandler):
         path = parsed.path
         body = self._read_body()
 
-        if path == "/api/tasks":
+        if path == "/api/heartbeats":
+            heartbeat, error = self._validate_heartbeat_payload(body)
+            if error:
+                payload, status = error
+                self._json_response(payload, status)
+                return
+            heartbeat_id = self.db.add_heartbeat(heartbeat)
+            self._json_response({"id": heartbeat_id, "status": "created"}, 201)
+
+        elif path.startswith("/api/heartbeats/") and path.endswith("/run-now"):
+            hid = int(path.split("/")[3])
+            try:
+                self.scheduler.trigger_heartbeat_now(hid)
+            except ValueError as e:
+                status = 404 if "not found" in str(e) else 409
+                self._json_response({"error": str(e)}, status)
+                return
+            self._json_response({"status": "scheduled"})
+
+        elif path.startswith("/api/heartbeats/") and path.endswith("/pause"):
+            hid = int(path.split("/")[3])
+            try:
+                self.scheduler.pause_heartbeat(hid)
+            except ValueError as e:
+                self._json_response({"error": str(e)}, 404)
+                return
+            self._json_response({"status": "paused"})
+
+        elif path.startswith("/api/heartbeats/") and path.endswith("/resume"):
+            hid = int(path.split("/")[3])
+            try:
+                self.scheduler.resume_heartbeat(hid)
+            except ValueError as e:
+                self._json_response({"error": str(e)}, 404)
+                return
+            self._json_response({"status": "resumed"})
+
+        elif path == "/api/tasks":
             # ── Input validation ──────────────────────────────────────
             prompt = body.get("prompt", "")
             if not prompt or not prompt.strip():
@@ -1951,6 +2746,37 @@ class TaskAPIHandler(BaseHTTPRequestHandler):
                 self.db.set_setting(key, str(value))
             self._json_response({"status": "updated"})
 
+        elif path.startswith("/api/heartbeats/") and path.count("/") == 3:
+            try:
+                hid = int(path.split("/")[3])
+            except (ValueError, IndexError):
+                self._json_response({"error": "invalid heartbeat id"}, 400)
+                return
+            heartbeat = self.db.get_heartbeat(hid)
+            if not heartbeat:
+                self._json_response({"error": "not found"}, 404)
+                return
+            validated, error = self._validate_heartbeat_payload(body, existing=heartbeat)
+            if error:
+                payload, status = error
+                self._json_response(payload, status)
+                return
+            updates = {
+                "name": validated.name,
+                "enabled": 1 if validated.enabled else 0,
+                "working_dir": validated.working_dir,
+                "schedule_type": validated.schedule_type.value,
+                "cron_expr": validated.cron_expr,
+                "interval_seconds": validated.interval_seconds,
+                "check_prompt": validated.check_prompt,
+                "action_prompt_template": validated.action_prompt_template,
+                "default_agent": validated.default_agent,
+                "cooldown_seconds": validated.cooldown_seconds,
+                "next_run_at": validated.next_run_at,
+            }
+            self.db.update_heartbeat(hid, **updates)
+            self._json_response(self.db.get_heartbeat(hid))
+
         elif path.startswith("/api/tasks/") and path.count("/") == 3:
             # PUT /api/tasks/{id} — edit a pending/scheduled/blocked task
             try:
@@ -2105,6 +2931,10 @@ class TaskAPIHandler(BaseHTTPRequestHandler):
             dep_id = int(parts[5])
             self.db.remove_dependency(tid, dep_id)
             self._json_response({"status": "removed"})
+        elif parsed.path.startswith("/api/heartbeats/"):
+            hid = int(parsed.path.split("/")[3])
+            self.db.delete_heartbeat(hid)
+            self._json_response({"status": "deleted"})
         elif parsed.path.startswith("/api/tasks/"):
             tid = int(parsed.path.split("/")[3])
             self.db.delete_task(tid)
