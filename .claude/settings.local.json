@@ -1,7 +1,18 @@
 {
   "permissions": {
     "allow": [
-      "Bash(codex exec:*)"
+      "Bash(codex exec:*)",
+      "Bash(defuddle parse:*)",
+      "Bash(curl -s \"https://raw.githubusercontent.com/hetaoBackend/agentara/main/user-home/.claude/skills/daily-hunt/SKILL.md\")",
+      "Bash(curl:*)",
+      "Bash(agent-browser --version)",
+      "Bash(agent-browser open:*)",
+      "Bash(agent-browser snapshot:*)",
+      "Bash(python3 -c \"import json,sys; d=json.load\\(sys.stdin\\); c=d[''''current_condition''''][0]; print\\(c[''''weatherDesc''''][0][''''value''''], c[''''temp_C'''']+''''°C'''', c[''''humidity'''']+''''%''''\\)\")",
+      "Bash(grep -v \"^$\\\\|^\\\\s*$\")",
+      "WebFetch(domain:wttr.in)",
+      "WebFetch(domain:richerculture.cn)",
+      "Skill(agent-browser)"
     ]
   }
 }

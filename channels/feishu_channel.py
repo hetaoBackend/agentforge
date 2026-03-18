@@ -17,7 +17,7 @@ import json
 import threading
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 from taskboard_bus import Channel, MessageBus, OutboundMessage, OutboundMessageType
 
@@ -210,6 +210,13 @@ class FeishuChannel(Channel):
             ]
             content = error_text
 
+        card = self._build_notification_card(
+            task_id=task_id,
+            task=task,
+            is_completed=is_completed,
+            body_text=content,
+        )
+
         # Try to reply in thread if we have an origin message
         with self._origin_lock:
             origin = self._task_origin.get(task_id)
@@ -220,13 +227,13 @@ class FeishuChannel(Channel):
             # Add emoji reaction to the message that triggered the task (or resume)
             emoji = "DONE" if is_completed else "Cry"
             self._add_reaction(reaction_msg_id, emoji)
-            sent_id = self._reply_message(root_msg_id, content)
+            sent_id = self._reply_message(root_msg_id, content, card=card)
 
         # Fallback: send to default chat if no origin or reply failed
         if not sent_id:
             chat_id = self.db.get_setting("feishu_default_chat_id")
             if chat_id:
-                sent_id = self._send_message(chat_id, content)
+                sent_id = self._send_message(chat_id, content, card=card, fallback_content=content)
 
         if sent_id:
             print(f"[Feishu] Notification sent successfully, message_id: {sent_id}")
@@ -246,8 +253,14 @@ class FeishuChannel(Channel):
 
     # ── outbound: low-level send ──────────────────────────────────
 
-    def _send_message(self, chat_id: str, content: str) -> Optional[str]:
-        """Send a markdown card to chat_id. Returns the sent message_id or None."""
+    def _send_message(
+        self,
+        chat_id: str,
+        content: str,
+        card: Optional[dict[str, Any]] = None,
+        fallback_content: Optional[str] = None,
+    ) -> Optional[str]:
+        """Send a card to chat_id. Falls back to the legacy markdown card on failure."""
         print(f"[Feishu] _send_message called, chat_id: {chat_id}, content length: {len(content)}")
         if not self._client:
             print("[Feishu] Client not initialized in _send_message")
@@ -255,35 +268,24 @@ class FeishuChannel(Channel):
         try:
             receive_id_type = "chat_id" if chat_id.startswith("oc_") else "open_id"
             print(f"[Feishu] receive_id_type: {receive_id_type}")
-            card = {
-                "config": {"wide_screen_mode": True},
-                "elements": [{"tag": "markdown", "content": content}],
-            }
-            print("[Feishu] Building CreateMessageRequest...")
-            request = (
-                CreateMessageRequest.builder()
-                .receive_id_type(receive_id_type)
-                .request_body(
-                    CreateMessageRequestBody.builder()
-                    .receive_id(chat_id)
-                    .msg_type("interactive")
-                    .content(json.dumps(card, ensure_ascii=False))
-                    .build()
-                )
-                .build()
+            card_payload = card or self._build_legacy_markdown_card(content)
+            message_id = self._create_message(
+                receive_id_type=receive_id_type,
+                chat_id=chat_id,
+                card=card_payload,
             )
-            print("[Feishu] Calling im.v1.message.create()...")
-            response = self._client.im.v1.message.create(request)
-            print(
-                f"[Feishu] Response received: success={response.success()}, code={response.code}, msg={response.msg}"
-            )
-            if response.success():
-                message_id = response.data.message_id
-                print(f"[Feishu] Message sent successfully, message_id: {message_id}")
+            if message_id:
                 return message_id
-            else:
-                print(f"[Feishu] Send failed: {response.code} {response.msg}")
-                return None
+
+            if card is not None:
+                legacy_content = fallback_content or content
+                print("[Feishu] Structured card send failed, retrying with legacy markdown card")
+                return self._create_message(
+                    receive_id_type=receive_id_type,
+                    chat_id=chat_id,
+                    card=self._build_legacy_markdown_card(legacy_content),
+                )
+            return None
         except Exception as e:
             print(f"[Feishu] Error sending message: {e}")
             import traceback
@@ -291,8 +293,13 @@ class FeishuChannel(Channel):
             traceback.print_exc()
             return None
 
-    def _reply_message(self, parent_message_id: str, content: str) -> Optional[str]:
-        """Reply to a specific message (thread-style). Returns the sent message_id or None."""
+    def _reply_message(
+        self,
+        parent_message_id: str,
+        content: str,
+        card: Optional[dict[str, Any]] = None,
+    ) -> Optional[str]:
+        """Reply to a specific message (thread-style). Falls back to the legacy markdown card."""
         print(
             f"[Feishu] _reply_message called, parent_message_id: {parent_message_id}, content length: {len(content)}"
         )
@@ -300,40 +307,161 @@ class FeishuChannel(Channel):
             print("[Feishu] Client not initialized in _reply_message")
             return None
         try:
-            card = {
-                "config": {"wide_screen_mode": True},
-                "elements": [{"tag": "markdown", "content": content}],
-            }
-            request = (
-                ReplyMessageRequest.builder()
-                .message_id(parent_message_id)
-                .request_body(
-                    ReplyMessageRequestBody.builder()
-                    .msg_type("interactive")
-                    .content(json.dumps(card, ensure_ascii=False))
-                    .reply_in_thread(True)
-                    .build()
-                )
-                .build()
-            )
-            print("[Feishu] Calling im.v1.message.reply()...")
-            response = self._client.im.v1.message.reply(request)
-            print(
-                f"[Feishu] Reply response: success={response.success()}, code={response.code}, msg={response.msg}"
-            )
-            if response.success():
-                message_id = response.data.message_id
-                print(f"[Feishu] Reply sent successfully, message_id: {message_id}")
+            reply_card = card or self._build_legacy_markdown_card(content)
+            message_id = self._create_reply(parent_message_id=parent_message_id, card=reply_card)
+            if message_id:
                 return message_id
-            else:
-                print(f"[Feishu] Reply failed: {response.code} {response.msg}")
-                return None
+
+            if card is not None:
+                print("[Feishu] Structured card reply failed, retrying with legacy markdown card")
+                return self._create_reply(
+                    parent_message_id=parent_message_id,
+                    card=self._build_legacy_markdown_card(content),
+                )
+            return None
         except Exception as e:
             print(f"[Feishu] Error replying to message: {e}")
             import traceback
 
             traceback.print_exc()
             return None
+
+    def _create_message(
+        self, receive_id_type: str, chat_id: str, card: dict[str, Any]
+    ) -> Optional[str]:
+        print("[Feishu] Building CreateMessageRequest...")
+        request = (
+            CreateMessageRequest.builder()
+            .receive_id_type(receive_id_type)
+            .request_body(
+                CreateMessageRequestBody.builder()
+                .receive_id(chat_id)
+                .msg_type("interactive")
+                .content(json.dumps(card, ensure_ascii=False))
+                .build()
+            )
+            .build()
+        )
+        print("[Feishu] Calling im.v1.message.create()...")
+        response = self._client.im.v1.message.create(request)
+        print(
+            f"[Feishu] Response received: success={response.success()}, code={response.code}, msg={response.msg}"
+        )
+        if response.success():
+            message_id = response.data.message_id
+            print(f"[Feishu] Message sent successfully, message_id: {message_id}")
+            return message_id
+
+        print(f"[Feishu] Send failed: {response.code} {response.msg}")
+        return None
+
+    def _create_reply(self, parent_message_id: str, card: dict[str, Any]) -> Optional[str]:
+        request = (
+            ReplyMessageRequest.builder()
+            .message_id(parent_message_id)
+            .request_body(
+                ReplyMessageRequestBody.builder()
+                .msg_type("interactive")
+                .content(json.dumps(card, ensure_ascii=False))
+                .reply_in_thread(True)
+                .build()
+            )
+            .build()
+        )
+        print("[Feishu] Calling im.v1.message.reply()...")
+        response = self._client.im.v1.message.reply(request)
+        print(
+            f"[Feishu] Reply response: success={response.success()}, code={response.code}, msg={response.msg}"
+        )
+        if response.success():
+            message_id = response.data.message_id
+            print(f"[Feishu] Reply sent successfully, message_id: {message_id}")
+            return message_id
+
+        print(f"[Feishu] Reply failed: {response.code} {response.msg}")
+        return None
+
+    def _build_notification_card(
+        self,
+        task_id: int,
+        task: dict[str, Any],
+        is_completed: bool,
+        body_text: str,
+    ) -> dict[str, Any]:
+        clean_body = (body_text or "").strip() or ("Done." if is_completed else "Unknown error")
+        summary = self._truncate_text(clean_body.splitlines()[0], 120) if clean_body else ""
+        elements = self._build_result_elements(body_text=clean_body)
+
+        if not is_completed:
+            elements.append(
+                {
+                    "tag": "markdown",
+                    "content": f"`/status {task_id}` for full details",
+                }
+            )
+
+        return {
+            "schema": "2.0",
+            "config": {
+                "wide_screen_mode": True,
+                "enable_forward": True,
+                "width_mode": "fill",
+                "summary": {"content": summary},
+            },
+            "body": {
+                "elements": elements,
+            },
+        }
+
+    def _build_result_elements(self, body_text: str) -> list[dict[str, Any]]:
+        clean_body = (body_text or "").strip() or "Done."
+        if len(clean_body) <= 1200:
+            return [
+                {
+                    "tag": "markdown",
+                    "content": clean_body,
+                }
+            ]
+
+        preview = self._truncate_text(clean_body, 500)
+        full_text = self._truncate_text(clean_body, 8000)
+        return [
+            {
+                "tag": "markdown",
+                "content": preview,
+            },
+            {
+                "tag": "collapsible_panel",
+                "expanded": False,
+                "header": {
+                    "title": {
+                        "tag": "plain_text",
+                        "content": "展开查看完整结果",
+                    }
+                },
+                "elements": [
+                    {
+                        "tag": "markdown",
+                        "content": full_text,
+                    }
+                ],
+            },
+        ]
+
+    def _build_legacy_markdown_card(self, content: str) -> dict[str, Any]:
+        return {
+            "config": {"wide_screen_mode": True},
+            "elements": [{"tag": "markdown", "content": content}],
+        }
+
+    def _truncate_text(self, text: str, limit: int) -> str:
+        normalized = text.replace("\r\n", "\n").strip()
+        if len(normalized) <= limit:
+            return normalized
+        return normalized[:limit].rstrip() + "\n…(truncated)"
+
+    def _escape_feishu_markdown(self, text: str) -> str:
+        return text.replace("\\", "\\\\")
 
     def _add_reaction(self, message_id: str, emoji_type: str = "THUMBSUP"):
         """Add an emoji reaction in a background thread (non-blocking)."""
