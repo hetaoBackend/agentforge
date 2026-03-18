@@ -1,5 +1,38 @@
 # AgentForge TODO
 
+## In Progress
+
+- [x] **修复转发消息时间格式测试失败** — 统一 Feishu / Telegram 转发时间按北京时间 `UTC+8` 格式化
+  - ✅ 已修复：`channels/feishu_channel.py` 与 `channels/telegram_channel.py` 不再依赖进程本地时区
+  - ✅ 验证：相关 3 个失败用例通过；`tests/test_feishu_forwarded_messages.py` 和 `tests/test_telegram_forwarded_messages.py` 全部通过
+- [x] **rebase `codex/backend-quality-and-heartbeat` onto latest `origin/main`** — 解决 PR #6 的文本冲突并保留 heartbeat + backend quality baseline 改动
+  - ✅ 已完成：`git rebase origin/main` 成功，`9ae1cdd` 被自动识别为已在上游并 dropped
+  - ✅ 已确认：`git merge-base HEAD origin/main` 与 `origin/main` 均为 `6aeb72e`
+  - ✅ 验证：`make check` 通过，`54 passed`
+- [x] **检查并处理当前分支的 merge conflicts** — 核对 git merge/rebase 状态、未合并文件以及与 `main` 的分叉点
+  - ✅ 已确认：当前无进行中的 merge/rebase，`git diff --name-only --diff-filter=U` 为空
+  - ✅ 已确认：`HEAD`、`main`、`merge-base` 均为 `626f16b`，当前工作树 clean
+- [x] **建立后端 lint/test/CI 基线** — 为 Python 后端接入 `ruff`、`pytest` 覆盖率和 GitHub Actions 质量门禁
+  - ✅ 已完成：`pyproject.toml` 新增 `ruff` / `pytest-cov` 与 lint、pytest、coverage 配置
+  - ✅ 已完成：`Makefile` 新增 `lint` / `format` / `format-check` / `test` / `test-cov` / `check`
+  - ✅ 已完成：新增 `.github/workflows/ci.yml`，在 `pull_request` 和 `main` push 时执行 `make check`
+  - ✅ 已完成：补充 `tests/test_channel_utils.py` 和 `tests/test_taskboard_bus.py`，提升后端基线覆盖率
+  - ✅ 验证：`make check` 通过，`54 passed`，总覆盖率 `20.02%`
+- [x] **Install superpowers for Codex** — followed `https://raw.githubusercontent.com/obra/superpowers/refs/heads/main/.codex/INSTALL.md`
+  - ✅ Cloned `obra/superpowers` to `~/.codex/superpowers`
+  - ✅ Created `~/.agents/skills/superpowers` symlink to `~/.codex/superpowers/skills`
+  - ✅ Verified symlink with `ls -la ~/.agents/skills/superpowers`
+- [x] **起草 Heartbeat RFC** — 明确 heartbeat 与现有 cron task 的边界、数据模型、调度行为和第一版实现范围
+  - ✅ 已完成：新增 `docs/rfc-heartbeat.md`，覆盖目标/非目标、cron vs heartbeat、数据模型、决策协议、调度与去重、API/UI 草案和 rollout plan
+- [x] **实现 Heartbeat MVP** — 提供后端调度、decision tick、REST API 和 macOS App 管理界面
+  - ✅ 后端：新增 heartbeat schema、ticks、dedupe、scheduler decision tick 和 `/api/heartbeats*` 端点
+  - ✅ 前端：新增 Tasks / Heartbeats 双视图、Heartbeat 创建/编辑 modal、run/pause/resume/delete 操作和 tick detail panel
+  - ✅ 验证：`uv run pytest tests/test_heartbeat.py -q` 通过，renderer `vite build` 通过
+- [x] **增加 Heartbeat Tick 日志观测性** — 支持查看 running/completed heartbeat tick 的实时输出与历史日志
+  - ✅ 后端：heartbeat tick 新增 `raw_output` 持久化和 live output cache，提供 `/api/heartbeats/:id/ticks/:tick_id/output`
+  - ✅ 前端：Heartbeat detail 新增 Tick Log 面板，可查看选中 tick 的实时日志和历史输出
+  - ✅ 验证：`uv run pytest tests/test_heartbeat.py -q` 通过，renderer `vite build` 通过
+
 ## Critical - Security
 
 - [x] **SQL 注入防护** — `taskboard.py:319` `update_task` 方法中 kwargs key 直接拼入 SQL，需对列名做白名单校验

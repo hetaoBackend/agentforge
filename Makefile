@@ -1,4 +1,4 @@
-.PHONY: help build-backend build-electron package-dmg clean install-deps
+.PHONY: help build-backend build-electron package-dmg clean install-deps lint format format-check test test-cov check
 
 # 项目配置
 PROJECT_NAME = AgentForge
@@ -80,3 +80,25 @@ check-dmg:
 	else \
 		echo "DMG文件不存在"; \
 	fi
+
+lint:
+	@echo "运行 Ruff lint..."
+	uv run ruff check .
+
+format:
+	@echo "运行 Ruff format..."
+	uv run ruff format .
+
+format-check:
+	@echo "检查代码格式..."
+	uv run ruff format --check .
+
+test:
+	@echo "运行 Python 测试..."
+	uv run pytest
+
+test-cov:
+	@echo "运行 Python 测试并检查覆盖率..."
+	uv run pytest --cov --cov-report=term-missing
+
+check: lint format-check test-cov

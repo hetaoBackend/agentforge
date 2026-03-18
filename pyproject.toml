@@ -21,4 +21,39 @@ dependencies = [
 dev = [
     "pyinstaller>=6.18.0",
     "pytest>=9.0.2",
+    "pytest-cov>=7.0.0",
+    "ruff>=0.11.0",
 ]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+extend-exclude = [
+    "skills",
+    "taskboard-electron",
+]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B"]
+ignore = ["E501"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-q"
+
+[tool.coverage.run]
+branch = true
+source = [
+    "taskboard",
+    "taskboard_bus",
+    "channels",
+]
+omit = [
+    "tests/*",
+]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = false
+fail_under = 20

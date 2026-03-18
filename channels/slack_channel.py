@@ -11,7 +11,6 @@ Required environment variables:
 """
 
 import os
-import json
 import threading
 import traceback
 from typing import TYPE_CHECKING, Optional
@@ -26,13 +25,13 @@ def _require_slack():
     try:
         from slack_sdk import WebClient
         from slack_sdk.socket_mode import SocketModeClient
-        from slack_sdk.socket_mode.response import SocketModeResponse
         from slack_sdk.socket_mode.request import SocketModeRequest
+        from slack_sdk.socket_mode.response import SocketModeResponse
+
         return WebClient, SocketModeClient, SocketModeResponse, SocketModeRequest
     except ImportError as e:
         raise ImportError(
-            "slack-sdk is required for SlackChannel. "
-            "Install it with: uv add slack-sdk"
+            "slack-sdk is required for SlackChannel. Install it with: uv add slack-sdk"
         ) from e
 
 
@@ -60,8 +59,14 @@ Reply to a completion/failure notification to resume that task.
 class SlackChannel(Channel):
     """Slack channel integration using Socket Mode."""
 
-    def __init__(self, bus: MessageBus, db: "TaskDB", scheduler: "TaskScheduler",
-                 bot_token: str = "", app_token: str = ""):
+    def __init__(
+        self,
+        bus: MessageBus,
+        db: "TaskDB",
+        scheduler: "TaskScheduler",
+        bot_token: str = "",
+        app_token: str = "",
+    ):
         super().__init__("slack", bus, db)
         self.scheduler = scheduler
 
@@ -92,8 +97,10 @@ class SlackChannel(Channel):
         # Subscribe to outbound bus messages for task notifications
         bus.subscribe_outbound(self._on_outbound)
 
-        print(f"[Slack] Initialized. bot_token={'set' if self.bot_token else 'MISSING'}, "
-              f"app_token={'set' if self.app_token else 'MISSING'}")
+        print(
+            f"[Slack] Initialized. bot_token={'set' if self.bot_token else 'MISSING'}, "
+            f"app_token={'set' if self.app_token else 'MISSING'}"
+        )
 
     # ── lifecycle ────────────────────────────────────────────────
 
@@ -113,7 +120,9 @@ class SlackChannel(Channel):
         try:
             resp = self._web_client.auth_test()
             self._bot_user_id = resp["user_id"]
-            print(f"[Slack] auth_test OK — bot_user_id={self._bot_user_id}, team={resp.get('team', '?')}, user={resp.get('user', '?')}")
+            print(
+                f"[Slack] auth_test OK — bot_user_id={self._bot_user_id}, team={resp.get('team', '?')}, user={resp.get('user', '?')}"
+            )
         except Exception as e:
             print(f"[Slack] auth_test FAILED: {e}")
             traceback.print_exc()
@@ -150,7 +159,9 @@ class SlackChannel(Channel):
     def _handle_socket_request(self, client, req) -> None:
         from slack_sdk.socket_mode.response import SocketModeResponse
 
-        print(f"[Slack] <<< Socket request received: type={req.type}, envelope_id={req.envelope_id[:12]}...")
+        print(
+            f"[Slack] <<< Socket request received: type={req.type}, envelope_id={req.envelope_id[:12]}..."
+        )
 
         # Acknowledge immediately (Slack requires < 3s ack)
         client.send_socket_mode_response(SocketModeResponse(envelope_id=req.envelope_id))
@@ -164,13 +175,15 @@ class SlackChannel(Channel):
         event = payload.get("event", {})
         event_type = event.get("type", "")
 
-        print(f"[Slack]     Event type={event_type}, "
-              f"user={event.get('user', '?')}, "
-              f"channel={event.get('channel', '?')}, "
-              f"channel_type={event.get('channel_type', '?')}, "
-              f"bot_id={event.get('bot_id', 'none')}, "
-              f"subtype={event.get('subtype', 'none')}, "
-              f"text={repr((event.get('text', '') or '')[:80])}")
+        print(
+            f"[Slack]     Event type={event_type}, "
+            f"user={event.get('user', '?')}, "
+            f"channel={event.get('channel', '?')}, "
+            f"channel_type={event.get('channel_type', '?')}, "
+            f"bot_id={event.get('bot_id', 'none')}, "
+            f"subtype={event.get('subtype', 'none')}, "
+            f"text={repr((event.get('text', '') or '')[:80])}"
+        )
 
         # Handle message events
         try:
@@ -190,16 +203,20 @@ class SlackChannel(Channel):
         """Handle DM messages (channel_type == 'im')."""
         # Only process DMs, not channel messages (those come via app_mention)
         if event.get("channel_type") != "im":
-            print(f"[Slack]     message event skipped: channel_type={event.get('channel_type')!r} (not 'im')")
+            print(
+                f"[Slack]     message event skipped: channel_type={event.get('channel_type')!r} (not 'im')"
+            )
             return
         # Ignore bot messages and message edits
         if event.get("bot_id") or event.get("subtype"):
-            print(f"[Slack]     message event skipped: bot_id={event.get('bot_id')}, subtype={event.get('subtype')}")
+            print(
+                f"[Slack]     message event skipped: bot_id={event.get('bot_id')}, subtype={event.get('subtype')}"
+            )
             return
 
         user_id = event.get("user", "")
         if user_id == self._bot_user_id:
-            print(f"[Slack]     message event skipped: message from self (bot)")
+            print("[Slack]     message event skipped: message from self (bot)")
             return
 
         text = event.get("text", "").strip()
@@ -213,12 +230,14 @@ class SlackChannel(Channel):
     def _handle_mention_event(self, event: dict) -> None:
         """Handle @bot mentions in channels."""
         if event.get("bot_id") or event.get("subtype"):
-            print(f"[Slack]     mention event skipped: bot_id={event.get('bot_id')}, subtype={event.get('subtype')}")
+            print(
+                f"[Slack]     mention event skipped: bot_id={event.get('bot_id')}, subtype={event.get('subtype')}"
+            )
             return
 
         user_id = event.get("user", "")
         if user_id == self._bot_user_id:
-            print(f"[Slack]     mention event skipped: mention from self (bot)")
+            print("[Slack]     mention event skipped: mention from self (bot)")
             return
 
         # Strip the mention prefix (<@BOTID> ...) from the text
@@ -226,13 +245,15 @@ class SlackChannel(Channel):
         if self._bot_user_id:
             mention_prefix = f"<@{self._bot_user_id}>"
             if text.startswith(mention_prefix):
-                text = text[len(mention_prefix):].strip()
+                text = text[len(mention_prefix) :].strip()
 
         channel_id = event.get("channel", "")
         thread_ts = event.get("thread_ts")
         msg_ts = event.get("ts")
 
-        print(f"[Slack]     Mention from user={user_id}, channel={channel_id}, text={repr(text[:80])}")
+        print(
+            f"[Slack]     Mention from user={user_id}, channel={channel_id}, text={repr(text[:80])}"
+        )
         self._handle_user_message(text, channel_id, thread_ts, msg_ts)
 
     def _handle_app_home_opened(self, event: dict) -> None:
@@ -253,8 +274,9 @@ class SlackChannel(Channel):
 
     # ── unified message handler ───────────────────────────────────
 
-    def _handle_user_message(self, text: str, channel_id: str,
-                             thread_ts: Optional[str], msg_ts: str) -> None:
+    def _handle_user_message(
+        self, text: str, channel_id: str, thread_ts: Optional[str], msg_ts: str
+    ) -> None:
         """Handle any user message: commands, resume-by-reply, or create task."""
         if not text:
             self._reply(channel_id, msg_ts, HELP_TEXT)
@@ -274,10 +296,12 @@ class SlackChannel(Channel):
                 self._cmd_resume(args, channel_id, msg_ts)
             elif cmd in ("/dir", "/cd"):
                 from channels.dir_utils import handle_dir_command
+
                 reply = handle_dir_command(text, "slack", self.db)
                 self._reply(channel_id, msg_ts, reply or HELP_TEXT)
             elif cmd == "/agent":
                 from channels.agent_utils import handle_agent_command
+
                 reply = handle_agent_command(text, "slack", self.db)
                 self._reply(channel_id, msg_ts, reply or HELP_TEXT)
             elif cmd == "/help":
@@ -312,16 +336,14 @@ class SlackChannel(Channel):
                     with self._origin_lock:
                         self._task_origin[task_id] = (channel_id, thread_ts, msg_ts)
                     self._add_reaction(channel_id, msg_ts, "eyes")
-                    self._reply(
-                        channel_id, thread_ts,
-                        ":arrow_forward:"
-                    )
+                    self._reply(channel_id, thread_ts, ":arrow_forward:")
                     print(f"[Slack] Auto-resuming task {task_id} from thread reply")
                     return
                 else:
                     self._reply(
-                        channel_id, thread_ts,
-                        f":x: Task *#{task_id}* has no saved session to resume."
+                        channel_id,
+                        thread_ts,
+                        f":x: Task *#{task_id}* has no saved session to resume.",
                     )
                     return
 
@@ -332,11 +354,12 @@ class SlackChannel(Channel):
 
     def _create_task(self, text: str, channel_id: str, thread_ts: str) -> None:
         """Create a new task from any message."""
-        from taskboard import Task, ScheduleType
+        from taskboard import ScheduleType, Task
 
         title = text[:60] + ("…" if len(text) > 60 else "")
-        from channels.dir_utils import resolve_working_dir
         from channels.agent_utils import resolve_agent
+        from channels.dir_utils import resolve_working_dir
+
         task = Task(
             title=f"[Slack] {title}",
             prompt=text,
@@ -350,8 +373,10 @@ class SlackChannel(Channel):
 
         with self._origin_lock:
             self._task_origin[task_id] = (channel_id, thread_ts, thread_ts)
-            print(f"[Slack] Origin set for task #{task_id}: channel={channel_id}, thread_ts={thread_ts}, "
-                  f"self_id={id(self)}, origin_dict_id={id(self._task_origin)}")
+            print(
+                f"[Slack] Origin set for task #{task_id}: channel={channel_id}, thread_ts={thread_ts}, "
+                f"self_id={id(self)}, origin_dict_id={id(self._task_origin)}"
+            )
 
         # Track thread root ts → task_id so replies in the thread can resume
         with self._thread_ts_lock:
@@ -409,8 +434,9 @@ class SlackChannel(Channel):
 
         if task["status"] in ("completed", "failed", "cancelled"):
             self._reply(
-                channel_id, thread_ts,
-                f":information_source: Task #{task_id} is already `{task['status']}`."
+                channel_id,
+                thread_ts,
+                f":information_source: Task #{task_id} is already `{task['status']}`.",
             )
             return
 
@@ -431,7 +457,9 @@ class SlackChannel(Channel):
 
         task = self.db.get_task(tid)
         if not task or not task.get("session_id"):
-            self._reply(channel_id, thread_ts, f":x: Task #{tid} not found or has no saved session.")
+            self._reply(
+                channel_id, thread_ts, f":x: Task #{tid} not found or has no saved session."
+            )
             return
 
         self.db.update_task(
@@ -457,9 +485,11 @@ class SlackChannel(Channel):
         task_id = msg.task_id
         with self._origin_lock:
             origin = self._task_origin.get(task_id)
-            print(f"[Slack] send() task_id={task_id} (type={type(task_id).__name__}), "
-                  f"origin={origin}, keys={list(self._task_origin.keys())}, "
-                  f"self_id={id(self)}, origin_dict_id={id(self._task_origin)}")
+            print(
+                f"[Slack] send() task_id={task_id} (type={type(task_id).__name__}), "
+                f"origin={origin}, keys={list(self._task_origin.keys())}, "
+                f"self_id={id(self)}, origin_dict_id={id(self._task_origin)}"
+            )
 
         # Build notification text
         if msg.type == OutboundMessageType.TASK_COMPLETED:
@@ -488,7 +518,11 @@ class SlackChannel(Channel):
                 if dm_ch:
                     channel_id = dm_ch
                     thread_ts = None
-                    status_emoji = ":white_check_mark:" if msg.type == OutboundMessageType.TASK_COMPLETED else ":x:"
+                    status_emoji = (
+                        ":white_check_mark:"
+                        if msg.type == OutboundMessageType.TASK_COMPLETED
+                        else ":x:"
+                    )
                     text = f"{status_emoji} *{title}*\n{text}"
                     print(f"[Slack] Falling back to P2P DM with user {dm_user}")
                 else:
@@ -497,10 +531,16 @@ class SlackChannel(Channel):
             elif default_channel:
                 channel_id = default_channel
                 thread_ts = None
-                status_emoji = ":white_check_mark:" if msg.type == OutboundMessageType.TASK_COMPLETED else ":x:"
+                status_emoji = (
+                    ":white_check_mark:"
+                    if msg.type == OutboundMessageType.TASK_COMPLETED
+                    else ":x:"
+                )
                 text = f"{status_emoji} *{title}*\n{text}"
             else:
-                print(f"[Slack] No origin, no known user, no slack_default_channel for task #{task_id}, skipping")
+                print(
+                    f"[Slack] No origin, no known user, no slack_default_channel for task #{task_id}, skipping"
+                )
                 return
 
         print(f"[Slack] Sending outbound notification for task #{task_id}: {msg.type.name}")
@@ -562,22 +602,26 @@ class SlackChannel(Channel):
 
     def _reply(self, channel_id: str, thread_ts: Optional[str], text: str) -> None:
         if not self._web_client:
-            print(f"[Slack] _reply skipped: no web_client")
+            print("[Slack] _reply skipped: no web_client")
             return
         try:
-            print(f"[Slack] >>> Sending message to channel={channel_id}, thread={thread_ts}, len={len(text)}")
+            print(
+                f"[Slack] >>> Sending message to channel={channel_id}, thread={thread_ts}, len={len(text)}"
+            )
             self._web_client.chat_postMessage(
                 channel=channel_id,
                 thread_ts=thread_ts,
                 text=text,
                 mrkdwn=True,
             )
-            print(f"[Slack] >>> Message sent OK")
+            print("[Slack] >>> Message sent OK")
         except Exception as e:
             print(f"[Slack] >>> chat_postMessage FAILED: {e}")
             traceback.print_exc()
 
-    def _reply_return_ts(self, channel_id: str, thread_ts: Optional[str], text: str) -> Optional[str]:
+    def _reply_return_ts(
+        self, channel_id: str, thread_ts: Optional[str], text: str
+    ) -> Optional[str]:
         """Send a message and return its ts (for tracking notification threads)."""
         if not self._web_client:
             return None

@@ -22,10 +22,12 @@ Configuration via environment variables:
 import asyncio
 import os
 import threading
-from typing import Optional, TYPE_CHECKING
+from datetime import datetime, timedelta, timezone
+from typing import TYPE_CHECKING, Optional
 
 try:
     from telegram import Update
+    from telegram.constants import ParseMode
     from telegram.ext import (
         Application,
         CommandHandler,
@@ -33,7 +35,7 @@ try:
         MessageHandler,
         filters,
     )
-    from telegram.constants import ParseMode
+
     TELEGRAM_AVAILABLE = True
 except ImportError:
     TELEGRAM_AVAILABLE = False
@@ -71,8 +73,14 @@ class TelegramChannel(Channel):
     the synchronous HTTP server.
     """
 
-    def __init__(self, bus: MessageBus, db: "TaskDB", scheduler: "TaskScheduler",
-                 token: str, allowed_users: Optional[list[int]] = None):
+    def __init__(
+        self,
+        bus: MessageBus,
+        db: "TaskDB",
+        scheduler: "TaskScheduler",
+        token: str,
+        allowed_users: Optional[list[int]] = None,
+    ):
         super().__init__("telegram", bus, db)
         self.scheduler = scheduler
         self._token = token
@@ -167,9 +175,15 @@ class TelegramChannel(Channel):
         else:
             default_chat_id = self.db.get_setting("telegram_default_chat_id", "")
             if not default_chat_id:
-                print(f"[Telegram] No origin and no telegram_default_chat_id configured for task #{task_id}, skipping")
+                print(
+                    f"[Telegram] No origin and no telegram_default_chat_id configured for task #{task_id}, skipping"
+                )
                 return
-            chat_id = int(default_chat_id) if str(default_chat_id).lstrip("-").isdigit() else default_chat_id
+            chat_id = (
+                int(default_chat_id)
+                if str(default_chat_id).lstrip("-").isdigit()
+                else default_chat_id
+            )
             status_emoji = "✅" if is_completed else "❌"
             text = f"{status_emoji} Task #{task_id}: {title}\n{body}"
             if not is_completed:
@@ -184,6 +198,7 @@ class TelegramChannel(Channel):
                     emoji = "👍" if msg.type == OutboundMessageType.TASK_COMPLETED else "👎"
                     try:
                         from telegram import ReactionTypeEmoji
+
                         await self._app.bot.set_message_reaction(
                             chat_id=chat_id,
                             message_id=react_target,
@@ -193,13 +208,16 @@ class TelegramChannel(Channel):
                         print(f"[Telegram] Failed to set reaction on message {react_target}: {e}")
 
                 sent = await self._app.bot.send_message(
-                    chat_id=chat_id, text=text,
+                    chat_id=chat_id,
+                    text=text,
                     reply_to_message_id=orig_message_id,
                 )
                 if sent:
                     with self._notification_lock:
                         self._notification_map[sent.message_id] = task_id
-                    print(f"[Telegram] Notification msg_id={sent.message_id} mapped to task #{task_id}")
+                    print(
+                        f"[Telegram] Notification msg_id={sent.message_id} mapped to task #{task_id}"
+                    )
             except Exception as e:
                 print(f"[Telegram] Failed to send notification to {chat_id}: {e}")
 
@@ -227,8 +245,8 @@ class TelegramChannel(Channel):
         self._app = Application.builder().token(self._token).build()
 
         # Slash commands
-        self._app.add_handler(CommandHandler("start",  self._cmd_help))
-        self._app.add_handler(CommandHandler("help",   self._cmd_help))
+        self._app.add_handler(CommandHandler("start", self._cmd_help))
+        self._app.add_handler(CommandHandler("help", self._cmd_help))
         self._app.add_handler(CommandHandler("status", self._cmd_status))
         self._app.add_handler(CommandHandler("cancel", self._cmd_cancel))
         self._app.add_handler(CommandHandler("resume", self._cmd_resume))
@@ -307,8 +325,7 @@ class TelegramChannel(Channel):
 
         # 添加时间戳
         if msg.forward_date:
-            from datetime import datetime
-            ts = datetime.fromtimestamp(msg.forward_date)
+            ts = datetime.fromtimestamp(msg.forward_date, tz=timezone(timedelta(hours=8)))
             parts.append(f"时间: {ts.strftime('%Y-%m-%d %H:%M')}")
 
         parts.append("\n--- 转发内容 ---")
@@ -316,7 +333,9 @@ class TelegramChannel(Channel):
 
         return "\n".join(parts)
 
-    async def _handle_text_message(self, update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> None:
+    async def _handle_text_message(
+        self, update: "Update", context: "ContextTypes.DEFAULT_TYPE"
+    ) -> None:
         """Handle any non-command text: resume-by-reply or create task."""
         if not self._is_allowed(update.effective_user.id):
             await update.message.reply_text("⛔ You are not authorised to use this bot.")
@@ -328,6 +347,7 @@ class TelegramChannel(Channel):
 
         # ── /dir command: switch working directory ─────────────────
         from channels.dir_utils import handle_dir_command
+
         dir_reply = handle_dir_command(text, "telegram", self.db)
         if dir_reply is not None:
             await update.message.reply_text(dir_reply)
@@ -335,6 +355,7 @@ class TelegramChannel(Channel):
 
         # ── /agent command: switch coding agent ──────────────────
         from channels.agent_utils import handle_agent_command
+
         agent_reply = handle_agent_command(text, "telegram", self.db)
         if agent_reply is not None:
             await update.message.reply_text(agent_reply)
@@ -362,11 +383,16 @@ class TelegramChannel(Channel):
                         question=None,
                     )
                     with self._origin_lock:
-                        self._task_origin[task_id] = (chat_id, update.message.message_id, update.message.message_id)
+                        self._task_origin[task_id] = (
+                            chat_id,
+                            update.message.message_id,
+                            update.message.message_id,
+                        )
 
                     # Add "eyes" reaction and send resuming message
                     try:
                         from telegram import ReactionTypeEmoji
+
                         await self._app.bot.set_message_reaction(
                             chat_id=chat_id,
                             message_id=update.message.message_id,
@@ -388,7 +414,7 @@ class TelegramChannel(Channel):
 
     def _create_task(self, text: str, chat_id: int, update: "Update") -> None:
         """Create a new task from any message text."""
-        from taskboard import Task, ScheduleType
+        from taskboard import ScheduleType, Task
 
         msg = update.message
 
@@ -398,9 +424,11 @@ class TelegramChannel(Channel):
         title = text[:60] + ("…" if len(text) > 60 else "")
 
         from channels.dir_utils import resolve_working_dir
+
         working_dir = resolve_working_dir(text, "telegram", self.db)
 
         from channels.agent_utils import resolve_agent
+
         task = Task(
             title=f"[Telegram] {title_prefix}{title}",
             prompt=text,
@@ -410,7 +438,9 @@ class TelegramChannel(Channel):
             agent=resolve_agent("telegram", self.db),
         )
         task_id = self.scheduler.submit_task(task)
-        print(f"[Telegram] Task #{task_id} created from message{' (forwarded)' if is_forwarded else ''}")
+        print(
+            f"[Telegram] Task #{task_id} created from message{' (forwarded)' if is_forwarded else ''}"
+        )
 
         message_id = update.message.message_id
         with self._origin_lock:
@@ -420,6 +450,7 @@ class TelegramChannel(Channel):
         async def _react():
             try:
                 from telegram import ReactionTypeEmoji
+
                 await self._app.bot.set_message_reaction(
                     chat_id=chat_id,
                     message_id=message_id,
@@ -459,8 +490,12 @@ class TelegramChannel(Channel):
             return
 
         status_icon = {
-            "pending": "🕐", "scheduled": "📅", "running": "⏳",
-            "completed": "✅", "failed": "❌", "cancelled": "🚫",
+            "pending": "🕐",
+            "scheduled": "📅",
+            "running": "⏳",
+            "completed": "✅",
+            "failed": "❌",
+            "cancelled": "🚫",
         }
         icon = status_icon.get(task["status"], "•")
         lines = [
@@ -491,9 +526,7 @@ class TelegramChannel(Channel):
             await update.message.reply_text(f"❌ Task #{task_id} not found.")
             return
         if task["status"] in ("completed", "failed", "cancelled"):
-            await update.message.reply_text(
-                f"ℹ️ Task #{task_id} is already {task['status']}."
-            )
+            await update.message.reply_text(f"ℹ️ Task #{task_id} is already {task['status']}.")
             return
 
         self.db.update_task(task_id, status="cancelled")
@@ -534,6 +567,7 @@ class TelegramChannel(Channel):
         # Add "eyes" reaction to the user's command message
         try:
             from telegram import ReactionTypeEmoji
+
             await self._app.bot.set_message_reaction(
                 chat_id=chat_id,
                 message_id=update.message.message_id,
@@ -547,6 +581,7 @@ class TelegramChannel(Channel):
 
 # ── helpers ──────────────────────────────────────────────────────────────────
 
+
 def _escape_md(text: str) -> str:
     """Escape special MarkdownV2 characters."""
     special = r"\_*[]()~`>#+-=|{}.!"
@@ -555,8 +590,10 @@ def _escape_md(text: str) -> str:
 
 # ── factory helper ───────────────────────────────────────────────────────────
 
-def create_telegram_channel(db, scheduler, bus=None,
-                            token: str = "", allowed_users_str: str = "") -> Optional["TelegramChannel"]:
+
+def create_telegram_channel(
+    db, scheduler, bus=None, token: str = "", allowed_users_str: str = ""
+) -> Optional["TelegramChannel"]:
     """Create a TelegramChannel from explicit params or environment variables."""
     token = (token or os.environ.get("TELEGRAM_BOT_TOKEN", "")).strip()
     if not token:
@@ -572,6 +609,7 @@ def create_telegram_channel(db, scheduler, bus=None,
 
     if bus is None:
         from taskboard_bus import MessageBus
+
         bus = MessageBus()
 
     return TelegramChannel(

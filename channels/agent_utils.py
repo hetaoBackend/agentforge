@@ -9,7 +9,7 @@ Usage from any channel:
 from __future__ import annotations
 
 import re
-from typing import Optional, TYPE_CHECKING
+from typing import TYPE_CHECKING, Optional
 
 if TYPE_CHECKING:
     from taskboard import TaskDB

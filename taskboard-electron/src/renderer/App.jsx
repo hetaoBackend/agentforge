@@ -319,11 +319,84 @@ async function fetchTasks() {
   return res.json();
 }
 
+async function fetchHeartbeats() {
+  const res = await fetch(`${API}/heartbeats`);
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json();
+}
+
 async function createTask(data) {
   const res = await fetch(`${API}/tasks`, {
     method: "POST", headers: await csrfHeaders(),
     body: JSON.stringify(data),
   });
+  return res.json();
+}
+
+async function createHeartbeat(data) {
+  const res = await fetch(`${API}/heartbeats`, {
+    method: "POST", headers: await csrfHeaders(),
+    body: JSON.stringify(data),
+  });
+  const payload = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(payload.error || `HTTP ${res.status}`);
+  return payload;
+}
+
+async function updateHeartbeat(id, data) {
+  const res = await fetch(`${API}/heartbeats/${id}`, {
+    method: "PUT", headers: await csrfHeaders(),
+    body: JSON.stringify(data),
+  });
+  const payload = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(payload.error || `HTTP ${res.status}`);
+  return payload;
+}
+
+async function deleteHeartbeat(id) {
+  const res = await fetch(`${API}/heartbeats/${id}`, {
+    method: "DELETE", headers: await csrfHeaders(),
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+}
+
+async function runHeartbeatNow(id) {
+  const res = await fetch(`${API}/heartbeats/${id}/run-now`, {
+    method: "POST", headers: await csrfHeaders(),
+  });
+  const payload = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(payload.error || `HTTP ${res.status}`);
+  return payload;
+}
+
+async function pauseHeartbeat(id) {
+  const res = await fetch(`${API}/heartbeats/${id}/pause`, {
+    method: "POST", headers: await csrfHeaders(),
+  });
+  const payload = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(payload.error || `HTTP ${res.status}`);
+  return payload;
+}
+
+async function resumeHeartbeatApi(id) {
+  const res = await fetch(`${API}/heartbeats/${id}/resume`, {
+    method: "POST", headers: await csrfHeaders(),
+  });
+  const payload = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(payload.error || `HTTP ${res.status}`);
+  return payload;
+}
+
+async function fetchHeartbeatTicks(id) {
+  const res = await fetch(`${API}/heartbeats/${id}/ticks?limit=20`);
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const payload = await res.json();
+  return payload.ticks || [];
+}
+
+async function fetchHeartbeatTickOutput(heartbeatId, tickId) {
+  const res = await fetch(`${API}/heartbeats/${heartbeatId}/ticks/${tickId}/output`);
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
   return res.json();
 }
 
@@ -643,6 +716,428 @@ function Column({ col, tasks, onAction, onViewDetail }) {
             No tasks
           </div>
         )}
+      </div>
+    </div>
+  );
+}
+
+function HeartbeatBadge({ enabled }) {
+  return (
+    <span style={{
+      display: "inline-flex", alignItems: "center", gap: 5,
+      padding: "3px 10px", borderRadius: 20, fontSize: 11, fontWeight: 600,
+      color: enabled ? theme.green : theme.textMuted,
+      background: enabled ? theme.greenBg : "rgba(107,107,138,0.08)",
+      letterSpacing: 0.3,
+    }}>
+      <span style={{ fontSize: 10 }}>{enabled ? "●" : "◌"}</span>
+      {enabled ? "Enabled" : "Paused"}
+    </span>
+  );
+}
+
+function HeartbeatModal({ onClose, onSubmit, initialData, defaultAgent, mode = "create" }) {
+  const savedDir = localStorage.getItem("agentforge_working_dir") || "~/papers";
+  const [form, setForm] = useState(() => ({
+    name: initialData?.name || "",
+    working_dir: initialData?.working_dir || savedDir,
+    schedule_type: initialData?.schedule_type || "interval",
+    interval_seconds: initialData?.interval_seconds || 600,
+    cron_expr: initialData?.cron_expr || "",
+    check_prompt: initialData?.check_prompt || "",
+    action_prompt_template: initialData?.action_prompt_template || "",
+    default_agent: initialData?.default_agent || defaultAgent || "claude",
+    cooldown_seconds: initialData?.cooldown_seconds || 1800,
+    enabled: initialData?.enabled ?? true,
+  }));
+
+  const set = (k, v) => setForm(prev => ({ ...prev, [k]: v }));
+
+  const inputStyle = {
+    width: "100%", padding: "10px 14px", borderRadius: 8,
+    border: `1px solid ${theme.border}`, background: theme.bg,
+    color: theme.text, fontSize: 13, outline: "none", boxSizing: "border-box",
+    fontFamily: "'JetBrains Mono', 'SF Mono', monospace",
+  };
+  const labelStyle = {
+    fontSize: 11, fontWeight: 600, color: theme.textMuted,
+    letterSpacing: 0.8, textTransform: "uppercase", marginBottom: 6, display: "block",
+  };
+
+  const handleSubmit = () => {
+    localStorage.setItem("agentforge_working_dir", form.working_dir);
+    onSubmit({
+      ...form,
+      name: form.name || "Untitled heartbeat",
+      interval_seconds: form.schedule_type === "interval" ? parseInt(form.interval_seconds) || 600 : null,
+      cooldown_seconds: parseInt(form.cooldown_seconds) || 0,
+      cron_expr: form.schedule_type === "cron" ? form.cron_expr : null,
+    });
+  };
+
+  return (
+    <div style={{
+      position: "fixed", inset: 0, background: "rgba(0,0,0,0.7)",
+      display: "flex", alignItems: "center", justifyContent: "center",
+      zIndex: 1000, backdropFilter: "blur(8px)",
+    }} onClick={onClose}>
+      <div onClick={e => e.stopPropagation()} style={{
+        background: theme.surface, border: `1px solid ${theme.border}`,
+        borderRadius: 16, padding: 32, width: 640, maxHeight: "84vh",
+        overflow: "auto", boxShadow: "0 24px 80px rgba(0,0,0,0.5)",
+      }}>
+        <h2 style={{
+          margin: "0 0 24px", fontSize: 18, fontWeight: 700, color: theme.text,
+          fontFamily: "'JetBrains Mono', monospace",
+        }}>
+          {mode === "edit" ? "Edit Heartbeat" : "New Heartbeat"}
+        </h2>
+        <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+          <div>
+            <label style={labelStyle}>Name</label>
+            <input style={inputStyle} value={form.name} onChange={e => set("name", e.target.value)} placeholder="Repo review watcher" />
+          </div>
+          <div>
+            <label style={labelStyle}>Working Directory</label>
+            <div style={{ display: "flex", gap: 8 }}>
+              <input style={{ ...inputStyle, flex: 1 }} value={form.working_dir} onChange={e => set("working_dir", e.target.value)} />
+              {window.electronAPI?.selectDirectory && (
+                <button onClick={async () => {
+                  const dir = await window.electronAPI.selectDirectory();
+                  if (dir) set("working_dir", dir);
+                }} style={{
+                  padding: "8px 14px", borderRadius: 8, cursor: "pointer",
+                  border: `1px solid ${theme.border}`, background: theme.bg,
+                  color: theme.textMuted, fontSize: 12, fontWeight: 600, whiteSpace: "nowrap",
+                }}>
+                  Browse
+                </button>
+              )}
+            </div>
+          </div>
+          <div>
+            <label style={labelStyle}>Schedule Type</label>
+            <div style={{ display: "flex", gap: 8 }}>
+              {["interval", "cron"].map(t => (
+                <button key={t} onClick={() => set("schedule_type", t)} style={{
+                  flex: 1, padding: "8px 12px", borderRadius: 8, cursor: "pointer",
+                  border: `1px solid ${form.schedule_type === t ? theme.accent : theme.border}`,
+                  background: form.schedule_type === t ? theme.accentGlow : "transparent",
+                  color: form.schedule_type === t ? theme.accent : theme.textMuted,
+                  fontSize: 12, fontWeight: 600, textTransform: "capitalize",
+                }}>
+                  {t === "interval" ? "⟳ Interval" : "⏲ Cron"}
+                </button>
+              ))}
+            </div>
+          </div>
+          {form.schedule_type === "interval" ? (
+            <div>
+              <label style={labelStyle}>Interval (seconds)</label>
+              <input type="number" style={inputStyle} value={form.interval_seconds} onChange={e => set("interval_seconds", e.target.value)} />
+            </div>
+          ) : (
+            <div>
+              <label style={labelStyle}>Cron Expression</label>
+              <input style={inputStyle} value={form.cron_expr} onChange={e => set("cron_expr", e.target.value)} placeholder="*/10 * * * *" />
+            </div>
+          )}
+          <div>
+            <label style={labelStyle}>Decision Prompt *</label>
+            <textarea
+              style={{ ...inputStyle, height: 110, resize: "vertical" }}
+              value={form.check_prompt}
+              onChange={e => set("check_prompt", e.target.value)}
+              placeholder="Check whether there are new meaningful code changes that deserve a review task. Return JSON only."
+            />
+          </div>
+          <div>
+            <label style={labelStyle}>Triggered Task Prompt Template</label>
+            <textarea
+              style={{ ...inputStyle, height: 90, resize: "vertical" }}
+              value={form.action_prompt_template}
+              onChange={e => set("action_prompt_template", e.target.value)}
+              placeholder="Review the latest code changes and summarize bugs, regressions, and missing tests."
+            />
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+            <div>
+              <label style={labelStyle}>Default Agent</label>
+              <select style={inputStyle} value={form.default_agent} onChange={e => set("default_agent", e.target.value)}>
+                {Object.entries(AGENTS).map(([key, cfg]) => <option key={key} value={key}>{cfg.label}</option>)}
+              </select>
+            </div>
+            <div>
+              <label style={labelStyle}>Cooldown (seconds)</label>
+              <input type="number" style={inputStyle} value={form.cooldown_seconds} onChange={e => set("cooldown_seconds", e.target.value)} />
+            </div>
+          </div>
+          <label style={{ display: "flex", alignItems: "center", gap: 10, fontSize: 13, color: theme.textMuted }}>
+            <input type="checkbox" checked={!!form.enabled} onChange={e => set("enabled", e.target.checked)} />
+            Enabled
+          </label>
+        </div>
+        <div style={{ display: "flex", gap: 10, justifyContent: "flex-end", marginTop: 24 }}>
+          <button onClick={onClose} style={{
+            padding: "10px 20px", borderRadius: 8, border: `1px solid ${theme.border}`,
+            background: "transparent", color: theme.textMuted, cursor: "pointer",
+            fontSize: 13, fontWeight: 600,
+          }}>Cancel</button>
+          <button onClick={handleSubmit} style={{
+            padding: "10px 24px", borderRadius: 8, border: "none",
+            background: theme.accent, color: "#fff", cursor: "pointer",
+            fontSize: 13, fontWeight: 600, boxShadow: `0 0 20px ${theme.accentGlow}`,
+          }}>
+            {mode === "edit" ? "Save" : "Create Heartbeat"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function HeartbeatCard({ heartbeat, onAction, onViewDetail }) {
+  const tags = [];
+  if (heartbeat.schedule_type === "interval" && heartbeat.interval_seconds) tags.push(`⟳ ${heartbeat.interval_seconds}s`);
+  if (heartbeat.schedule_type === "cron" && heartbeat.cron_expr) tags.push(`⏲ ${heartbeat.cron_expr}`);
+  if (heartbeat.last_decision) tags.push(`Last: ${heartbeat.last_decision}`);
+
+  return (
+    <div
+      onClick={() => onViewDetail(heartbeat)}
+      style={{
+        background: theme.surface, border: `1px solid ${theme.border}`,
+        borderRadius: 12, padding: "16px 18px", cursor: "pointer",
+        transition: "all 0.2s ease",
+      }}
+    >
+      <div style={{ display: "flex", justifyContent: "space-between", gap: 16, marginBottom: 8 }}>
+        <div style={{ flex: 1 }}>
+          <div style={{
+            fontSize: 14, fontWeight: 700, color: theme.text,
+            fontFamily: "'JetBrains Mono', monospace", marginBottom: 6,
+          }}>
+            {heartbeat.name}
+          </div>
+          <div style={{
+            fontSize: 12, color: theme.textMuted, lineHeight: 1.5,
+            overflow: "hidden", textOverflow: "ellipsis",
+            display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical",
+          }}>
+            {heartbeat.check_prompt}
+          </div>
+        </div>
+        <HeartbeatBadge enabled={heartbeat.enabled} />
+      </div>
+
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+          <AgentBadge agent={heartbeat.default_agent} />
+          {tags.map((tag, idx) => <Tag key={idx}>{tag}</Tag>)}
+        </div>
+        <div style={{ display: "flex", gap: 4 }} onClick={e => e.stopPropagation()}>
+          <ActionBtn label="⚡" title="Run now" onClick={() => onAction("run", heartbeat.id)} color={theme.orange} />
+          <ActionBtn label="✎" title="Edit" onClick={() => onAction("edit", heartbeat.id)} color={theme.blue} />
+          {heartbeat.enabled ? (
+            <ActionBtn label="❚❚" title="Pause" onClick={() => onAction("pause", heartbeat.id)} color={theme.textMuted} />
+          ) : (
+            <ActionBtn label="▶" title="Resume" onClick={() => onAction("resume", heartbeat.id)} color={theme.green} />
+          )}
+          <ActionBtn label="×" title="Delete" onClick={() => onAction("delete", heartbeat.id)} color={theme.red} />
+        </div>
+      </div>
+
+      <div style={{ fontSize: 11, color: theme.textDim, marginTop: 10, fontFamily: "monospace", lineHeight: 1.6 }}>
+        Next: {heartbeat.next_run_at ? new Date(heartbeat.next_run_at).toLocaleString() : "n/a"}
+        {" · "}
+        Triggered: {heartbeat.last_triggered_at ? new Date(heartbeat.last_triggered_at).toLocaleString() : "never"}
+      </div>
+      {heartbeat.last_error && (
+        <div style={{ fontSize: 11, color: theme.red, marginTop: 6, lineHeight: 1.4 }}>
+          Last error: {heartbeat.last_error}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function HeartbeatDetailPanel({ heartbeat, ticks, onClose }) {
+  const [selectedTickId, setSelectedTickId] = useState(null);
+  const [tickOutput, setTickOutput] = useState("");
+  const [tickRunning, setTickRunning] = useState(false);
+  const outputRef = useRef(null);
+
+  useEffect(() => {
+    setSelectedTickId(ticks[0]?.id || null);
+  }, [heartbeat.id, ticks]);
+
+  useEffect(() => {
+    if (!selectedTickId) {
+      setTickOutput("");
+      setTickRunning(false);
+      return;
+    }
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const data = await fetchHeartbeatTickOutput(heartbeat.id, selectedTickId);
+        if (cancelled) return;
+        setTickOutput(data.output || "");
+        setTickRunning(!!data.is_running);
+      } catch {
+        if (!cancelled) {
+          setTickOutput("");
+          setTickRunning(false);
+        }
+      }
+    };
+    load();
+    const interval = setInterval(load, 1000);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [heartbeat.id, selectedTickId]);
+
+  useEffect(() => {
+    if (outputRef.current) {
+      outputRef.current.scrollTop = outputRef.current.scrollHeight;
+    }
+  }, [tickOutput]);
+
+  return (
+    <div style={{
+      position: "fixed", top: 0, right: 0, width: 520, height: "100vh",
+      background: theme.surface, borderLeft: `1px solid ${theme.border}`,
+      boxShadow: "-20px 0 60px rgba(0,0,0,0.4)", zIndex: 500,
+      display: "flex", flexDirection: "column",
+    }}>
+      <div style={{
+        padding: "22px 24px", borderBottom: `1px solid ${theme.border}`,
+        display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12,
+      }}>
+        <div>
+          <div style={{ fontSize: 18, fontWeight: 700, color: theme.text, fontFamily: "'JetBrains Mono', monospace" }}>
+            {heartbeat.name}
+          </div>
+          <div style={{ fontSize: 12, color: theme.textMuted, marginTop: 6 }}>
+            {heartbeat.working_dir}
+          </div>
+        </div>
+        <button onClick={onClose} style={{
+          background: "transparent", border: "none", color: theme.textMuted,
+          cursor: "pointer", fontSize: 22, lineHeight: 1,
+        }}>×</button>
+      </div>
+      <div style={{ padding: 24, overflow: "auto", flex: 1 }}>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 16 }}>
+          <HeartbeatBadge enabled={heartbeat.enabled} />
+          <AgentBadge agent={heartbeat.default_agent} />
+          {heartbeat.schedule_type === "interval" ? <Tag>⟳ {heartbeat.interval_seconds}s</Tag> : <Tag>⏲ {heartbeat.cron_expr}</Tag>}
+          {heartbeat.last_decision && <Tag>{heartbeat.last_decision}</Tag>}
+        </div>
+        <div style={{ fontSize: 12, color: theme.textMuted, lineHeight: 1.7, marginBottom: 18 }}>
+          <div>Next run: {heartbeat.next_run_at ? new Date(heartbeat.next_run_at).toLocaleString() : "n/a"}</div>
+          <div>Last tick: {heartbeat.last_tick_at ? new Date(heartbeat.last_tick_at).toLocaleString() : "never"}</div>
+          <div>Last trigger: {heartbeat.last_triggered_at ? new Date(heartbeat.last_triggered_at).toLocaleString() : "never"}</div>
+          <div>Cooldown: {heartbeat.cooldown_seconds || 0}s</div>
+        </div>
+        <div style={{ marginBottom: 20 }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: theme.textMuted, letterSpacing: 0.8, textTransform: "uppercase", marginBottom: 8 }}>
+            Decision Prompt
+          </div>
+          <div style={{
+            fontSize: 12, lineHeight: 1.7, color: theme.text,
+            background: theme.bg, border: `1px solid ${theme.border}`,
+            borderRadius: 10, padding: 14, whiteSpace: "pre-wrap",
+          }}>
+            {heartbeat.check_prompt}
+          </div>
+        </div>
+        <div style={{ marginBottom: 20 }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: theme.textMuted, letterSpacing: 0.8, textTransform: "uppercase", marginBottom: 8 }}>
+            Triggered Task Template
+          </div>
+          <div style={{
+            fontSize: 12, lineHeight: 1.7, color: theme.text,
+            background: theme.bg, border: `1px solid ${theme.border}`,
+            borderRadius: 10, padding: 14, whiteSpace: "pre-wrap",
+          }}>
+            {heartbeat.action_prompt_template || "No template configured"}
+          </div>
+        </div>
+        <div>
+          <div style={{ fontSize: 11, fontWeight: 700, color: theme.textMuted, letterSpacing: 0.8, textTransform: "uppercase", marginBottom: 8 }}>
+            Recent Ticks
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            {ticks.map((tick) => {
+              let payload = null;
+              try { payload = tick.decision_payload ? JSON.parse(tick.decision_payload) : null; } catch {}
+              return (
+                <div key={tick.id} style={{
+                  background: theme.bg, border: `1px solid ${theme.border}`,
+                  borderRadius: 10, padding: 12, cursor: "pointer",
+                  boxShadow: selectedTickId === tick.id ? `0 0 0 1px ${theme.accent} inset` : "none",
+                }}>
+                  <div onClick={() => setSelectedTickId(tick.id)} style={{ display: "flex", justifyContent: "space-between", gap: 8, marginBottom: 6 }}>
+                    <div style={{ fontSize: 12, fontWeight: 600, color: theme.text }}>{tick.decision_type || tick.status}</div>
+                    <div style={{ fontSize: 11, color: theme.textDim, fontFamily: "monospace" }}>
+                      {tick.started_at ? new Date(tick.started_at).toLocaleString() : ""}
+                    </div>
+                  </div>
+                  {payload?.reason && (
+                    <div style={{ fontSize: 12, color: theme.textMuted, lineHeight: 1.5 }}>
+                      {payload.reason}
+                    </div>
+                  )}
+                  {tick.error && (
+                    <div style={{ fontSize: 12, color: theme.red, lineHeight: 1.5 }}>
+                      {tick.error}
+                    </div>
+                  )}
+                  {tick.task_id && (
+                    <div style={{ fontSize: 11, color: theme.accent, marginTop: 6, fontFamily: "monospace" }}>
+                      Triggered task #{tick.task_id}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+            {ticks.length === 0 && (
+              <div style={{
+                border: `1px dashed ${theme.border}`, borderRadius: 10,
+                padding: 24, textAlign: "center", color: theme.textDim, fontSize: 12,
+              }}>
+                No ticks yet
+              </div>
+            )}
+          </div>
+        </div>
+        <div style={{ marginTop: 20 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+            <div style={{ fontSize: 11, fontWeight: 700, color: theme.textMuted, letterSpacing: 0.8, textTransform: "uppercase" }}>
+              Tick Log
+            </div>
+            {selectedTickId && (
+              <div style={{ fontSize: 11, color: tickRunning ? theme.orange : theme.textDim, fontFamily: "monospace" }}>
+                {tickRunning ? "LIVE" : "Stored"} · tick #{selectedTickId}
+              </div>
+            )}
+          </div>
+          <div
+            ref={outputRef}
+            style={{
+              background: theme.bg, border: `1px solid ${theme.border}`,
+              borderRadius: 10, padding: 14, minHeight: 180, maxHeight: 320,
+              overflow: "auto", fontFamily: "'JetBrains Mono', monospace",
+              fontSize: 12, lineHeight: 1.6, whiteSpace: "pre-wrap",
+              color: theme.text,
+            }}
+          >
+            {selectedTickId ? (tickOutput || "No output captured for this tick.") : "Select a tick to view its log."}
+          </div>
+        </div>
       </div>
     </div>
   );
@@ -2037,9 +2532,14 @@ function SettingsModal({ onClose, timeout: initialTimeout, defaultAgent: initial
 
 export default function App() {
   const [tasks, setTasks] = useState([]);
+  const [heartbeats, setHeartbeats] = useState([]);
+  const [heartbeatTicks, setHeartbeatTicks] = useState([]);
+  const [activeView, setActiveView] = useState("tasks");
   const [showNew, setShowNew] = useState(false);
+  const [showNewHeartbeat, setShowNewHeartbeat] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [detail, setDetail] = useState(null);
+  const [heartbeatDetail, setHeartbeatDetail] = useState(null);
   const [connected, setConnected] = useState(false);
   const [filter, setFilter] = useState("");
   const [taskTimeout, setTaskTimeout] = useState(600);
@@ -2051,6 +2551,7 @@ export default function App() {
   const [apiError, setApiError] = useState(null);
   const [editingTask, setEditingTask] = useState(null);
   const [forkingTask, setForkingTask] = useState(null);
+  const [editingHeartbeat, setEditingHeartbeat] = useState(null);
 
   // ─── Color mode ───
   const [colorMode, setColorMode] = useState(() =>
@@ -2095,8 +2596,9 @@ export default function App() {
 
   const poll = useCallback(async () => {
     try {
-      const data = await fetchTasks();
-      setTasks(data);
+      const [taskData, heartbeatData] = await Promise.all([fetchTasks(), fetchHeartbeats()]);
+      setTasks(taskData);
+      setHeartbeats(heartbeatData);
       setConnected(true);
       setApiError(null);
     } catch (err) {
@@ -2144,6 +2646,39 @@ export default function App() {
     }
   };
 
+  const handleHeartbeatAction = async (action, id) => {
+    try {
+      if (action === "run") {
+        await runHeartbeatNow(id);
+      } else if (action === "pause") {
+        await pauseHeartbeat(id);
+      } else if (action === "resume") {
+        await resumeHeartbeatApi(id);
+      } else if (action === "delete") {
+        await deleteHeartbeat(id);
+        if (heartbeatDetail?.id === id) {
+          setHeartbeatDetail(null);
+          setHeartbeatTicks([]);
+        }
+      } else if (action === "edit") {
+        const heartbeat = heartbeats.find(h => h.id === id);
+        if (heartbeat) setEditingHeartbeat(heartbeat);
+        return;
+      }
+      poll();
+      if (heartbeatDetail?.id === id && action !== "delete") {
+        const [updatedHeartbeat, ticks] = await Promise.all([
+          fetch(`${API}/heartbeats/${id}`).then(r => r.json()),
+          fetchHeartbeatTicks(id),
+        ]);
+        setHeartbeatDetail(updatedHeartbeat);
+        setHeartbeatTicks(ticks);
+      }
+    } catch (e) {
+      setApiError(`Heartbeat ${action} failed: ${e.message}`);
+    }
+  };
+
   const handleCreate = async (data) => {
     try {
       await createTask(data);
@@ -2187,6 +2722,37 @@ export default function App() {
     poll();
   };
 
+  const handleCreateHeartbeat = async (data) => {
+    try {
+      await createHeartbeat(data);
+      setShowNewHeartbeat(false);
+      poll();
+    } catch (e) {
+      setApiError(`Create heartbeat failed: ${e.message}`);
+    }
+  };
+
+  const handleEditHeartbeat = async (data) => {
+    try {
+      await updateHeartbeat(editingHeartbeat.id, data);
+      setEditingHeartbeat(null);
+      poll();
+    } catch (e) {
+      setApiError(`Edit heartbeat failed: ${e.message}`);
+    }
+  };
+
+  const openHeartbeatDetail = async (heartbeat) => {
+    setHeartbeatDetail(heartbeat);
+    try {
+      const ticks = await fetchHeartbeatTicks(heartbeat.id);
+      setHeartbeatTicks(ticks);
+    } catch (e) {
+      setApiError(`Failed to fetch heartbeat ticks: ${e.message}`);
+      setHeartbeatTicks([]);
+    }
+  };
+
   const filtered = filter
     ? tasks.filter(t =>
         t.title.toLowerCase().includes(filter.toLowerCase()) ||
@@ -2196,6 +2762,7 @@ export default function App() {
 
   const runningCount = tasks.filter(t => t.status === "running").length;
   const scheduledCount = tasks.filter(t => t.status === "scheduled").length;
+  const enabledHeartbeatCount = heartbeats.filter(h => h.enabled).length;
 
   if (backendError) {
     return (
@@ -2292,14 +2859,36 @@ export default function App() {
               ) : (
                 <span style={{ color: theme.red }}>● Disconnected — run `python taskboard.py`</span>
               )}
-              {connected && ` · ${runningCount} running · ${scheduledCount} scheduled`}
+              {connected && ` · ${runningCount} running · ${scheduledCount} scheduled · ${enabledHeartbeatCount} heartbeats`}
             </div>
           </div>
         </div>
 
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <div style={{
+            display: "flex", background: theme.surface, border: `1px solid ${theme.border}`,
+            borderRadius: 10, padding: 4, gap: 4,
+          }}>
+            {[
+              { key: "tasks", label: "Tasks" },
+              { key: "heartbeats", label: "Heartbeats" },
+            ].map(tab => (
+              <button
+                key={tab.key}
+                onClick={() => setActiveView(tab.key)}
+                style={{
+                  padding: "6px 10px", borderRadius: 8, border: "none",
+                  background: activeView === tab.key ? theme.accentGlow : "transparent",
+                  color: activeView === tab.key ? theme.accent : theme.textMuted,
+                  cursor: "pointer", fontSize: 12, fontWeight: 700,
+                }}
+              >
+                {tab.label}
+              </button>
+            ))}
+          </div>
           <input
-            placeholder="Filter tasks..."
+            placeholder={activeView === "tasks" ? "Filter tasks..." : "Filter heartbeats..."}
             value={filter}
             onChange={e => setFilter(e.target.value)}
             style={{
@@ -2339,7 +2928,7 @@ export default function App() {
             ⚙
           </button>
           </Tooltip>
-          <button onClick={() => setShowNew(true)} style={{
+          <button onClick={() => activeView === "tasks" ? setShowNew(true) : setShowNewHeartbeat(true)} style={{
             padding: "8px 18px", borderRadius: 8, border: "none",
             background: theme.accent, color: "#fff", cursor: "pointer",
             fontSize: 12, fontWeight: 700, letterSpacing: 0.3,
@@ -2347,34 +2936,83 @@ export default function App() {
             boxShadow: `0 0 24px ${theme.accentGlow}`,
             transition: "transform 0.15s",
           }}>
-            + New Task
+            {activeView === "tasks" ? "+ New Task" : "+ New Heartbeat"}
           </button>
         </div>
       </div>
 
-      {/* Kanban Board */}
-      <div style={{
-        display: "flex", gap: 20, padding: 28,
-        minHeight: "calc(100vh - 72px)",
-      }}>
-        {COLUMNS.map(col => (
-          <Column
-            key={col.key}
-            col={col}
-            tasks={filtered.filter(t => col.statuses.includes(t.status))}
-            onAction={handleAction}
-            onViewDetail={setDetail}
-          />
-        ))}
-      </div>
+      {activeView === "tasks" ? (
+        <div style={{
+          display: "flex", gap: 20, padding: 28,
+          minHeight: "calc(100vh - 72px)",
+        }}>
+          {COLUMNS.map(col => (
+            <Column
+              key={col.key}
+              col={col}
+              tasks={filtered.filter(t => col.statuses.includes(t.status))}
+              onAction={handleAction}
+              onViewDetail={setDetail}
+            />
+          ))}
+        </div>
+      ) : (
+        <div style={{ padding: 28, minHeight: "calc(100vh - 72px)" }}>
+          <div style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fit, minmax(360px, 1fr))",
+            gap: 14,
+          }}>
+            {(filter
+              ? heartbeats.filter(h =>
+                  h.name.toLowerCase().includes(filter.toLowerCase()) ||
+                  h.check_prompt.toLowerCase().includes(filter.toLowerCase())
+                )
+              : heartbeats
+            ).map(h => (
+              <HeartbeatCard
+                key={h.id}
+                heartbeat={h}
+                onAction={handleHeartbeatAction}
+                onViewDetail={openHeartbeatDetail}
+              />
+            ))}
+            {heartbeats.length === 0 && (
+              <div style={{
+                border: `1px dashed ${theme.border}`, borderRadius: 12,
+                padding: 32, textAlign: "center", color: theme.textDim, fontSize: 12,
+                gridColumn: "1 / -1",
+              }}>
+                No heartbeats yet
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Modals */}
       {showNew && <NewTaskModal onClose={() => setShowNew(false)} onSubmit={handleCreate} initialData={{ agent: defaultAgent }} />}
+      {showNewHeartbeat && (
+        <HeartbeatModal
+          onClose={() => setShowNewHeartbeat(false)}
+          onSubmit={handleCreateHeartbeat}
+          defaultAgent={defaultAgent}
+        />
+      )}
       {editingTask && (
         <NewTaskModal
           onClose={() => setEditingTask(null)}
           onSubmit={handleEdit}
           initialData={editingTask}
+          mode="edit"
+        />
+      )}
+      {editingHeartbeat && (
+        <HeartbeatModal
+          onClose={() => setEditingHeartbeat(null)}
+          onSubmit={handleEditHeartbeat}
+          initialData={editingHeartbeat}
+          defaultAgent={defaultAgent}
           mode="edit"
         />
       )}
@@ -2399,9 +3037,16 @@ export default function App() {
         />
       )}
       {detail && <DetailPanel task={tasks.find(t => t.id === detail.id) || detail} onClose={() => setDetail(null)} onRespond={handleRespond} onResume={handleResume} />}
+      {heartbeatDetail && (
+        <HeartbeatDetailPanel
+          heartbeat={heartbeats.find(h => h.id === heartbeatDetail.id) || heartbeatDetail}
+          ticks={heartbeatTicks}
+          onClose={() => { setHeartbeatDetail(null); setHeartbeatTicks([]); }}
+        />
+      )}
 
       {/* Startup guide when no tasks */}
-      {connected && tasks.length === 0 && (
+      {connected && activeView === "tasks" && tasks.length === 0 && (
         <div style={{
           position: "fixed", bottom: 28, left: "50%", transform: "translateX(-50%)",
           background: theme.surface, border: `1px solid ${theme.border}`,
@@ -2414,6 +3059,21 @@ export default function App() {
           <div style={{ fontSize: 11, color: theme.textDim, lineHeight: 1.6 }}>
             Tasks are dispatched to Claude Code in your specified working directory.
             Set cron schedules for recurring tasks, or delay execution.
+          </div>
+        </div>
+      )}
+      {connected && activeView === "heartbeats" && heartbeats.length === 0 && (
+        <div style={{
+          position: "fixed", bottom: 28, left: "50%", transform: "translateX(-50%)",
+          background: theme.surface, border: `1px solid ${theme.border}`,
+          borderRadius: 12, padding: "16px 24px", maxWidth: 560,
+          boxShadow: "0 8px 32px rgba(0,0,0,0.3)",
+        }}>
+          <div style={{ fontSize: 13, color: theme.text, fontWeight: 600, marginBottom: 6 }}>
+            Heartbeats let AgentForge check first and only create work when needed.
+          </div>
+          <div style={{ fontSize: 11, color: theme.textDim, lineHeight: 1.6 }}>
+            Create one to run a stateless agent decision tick on an interval or cron schedule, then trigger a real task only when the signal is actionable.
           </div>
         </div>
       )}

@@ -2,17 +2,16 @@
 Tests for Telegram forwarded message handling functionality.
 """
 
-import json
-import pytest
-from unittest.mock import Mock, MagicMock, AsyncMock, patch
-from datetime import datetime
 from dataclasses import dataclass
+from unittest.mock import Mock, patch
+
+import pytest
 
 
 @pytest.fixture
 def mock_telegram_channel():
     """Create a mock TelegramChannel instance for testing."""
-    with patch('channels.telegram_channel.TELEGRAM_AVAILABLE', True):
+    with patch("channels.telegram_channel.TELEGRAM_AVAILABLE", True):
         from channels.telegram_channel import TelegramChannel
 
         bus = Mock()
@@ -20,11 +19,7 @@ def mock_telegram_channel():
         scheduler = Mock()
 
         channel = TelegramChannel(
-            bus=bus,
-            db=db,
-            scheduler=scheduler,
-            token="fake_token",
-            allowed_users=None
+            bus=bus, db=db, scheduler=scheduler, token="fake_token", allowed_users=None
         )
 
         # Mock the app and loop
@@ -39,6 +34,7 @@ def mock_telegram_channel():
 @dataclass
 class MockUser:
     """Mock Telegram User object."""
+
     id: int
     first_name: str
     last_name: str = ""
@@ -52,6 +48,7 @@ class MockUser:
 @dataclass
 class MockChat:
     """Mock Telegram Chat object."""
+
     id: int
     type: str = "private"
     title: str = ""
@@ -64,6 +61,7 @@ class MockChat:
 @dataclass
 class MockMessage:
     """Mock Telegram Message object."""
+
     message_id: int
     text: str
     from_user: MockUser
@@ -83,10 +81,7 @@ class TestTelegramForwardMessageDetection:
     def test_format_forwarded_text_from_user(self, mock_telegram_channel):
         """Test formatting a message forwarded from a user."""
         forward_user = MockUser(
-            id=12345,
-            first_name="Alice",
-            last_name="Smith",
-            username="alice_smith"
+            id=12345, first_name="Alice", last_name="Smith", username="alice_smith"
         )
 
         message = MockMessage(
@@ -95,7 +90,7 @@ class TestTelegramForwardMessageDetection:
             from_user=MockUser(id=999, first_name="Bob"),
             chat=MockChat(id=888, type="private"),
             forward_from=forward_user,
-            forward_date=1738080000
+            forward_date=1738080000,
         )
 
         update = Mock()
@@ -111,12 +106,7 @@ class TestTelegramForwardMessageDetection:
 
     def test_format_forwarded_text_from_user_no_username(self, mock_telegram_channel):
         """Test formatting when forwarded user has no username."""
-        forward_user = MockUser(
-            id=12345,
-            first_name="张三",
-            last_name="李四",
-            username=""
-        )
+        forward_user = MockUser(id=12345, first_name="张三", last_name="李四", username="")
 
         message = MockMessage(
             message_id=100,
@@ -124,7 +114,7 @@ class TestTelegramForwardMessageDetection:
             from_user=MockUser(id=999, first_name="王五"),
             chat=MockChat(id=888, type="private"),
             forward_from=forward_user,
-            forward_date=1738080000
+            forward_date=1738080000,
         )
 
         update = Mock()
@@ -136,12 +126,7 @@ class TestTelegramForwardMessageDetection:
 
     def test_format_forwarded_text_from_user_only_firstname(self, mock_telegram_channel):
         """Test formatting when forwarded user has only first name."""
-        forward_user = MockUser(
-            id=12345,
-            first_name="Charlie",
-            last_name="",
-            username=""
-        )
+        forward_user = MockUser(id=12345, first_name="Charlie", last_name="", username="")
 
         message = MockMessage(
             message_id=100,
@@ -149,7 +134,7 @@ class TestTelegramForwardMessageDetection:
             from_user=MockUser(id=999, first_name="Dave"),
             chat=MockChat(id=888, type="private"),
             forward_from=forward_user,
-            forward_date=1738080000
+            forward_date=1738080000,
         )
 
         update = Mock()
@@ -162,10 +147,7 @@ class TestTelegramForwardMessageDetection:
     def test_format_forwarded_text_from_channel(self, mock_telegram_channel):
         """Test formatting a message forwarded from a channel."""
         forward_chat = MockChat(
-            id=-100123456789,
-            type="channel",
-            title="Tech News",
-            username="technews"
+            id=-100123456789, type="channel", title="Tech News", username="technews"
         )
 
         message = MockMessage(
@@ -174,7 +156,7 @@ class TestTelegramForwardMessageDetection:
             from_user=MockUser(id=999, first_name="Reader"),
             chat=MockChat(id=888, type="private"),
             forward_from_chat=forward_chat,
-            forward_date=1738083600
+            forward_date=1738083600,
         )
 
         update = Mock()
@@ -188,10 +170,7 @@ class TestTelegramForwardMessageDetection:
     def test_format_forwarded_text_from_group(self, mock_telegram_channel):
         """Test formatting a message forwarded from a group."""
         forward_chat = MockChat(
-            id=-100987654321,
-            type="supergroup",
-            title="Python Developers",
-            username=""
+            id=-100987654321, type="supergroup", title="Python Developers", username=""
         )
 
         message = MockMessage(
@@ -200,7 +179,7 @@ class TestTelegramForwardMessageDetection:
             from_user=MockUser(id=999, first_name="Dev"),
             chat=MockChat(id=888, type="private"),
             forward_from_chat=forward_chat,
-            forward_date=1738087200
+            forward_date=1738087200,
         )
 
         update = Mock()
@@ -212,12 +191,7 @@ class TestTelegramForwardMessageDetection:
 
     def test_format_forwarded_text_from_chat_no_title(self, mock_telegram_channel):
         """Test formatting when forwarded chat has no title."""
-        forward_chat = MockChat(
-            id=-100111222333,
-            type="group",
-            title="",
-            username="unknown_group"
-        )
+        forward_chat = MockChat(id=-100111222333, type="group", title="", username="unknown_group")
 
         message = MockMessage(
             message_id=100,
@@ -225,7 +199,7 @@ class TestTelegramForwardMessageDetection:
             from_user=MockUser(id=999, first_name="User"),
             chat=MockChat(id=888, type="private"),
             forward_from_chat=forward_chat,
-            forward_date=1738080000
+            forward_date=1738080000,
         )
 
         update = Mock()
@@ -245,7 +219,7 @@ class TestTelegramForwardMessageDetection:
             from_user=MockUser(id=999, first_name="User"),
             chat=MockChat(id=888, type="private"),
             forward_from=forward_user,
-            forward_date=None
+            forward_date=None,
         )
 
         update = Mock()
@@ -264,7 +238,7 @@ class TestTelegramForwardMessageDetection:
             message_id=100,
             text="Regular message",
             from_user=MockUser(id=999, first_name="User"),
-            chat=MockChat(id=888, type="private")
+            chat=MockChat(id=888, type="private"),
         )
 
         update = Mock()
@@ -284,7 +258,7 @@ class TestTelegramForwardMessageDetection:
             chat=MockChat(id=888, type="private"),
             forward_from=None,
             forward_from_chat=None,
-            forward_date=1738080000
+            forward_date=1738080000,
         )
 
         update = Mock()
@@ -304,8 +278,8 @@ class TestTelegramForwardMessageDetection:
 class TestTelegramForwardedTaskCreation:
     """Test task creation from forwarded messages."""
 
-    @patch('taskboard.Task')
-    @patch('taskboard.ScheduleType')
+    @patch("taskboard.Task")
+    @patch("taskboard.ScheduleType")
     def test_create_task_from_forwarded_message(
         self, mock_schedule_type, mock_task_class, mock_telegram_channel
     ):
@@ -318,7 +292,7 @@ class TestTelegramForwardedTaskCreation:
             from_user=MockUser(id=999, first_name="Bob"),
             chat=MockChat(id=888, type="private"),
             forward_from=forward_user,
-            forward_date=1738080000
+            forward_date=1738080000,
         )
 
         update = Mock()
@@ -342,8 +316,8 @@ class TestTelegramForwardedTaskCreation:
         assert ", forwarded" in call_kwargs["tags"]
         assert "📨 " in call_kwargs["title"]
 
-    @patch('taskboard.Task')
-    @patch('taskboard.ScheduleType')
+    @patch("taskboard.Task")
+    @patch("taskboard.ScheduleType")
     def test_create_task_from_normal_message(
         self, mock_schedule_type, mock_task_class, mock_telegram_channel
     ):
@@ -352,7 +326,7 @@ class TestTelegramForwardedTaskCreation:
             message_id=100,
             text="Regular task",
             from_user=MockUser(id=999, first_name="Bob"),
-            chat=MockChat(id=888, type="private")
+            chat=MockChat(id=888, type="private"),
         )
 
         update = Mock()
@@ -379,11 +353,7 @@ class TestTelegramForwardedMessageScenarios:
 
     def test_user_forwards_news_article(self, mock_telegram_channel):
         """Simulate a user forwarding a news article from a channel."""
-        forward_chat = MockChat(
-            id=-100123456789,
-            type="channel",
-            title="Breaking News"
-        )
+        forward_chat = MockChat(id=-100123456789, type="channel", title="Breaking News")
 
         message = MockMessage(
             message_id=100,
@@ -391,7 +361,7 @@ class TestTelegramForwardedMessageScenarios:
             from_user=MockUser(id=999, first_name="Investor"),
             chat=MockChat(id=888, type="private"),
             forward_from_chat=forward_chat,
-            forward_date=1738080000
+            forward_date=1738080000,
         )
 
         update = Mock()
@@ -412,7 +382,7 @@ class TestTelegramForwardedMessageScenarios:
             from_user=MockUser(id=999, first_name="Learner"),
             chat=MockChat(id=888, type="private"),
             forward_from=forward_user,
-            forward_date=1738083600
+            forward_date=1738083600,
         )
 
         update = Mock()
@@ -440,7 +410,7 @@ and some bullet points:
             from_user=MockUser(id=999, first_name="Receiver"),
             chat=MockChat(id=888, type="private"),
             forward_from=forward_user,
-            forward_date=1738087200
+            forward_date=1738087200,
         )
 
         update = Mock()
@@ -463,7 +433,7 @@ and some bullet points:
             from_user=MockUser(id=999, first_name="User"),
             chat=MockChat(id=888, type="private"),
             forward_from=forward_user,
-            forward_date=1738080000
+            forward_date=1738080000,
         )
 
         update = Mock()
@@ -479,8 +449,8 @@ and some bullet points:
 class TestTelegramForwardedMessageIntegration:
     """Integration tests for the complete forwarded message flow."""
 
-    @patch('taskboard.Task')
-    @patch('taskboard.ScheduleType')
+    @patch("taskboard.Task")
+    @patch("taskboard.ScheduleType")
     def test_complete_forwarded_message_flow(
         self, mock_schedule_type, mock_task_class, mock_telegram_channel
     ):
@@ -496,7 +466,7 @@ class TestTelegramForwardedMessageIntegration:
             from_user=current_user,
             chat=chat,
             forward_from=forward_user,
-            forward_date=1738080000
+            forward_date=1738080000,
         )
 
         update = Mock()

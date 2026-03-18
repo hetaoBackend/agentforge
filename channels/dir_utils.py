@@ -10,10 +10,10 @@ Two features:
 
 from __future__ import annotations
 
+import json
 import os
 import re
-import json
-from typing import Optional, TYPE_CHECKING
+from typing import TYPE_CHECKING, Optional
 
 if TYPE_CHECKING:
     from taskboard import TaskDB
@@ -83,6 +83,7 @@ def extract_working_dir_with_claude(prompt: str) -> Optional[str]:
 
     try:
         import requests  # already in pyproject.toml
+
         resp = requests.post(
             "https://api.anthropic.com/v1/messages",
             headers={
