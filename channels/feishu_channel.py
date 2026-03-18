@@ -15,6 +15,7 @@ Configure via settings API:
 import base64
 import json
 import threading
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 
@@ -545,9 +546,9 @@ class FeishuChannel(Channel):
         parts.append(f"转发自: {sender_name}")
 
         if forwarded.get("timestamp"):
-            from datetime import datetime
-
-            ts = datetime.fromtimestamp(forwarded["timestamp"])
+            ts = datetime.fromtimestamp(
+                forwarded["timestamp"], tz=timezone(timedelta(hours=8))
+            )
             parts.append(f"时间: {ts.strftime('%Y-%m-%d %H:%M')}")
 
         parts.append("\n--- 转发内容 ---")

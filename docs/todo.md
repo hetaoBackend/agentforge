@@ -2,6 +2,16 @@
 
 ## In Progress
 
+- [x] **修复转发消息时间格式测试失败** — 统一 Feishu / Telegram 转发时间按北京时间 `UTC+8` 格式化
+  - ✅ 已修复：`channels/feishu_channel.py` 与 `channels/telegram_channel.py` 不再依赖进程本地时区
+  - ✅ 验证：相关 3 个失败用例通过；`tests/test_feishu_forwarded_messages.py` 和 `tests/test_telegram_forwarded_messages.py` 全部通过
+- [x] **rebase `codex/backend-quality-and-heartbeat` onto latest `origin/main`** — 解决 PR #6 的文本冲突并保留 heartbeat + backend quality baseline 改动
+  - ✅ 已完成：`git rebase origin/main` 成功，`9ae1cdd` 被自动识别为已在上游并 dropped
+  - ✅ 已确认：`git merge-base HEAD origin/main` 与 `origin/main` 均为 `6aeb72e`
+  - ✅ 验证：`make check` 通过，`54 passed`
+- [x] **检查并处理当前分支的 merge conflicts** — 核对 git merge/rebase 状态、未合并文件以及与 `main` 的分叉点
+  - ✅ 已确认：当前无进行中的 merge/rebase，`git diff --name-only --diff-filter=U` 为空
+  - ✅ 已确认：`HEAD`、`main`、`merge-base` 均为 `626f16b`，当前工作树 clean
 - [x] **建立后端 lint/test/CI 基线** — 为 Python 后端接入 `ruff`、`pytest` 覆盖率和 GitHub Actions 质量门禁
   - ✅ 已完成：`pyproject.toml` 新增 `ruff` / `pytest-cov` 与 lint、pytest、coverage 配置
   - ✅ 已完成：`Makefile` 新增 `lint` / `format` / `format-check` / `test` / `test-cov` / `check`
