@@ -546,7 +546,9 @@ class FeishuChannel(Channel):
         parts.append(f"转发自: {sender_name}")
 
         if forwarded.get("timestamp"):
-            ts = datetime.fromtimestamp(forwarded["timestamp"], tz=timezone(timedelta(hours=8)))
+            ts = datetime.fromtimestamp(
+                forwarded["timestamp"], tz=timezone(timedelta(hours=8))
+            )
             parts.append(f"时间: {ts.strftime('%Y-%m-%d %H:%M')}")
 
         parts.append("\n--- 转发内容 ---")

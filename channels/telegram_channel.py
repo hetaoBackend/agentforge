@@ -325,7 +325,9 @@ class TelegramChannel(Channel):
 
         # 添加时间戳
         if msg.forward_date:
-            ts = datetime.fromtimestamp(msg.forward_date, tz=timezone(timedelta(hours=8)))
+            ts = datetime.fromtimestamp(
+                msg.forward_date, tz=timezone(timedelta(hours=8))
+            )
             parts.append(f"时间: {ts.strftime('%Y-%m-%d %H:%M')}")
 
         parts.append("\n--- 转发内容 ---")
