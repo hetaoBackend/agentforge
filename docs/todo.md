@@ -174,3 +174,9 @@
     - 测试验证：Python 进程 PID 变化确认热重载工作正常
   - 预计工作量：2-3小时（实际完成时间：约30分钟）
   - 难度评估：⭐⭐⭐☆☆（中等偏易）
+
+- [x] **修复 macOS App 创建任务的 Feishu 卡片通知** — 排查 UI 创建任务的结果通知是否绕过当前 Feishu 渲染链路，并统一到优化后的卡片发送逻辑
+  - ✅ 已完成：Electron `package/make` 现在会在打包前自动重建 `taskboard-electron/resources/taskboard`，避免 macOS App 继续携带旧的 Python backend
+  - ✅ 已完成：新增 `taskboard-electron/scripts/build-backend.mjs`，统一复用 `make build-backend` 构建 bundled backend；`Makefile` 同步避免重复构建
+  - ✅ 验证：`uv run pytest tests/test_feishu_message_rendering.py tests/test_feishu_forwarded_messages.py -q` 通过，`19 passed`
+  - ✅ 验证：`node taskboard-electron/scripts/build-backend.mjs` 通过，并生成新的 `taskboard-electron/resources/taskboard`
