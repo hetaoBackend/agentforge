@@ -37,12 +37,12 @@ build-backend:
 
 build-electron:
 	@echo "构建Electron应用..."
-	cd $(ELECTRON_DIR) && npm run package
+	cd $(ELECTRON_DIR) && SKIP_BACKEND_BUILD=1 npm run package
 	@echo "Electron应用构建完成"
 
 package-dmg: build-backend build-electron
 	@echo "打包DMG文件..."
-	cd $(ELECTRON_DIR) && npm run make
+	cd $(ELECTRON_DIR) && SKIP_BACKEND_BUILD=1 npm run make
 	@if [ -f "$(DMG_OUTPUT)" ]; then \
 		echo "DMG文件生成成功: $(DMG_OUTPUT)"; \
 		ls -lh "$(DMG_OUTPUT)"; \

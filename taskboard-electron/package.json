@@ -6,6 +6,8 @@
   "main": ".vite/build/main.js",
   "private": true,
   "scripts": {
+    "prepackage": "node scripts/build-backend.mjs",
+    "premake": "node scripts/build-backend.mjs",
     "start": "electron-forge start",
     "package": "electron-forge package",
     "make": "electron-forge make",
