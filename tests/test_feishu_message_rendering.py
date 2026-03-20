@@ -76,7 +76,7 @@ class TestFeishuNotificationCards:
             for element in card["body"]["elements"]
         )
 
-    def test_build_completed_card_wraps_long_body_in_collapsible_panel(self, mock_feishu_channel):
+    def test_build_completed_card_keeps_long_body_visible(self, mock_feishu_channel):
         task = {
             "id": 99,
             "title": "Long output task",
@@ -93,10 +93,13 @@ class TestFeishuNotificationCards:
             body_text=long_text,
         )
 
-        assert card["body"]["elements"][0]["tag"] == "collapsible_panel"
-        assert card["body"]["elements"][0]["elements"][0]["content"] == long_text
+        assert card["body"]["elements"][0]["tag"] == "markdown"
+        assert card["body"]["elements"] == [{"tag": "markdown", "content": long_text}]
+        assert not any(
+            element.get("tag") == "collapsible_panel" for element in card["body"]["elements"]
+        )
 
-    def test_build_completed_card_expanded_panel_keeps_full_remainder(self, mock_feishu_channel):
+    def test_build_completed_card_long_body_keeps_full_remainder(self, mock_feishu_channel):
         task = {
             "id": 100,
             "title": "Long output task",
@@ -113,18 +116,15 @@ class TestFeishuNotificationCards:
             body_text=long_text,
         )
 
-        panel = next(
-            element
-            for element in card["body"]["elements"]
-            if element.get("tag") == "collapsible_panel"
+        assert card["body"]["elements"][0]["content"].startswith("A" * 20)
+        assert "".join(element["content"] for element in card["body"]["elements"]) == long_text
+        assert "truncated" not in "".join(
+            element["content"] for element in card["body"]["elements"]
         )
-        expanded_text = panel["elements"][0]["content"]
 
-        assert expanded_text.startswith("A" * 20)
-        assert expanded_text.endswith("B" * 20)
-        assert "truncated" not in expanded_text
-
-    def test_build_completed_card_long_body_uses_summary_plus_full_panel(self, mock_feishu_channel):
+    def test_build_completed_card_long_body_uses_summary_plus_full_content(
+        self, mock_feishu_channel
+    ):
         task = {
             "id": 101,
             "title": "Long output task",
@@ -142,24 +142,29 @@ class TestFeishuNotificationCards:
         )
 
         assert card["config"]["summary"]["content"] == "Summary line"
-        assert card["body"]["elements"] == [
-            {
-                "tag": "collapsible_panel",
-                "expanded": False,
-                "header": {
-                    "title": {
-                        "tag": "plain_text",
-                        "content": "展开查看完整结果",
-                    }
-                },
-                "elements": [
-                    {
-                        "tag": "markdown",
-                        "content": long_text,
-                    }
-                ],
-            }
-        ]
+        assert card["body"]["elements"] == [{"tag": "markdown", "content": long_text}]
+
+    def test_build_completed_card_long_body_has_no_collapsible_panel(self, mock_feishu_channel):
+        task = {
+            "id": 102,
+            "title": "Long output task",
+            "prompt": "输出一份很长的结果",
+            "agent": "codex",
+            "working_dir": "~/workspace/agentforge",
+        }
+        long_text = "Intro line\n" + ("B" * 1400)
+
+        card = mock_feishu_channel._build_notification_card(
+            task_id=102,
+            task=task,
+            is_completed=True,
+            body_text=long_text,
+        )
+
+        assert not any(
+            element.get("tag") == "collapsible_panel" for element in card["body"]["elements"]
+        )
+        assert "".join(element["content"] for element in card["body"]["elements"]) == long_text
 
     def test_send_uses_structured_card_and_fallback_content(self, mock_feishu_channel):
         task = {
