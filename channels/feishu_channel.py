@@ -65,8 +65,6 @@ HELP_TEXT = """\
 • 回复任意结果通知即可继续对话。
 """
 
-FEISHU_RESULT_PREVIEW_LIMIT = 500
-FEISHU_INLINE_RESULT_LIMIT = 1200
 FEISHU_CARD_MARKDOWN_CHUNK = 7000
 FEISHU_FALLBACK_MARKDOWN_LIMIT = 8000
 
@@ -423,30 +421,9 @@ class FeishuChannel(Channel):
 
     def _build_result_elements(self, body_text: str) -> list[dict[str, Any]]:
         clean_body = (body_text or "").strip() or "Done."
-        if len(clean_body) <= FEISHU_INLINE_RESULT_LIMIT:
-            return [
-                {
-                    "tag": "markdown",
-                    "content": clean_body,
-                }
-            ]
-
-        panel_elements = [
+        return [
             {"tag": "markdown", "content": chunk}
             for chunk in self._chunk_text(clean_body, FEISHU_CARD_MARKDOWN_CHUNK)
-        ]
-        return [
-            {
-                "tag": "collapsible_panel",
-                "expanded": False,
-                "header": {
-                    "title": {
-                        "tag": "plain_text",
-                        "content": "展开查看完整结果",
-                    }
-                },
-                "elements": panel_elements,
-            },
         ]
 
     def _build_legacy_markdown_card(self, content: str) -> dict[str, Any]:
