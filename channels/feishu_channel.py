@@ -65,6 +65,11 @@ HELP_TEXT = """\
 • 回复任意结果通知即可继续对话。
 """
 
+FEISHU_RESULT_PREVIEW_LIMIT = 500
+FEISHU_INLINE_RESULT_LIMIT = 1200
+FEISHU_CARD_MARKDOWN_CHUNK = 7000
+FEISHU_FALLBACK_MARKDOWN_LIMIT = 8000
+
 
 class FeishuChannel(Channel):
     """Feishu/Lark channel integration using WebSocket long-connection."""
@@ -201,8 +206,6 @@ class FeishuChannel(Channel):
 
         if is_completed:
             result_text = (msg.payload.get("result") or task.get("result") or "").strip()
-            if len(result_text) > 10000:
-                result_text = result_text[:10000] + "\n…(truncated)"
             content = result_text or "Done."
         else:
             error_text = (msg.payload.get("error") or task.get("error") or "Unknown error").strip()[
@@ -233,7 +236,12 @@ class FeishuChannel(Channel):
         if not sent_id:
             chat_id = self.db.get_setting("feishu_default_chat_id")
             if chat_id:
-                sent_id = self._send_message(chat_id, content, card=card, fallback_content=content)
+                sent_id = self._send_message(
+                    chat_id,
+                    content,
+                    card=card,
+                    fallback_content=self._truncate_text(content, FEISHU_FALLBACK_MARKDOWN_LIMIT),
+                )
 
         if sent_id:
             print(f"[Feishu] Notification sent successfully, message_id: {sent_id}")
@@ -415,7 +423,7 @@ class FeishuChannel(Channel):
 
     def _build_result_elements(self, body_text: str) -> list[dict[str, Any]]:
         clean_body = (body_text or "").strip() or "Done."
-        if len(clean_body) <= 1200:
+        if len(clean_body) <= FEISHU_INLINE_RESULT_LIMIT:
             return [
                 {
                     "tag": "markdown",
@@ -423,13 +431,11 @@ class FeishuChannel(Channel):
                 }
             ]
 
-        preview = self._truncate_text(clean_body, 500)
-        full_text = self._truncate_text(clean_body, 8000)
+        panel_elements = [
+            {"tag": "markdown", "content": chunk}
+            for chunk in self._chunk_text(clean_body, FEISHU_CARD_MARKDOWN_CHUNK)
+        ]
         return [
-            {
-                "tag": "markdown",
-                "content": preview,
-            },
             {
                 "tag": "collapsible_panel",
                 "expanded": False,
@@ -439,12 +445,7 @@ class FeishuChannel(Channel):
                         "content": "展开查看完整结果",
                     }
                 },
-                "elements": [
-                    {
-                        "tag": "markdown",
-                        "content": full_text,
-                    }
-                ],
+                "elements": panel_elements,
             },
         ]
 
@@ -459,6 +460,12 @@ class FeishuChannel(Channel):
         if len(normalized) <= limit:
             return normalized
         return normalized[:limit].rstrip() + "\n…(truncated)"
+
+    def _chunk_text(self, text: str, limit: int) -> list[str]:
+        normalized = text.replace("\r\n", "\n")
+        if not normalized:
+            return [""]
+        return [normalized[i : i + limit] for i in range(0, len(normalized), limit)]
 
     def _escape_feishu_markdown(self, text: str) -> str:
         return text.replace("\\", "\\\\")

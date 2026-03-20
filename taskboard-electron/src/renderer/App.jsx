@@ -1,4 +1,11 @@
 import { useState, useEffect, useCallback, useRef } from "react";
+import {
+  formatDateTimeLocalInput,
+  formatTaskDateTime,
+  formatTaskTime,
+  parseTaskDateTime,
+  serializeDateTimeLocalInput,
+} from "./dateTime.mjs";
 
 const API = "http://127.0.0.1:9712/api";
 
@@ -611,7 +618,7 @@ function TaskCard({ task, onAction, onViewDetail }) {
             <Tag>⏳ {task.delay_seconds}s</Tag>
           )}
           {task.schedule_type === "scheduled_at" && task.next_run_at && (
-            <Tag>📅 {new Date(task.next_run_at).toLocaleString()}</Tag>
+            <Tag>📅 {formatTaskDateTime(task.next_run_at)}</Tag>
           )}
           {task.schedule_type === "cron" && (
             <Tag>⏲ {task.cron_expr}</Tag>
@@ -639,7 +646,7 @@ function TaskCard({ task, onAction, onViewDetail }) {
       {task.run_count > 0 && (
         <div style={{ fontSize: 10, color: theme.textDim, marginTop: 8, fontFamily: "monospace" }}>
           Runs: {task.run_count}{task.max_runs ? ` / ${task.max_runs}` : ""}
-          {task.last_run_at && ` · Last: ${new Date(task.last_run_at).toLocaleTimeString()}`}
+          {task.last_run_at && ` · Last: ${formatTaskTime(task.last_run_at)}`}
         </div>
       )}
 
@@ -948,9 +955,9 @@ function HeartbeatCard({ heartbeat, onAction, onViewDetail }) {
       </div>
 
       <div style={{ fontSize: 11, color: theme.textDim, marginTop: 10, fontFamily: "monospace", lineHeight: 1.6 }}>
-        Next: {heartbeat.next_run_at ? new Date(heartbeat.next_run_at).toLocaleString() : "n/a"}
+        Next: {heartbeat.next_run_at ? formatTaskDateTime(heartbeat.next_run_at) : "n/a"}
         {" · "}
-        Triggered: {heartbeat.last_triggered_at ? new Date(heartbeat.last_triggered_at).toLocaleString() : "never"}
+        Triggered: {heartbeat.last_triggered_at ? formatTaskDateTime(heartbeat.last_triggered_at) : "never"}
       </div>
       {heartbeat.last_error && (
         <div style={{ fontSize: 11, color: theme.red, marginTop: 6, lineHeight: 1.4 }}>
@@ -1037,9 +1044,9 @@ function HeartbeatDetailPanel({ heartbeat, ticks, onClose }) {
           {heartbeat.last_decision && <Tag>{heartbeat.last_decision}</Tag>}
         </div>
         <div style={{ fontSize: 12, color: theme.textMuted, lineHeight: 1.7, marginBottom: 18 }}>
-          <div>Next run: {heartbeat.next_run_at ? new Date(heartbeat.next_run_at).toLocaleString() : "n/a"}</div>
-          <div>Last tick: {heartbeat.last_tick_at ? new Date(heartbeat.last_tick_at).toLocaleString() : "never"}</div>
-          <div>Last trigger: {heartbeat.last_triggered_at ? new Date(heartbeat.last_triggered_at).toLocaleString() : "never"}</div>
+          <div>Next run: {heartbeat.next_run_at ? formatTaskDateTime(heartbeat.next_run_at) : "n/a"}</div>
+          <div>Last tick: {heartbeat.last_tick_at ? formatTaskDateTime(heartbeat.last_tick_at) : "never"}</div>
+          <div>Last trigger: {heartbeat.last_triggered_at ? formatTaskDateTime(heartbeat.last_triggered_at) : "never"}</div>
           <div>Cooldown: {heartbeat.cooldown_seconds || 0}s</div>
         </div>
         <div style={{ marginBottom: 20 }}>
@@ -1083,7 +1090,7 @@ function HeartbeatDetailPanel({ heartbeat, ticks, onClose }) {
                   <div onClick={() => setSelectedTickId(tick.id)} style={{ display: "flex", justifyContent: "space-between", gap: 8, marginBottom: 6 }}>
                     <div style={{ fontSize: 12, fontWeight: 600, color: theme.text }}>{tick.decision_type || tick.status}</div>
                     <div style={{ fontSize: 11, color: theme.textDim, fontFamily: "monospace" }}>
-                      {tick.started_at ? new Date(tick.started_at).toLocaleString() : ""}
+                      {tick.started_at ? formatTaskDateTime(tick.started_at) : ""}
                     </div>
                   </div>
                   {payload?.reason && (
@@ -1155,7 +1162,7 @@ function NewTaskModal({ onClose, onSubmit, initialData, mode = "create" }) {
         cron_expr: initialData.cron_expr || "",
         delay_seconds: initialData.delay_seconds || 60,
         scheduled_at: initialData.next_run_at
-          ? new Date(initialData.next_run_at).toISOString().slice(0, 16)
+          ? formatDateTimeLocalInput(initialData.next_run_at)
           : "",
         max_runs: initialData.max_runs || "",
         tags: initialData.tags || "",
@@ -1236,13 +1243,14 @@ function NewTaskModal({ onClose, onSubmit, initialData, mode = "create" }) {
 
     // Handle scheduled_at: convert datetime-local to ISO timestamp
     if (form.schedule_type === "scheduled_at") {
-      const localDate = new Date(form.scheduled_at);
-      if (!form.scheduled_at || isNaN(localDate.getTime())) {
+      const localDate = parseTaskDateTime(form.scheduled_at);
+      const serialized = serializeDateTimeLocalInput(form.scheduled_at);
+      if (!form.scheduled_at || !serialized || !localDate || isNaN(localDate.getTime())) {
         setScheduledAtError("Please enter a valid date and time.");
         return;
       }
       setScheduledAtError("");
-      data.next_run_at = localDate.toISOString();
+      data.next_run_at = serialized;
     }
 
     onSubmit(data);
@@ -1621,7 +1629,7 @@ function DetailPanel({ task, onClose, onRespond, onResume }) {
       </h2>
 
       <div style={{ fontSize: 11, color: theme.textDim, marginBottom: 24, fontFamily: "monospace" }}>
-        ID: {task.id} · Created: {new Date(task.created_at).toLocaleString()}
+        ID: {task.id} · Created: {formatTaskDateTime(task.created_at)}
       </div>
 
       <Section title="Prompt">
@@ -1654,7 +1662,7 @@ function DetailPanel({ task, onClose, onRespond, onResume }) {
         <InfoRow label="Schedule" value={task.schedule_type} />
         {task.cron_expr && <InfoRow label="Cron" value={task.cron_expr} />}
         {task.delay_seconds && <InfoRow label="Delay" value={`${task.delay_seconds}s`} />}
-        {task.next_run_at && <InfoRow label="Next Run" value={new Date(task.next_run_at).toLocaleString()} />}
+        {task.next_run_at && <InfoRow label="Next Run" value={formatTaskDateTime(task.next_run_at)} />}
         <InfoRow label="Runs" value={`${task.run_count}${task.max_runs ? ` / ${task.max_runs}` : ""}`} />
         {task.dag_id && <InfoRow label="DAG" value={task.dag_id} />}
       </Section>
@@ -1924,7 +1932,7 @@ function DetailPanel({ task, onClose, onRespond, onResume }) {
                     {event.event_type}
                   </span>
                   <span style={{ color: theme.textDim, fontSize: 9 }}>
-                    {new Date(event.timestamp).toLocaleTimeString()}
+                    {formatTaskTime(event.timestamp)}
                   </span>
                 </div>
                 <div style={{
