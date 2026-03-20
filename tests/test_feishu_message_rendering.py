@@ -114,7 +114,9 @@ class TestFeishuNotificationCards:
         )
 
         panel = next(
-            element for element in card["body"]["elements"] if element.get("tag") == "collapsible_panel"
+            element
+            for element in card["body"]["elements"]
+            if element.get("tag") == "collapsible_panel"
         )
         expanded_text = panel["elements"][0]["content"]
 

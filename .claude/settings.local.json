@@ -12,7 +12,11 @@
       "Bash(grep -v \"^$\\\\|^\\\\s*$\")",
       "WebFetch(domain:wttr.in)",
       "WebFetch(domain:richerculture.cn)",
-      "Skill(agent-browser)"
+      "Skill(agent-browser)",
+      "Bash(git fetch:*)",
+      "Bash(git merge:*)",
+      "Bash(uv run:*)",
+      "Bash(git:*)"
     ]
   }
 }
