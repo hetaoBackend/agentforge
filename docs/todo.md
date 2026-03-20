@@ -3,7 +3,7 @@
 ## In Progress
 
 - [x] **修复 Feishu 卡片展开后仍显示 truncated 内容** — 排查折叠面板完整结果的组装逻辑，确保展开后显示完整正文而不是再次裁剪后的剩余片段
-  - ✅ 已修复：长结果卡片改为“折叠态仅显示 summary，展开态显示完整正文”，不再在面板外额外渲染截断预览
+  - ✅ 已修复：长结果卡片改为”折叠态仅显示 summary，展开态显示完整正文”，不再在面板外额外渲染截断预览
   - ✅ 已修复：展开区按 chunk 承载完整正文，避免 `truncated` 出现在展开内容里，也避免预览与正文重复阅读
   - ✅ 验证：`pytest -q tests/test_feishu_message_rendering.py` 通过，`7 passed`
 - [ ] **起草前后端大文件拆分 RFC** — 基于 `taskboard.py` 与 `taskboard-electron/src/renderer/App.jsx` 的现状，设计可渐进落地的重构方案、模块边界与迁移节奏
