@@ -115,7 +115,6 @@ class TestFeishuNotificationCards:
             is_completed=True,
             body_text=long_text,
         )
-
         assert card["body"]["elements"][0]["content"].startswith("A" * 20)
         assert "".join(element["content"] for element in card["body"]["elements"]) == long_text
         assert "truncated" not in "".join(
