@@ -2,6 +2,19 @@
 
 ## In Progress
 
+- [x] **修复 Feishu 卡片展开后仍显示 truncated 内容** — 排查折叠面板完整结果的组装逻辑，确保展开后显示完整正文而不是再次裁剪后的剩余片段
+  - ✅ 已修复：长结果卡片改为”折叠态仅显示 summary，展开态显示完整正文”，不再在面板外额外渲染截断预览
+  - ✅ 已修复：展开区按 chunk 承载完整正文，避免 `truncated` 出现在展开内容里，也避免预览与正文重复阅读
+  - ✅ 验证：`pytest -q tests/test_feishu_message_rendering.py` 通过，`7 passed`
+- [ ] **起草前后端大文件拆分 RFC** — 基于 `taskboard.py` 与 `taskboard-electron/src/renderer/App.jsx` 的现状，设计可渐进落地的重构方案、模块边界与迁移节奏
+- [x] **修复 macOS App 中 scheduled_at 时间未按系统时区展示** — 统一 `scheduled_at` 在前端列表展示、详情展示、编辑弹窗回填的本地时区格式，避免 `toISOString()` 导致的 UTC 偏移
+  - ✅ 已修复：新增 renderer 时间工具，统一解析 offset-aware/naive 时间；`scheduled_at` 编辑弹窗回填不再走 `toISOString()`
+  - ✅ 已修复：任务卡片、任务详情、heartbeat 面板和事件时间展示统一走本地时区格式化
+  - ✅ 验证：`TZ=Asia/Shanghai node --test taskboard-electron/src/renderer/dateTime.test.mjs` 通过；`cd taskboard-electron && npx vite build --config vite.renderer.config.mjs` 通过
+- [x] **修复 scheduler 的 naive/aware datetime 比较崩溃** — 统一 `scheduled_at` 的 `next_run_at` 存储格式，并兼容旧数据中的 offset-aware ISO 时间，避免 scheduler tick 抛出 `can't compare offset-naive and offset-aware datetimes`
+  - ✅ 已修复：后端会把 offset-aware 的 `next_run_at` 归一化为本地 naive 时间存储，`get_due_tasks()` / `get_due_heartbeats()` 改为 Python 层按规范化后的 datetime 判断 due
+  - ✅ 已修复：scheduler tick 与 heartbeat dedupe cooldown 都兼容旧数据里的 offset-aware ISO 时间，不再触发 naive/aware 比较异常
+  - ✅ 验证：`uv run pytest -q` 通过，`61 passed`（存在既有 warning：Telegram 测试里有一个未 awaited coroutine）
 - [ ] **修复 Feishu 默认通知接收人 `open_id cross app`** — 排查默认通知 fallback 使用 `open_id` 发送时的跨应用问题，并补充更安全的接收人解析与提示文案
 - [x] **优化 Feishu 结果展示** — 参考 `agentara` 的消息渲染实现，梳理当前 Feishu 输出格式并改进可读性与结构化展示
   - ✅ 已完成：`channels/feishu_channel.py` 改为生成更简洁的结构化 Feishu 卡片，成功时直接展示最终结果，长文本使用折叠面板承载完整内容

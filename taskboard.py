@@ -90,6 +90,33 @@ def _get_env() -> dict:
     return env
 
 
+def _parse_comparable_datetime(value: Optional[str]) -> Optional[datetime]:
+    """Parse ISO datetimes and collapse aware values into local naive datetimes.
+
+    The app historically stored naive local timestamps, but the Electron UI can
+    submit offset-aware ISO strings for `scheduled_at`. Converting aware values
+    into the local timezone and stripping tzinfo keeps storage/comparisons
+    consistent with the rest of the backend while remaining backward compatible
+    with legacy rows.
+    """
+    if not value:
+        return None
+    dt = datetime.fromisoformat(value)
+    if dt.tzinfo is not None:
+        return dt.astimezone().replace(tzinfo=None)
+    return dt
+
+
+def _normalize_datetime_for_storage(value: Optional[str]) -> Optional[str]:
+    if value is None:
+        return None
+    try:
+        dt = _parse_comparable_datetime(value)
+    except ValueError:
+        return value
+    return dt.isoformat() if dt else None
+
+
 # ──────────────────────────── Models ────────────────────────────
 
 
@@ -623,18 +650,25 @@ class TaskDB:
             return [self._deserialize_heartbeat(r) for r in rows]
 
     def get_due_heartbeats(self) -> list[dict]:
-        now = datetime.now().isoformat()
         with self.lock:
             rows = self.conn.execute(
                 """
                 SELECT * FROM heartbeats
                 WHERE enabled = 1
                   AND next_run_at IS NOT NULL
-                  AND next_run_at <= ?
-            """,
-                (now,),
+            """
             ).fetchall()
-            return [self._deserialize_heartbeat(r) for r in rows]
+            now = datetime.now()
+            due = []
+            for row in rows:
+                heartbeat = self._deserialize_heartbeat(row)
+                try:
+                    next_run_at = _parse_comparable_datetime(heartbeat.get("next_run_at"))
+                except ValueError:
+                    continue
+                if next_run_at and next_run_at <= now:
+                    due.append(heartbeat)
+            return due
 
     def delete_heartbeat(self, heartbeat_id: int):
         with self.transaction():
@@ -783,6 +817,8 @@ class TaskDB:
         if invalid:
             raise ValueError(f"Invalid task column(s): {invalid}")
         with self.lock:
+            if "next_run_at" in kwargs:
+                kwargs["next_run_at"] = _normalize_datetime_for_storage(kwargs["next_run_at"])
             kwargs["updated_at"] = datetime.now().isoformat()
             sets = ", ".join(f"{k} = ?" for k in kwargs)
             vals = list(kwargs.values()) + [task_id]
@@ -822,17 +858,24 @@ class TaskDB:
             return [self._deserialize_task(r) for r in rows]
 
     def get_due_tasks(self) -> list[dict]:
-        now = datetime.now().isoformat()
         with self.lock:
             rows = self.conn.execute(
                 """
                 SELECT * FROM tasks
                 WHERE status IN ('pending', 'scheduled')
-                  AND (next_run_at IS NULL OR next_run_at <= ?)
-            """,
-                (now,),
+            """
             ).fetchall()
-            return [self._deserialize_task(r) for r in rows]
+            now = datetime.now()
+            due = []
+            for row in rows:
+                task = self._deserialize_task(row)
+                try:
+                    next_run_at = _parse_comparable_datetime(task.get("next_run_at"))
+                except ValueError:
+                    continue
+                if next_run_at is None or next_run_at <= now:
+                    due.append(task)
+            return due
 
     def add_run(self, task_id: int) -> int:
         with self.lock:
@@ -1195,15 +1238,18 @@ class TaskScheduler(BusAwareSchedulerMixin):
                 self._schedule_delayed(task)
             elif task["schedule_type"] == "delayed" and task["status"] == "scheduled":
                 nra = task.get("next_run_at")
-                if nra and datetime.fromisoformat(nra) <= datetime.now():
+                run_at = _parse_comparable_datetime(nra) if nra else None
+                if run_at and run_at <= datetime.now():
                     self._spawn_task(task)
             elif task["schedule_type"] == "scheduled_at" and task["status"] == "scheduled":
                 nra = task.get("next_run_at")
-                if nra and datetime.fromisoformat(nra) <= datetime.now():
+                run_at = _parse_comparable_datetime(nra) if nra else None
+                if run_at and run_at <= datetime.now():
                     self._spawn_task(task)
             elif task["schedule_type"] == "cron" and task["status"] == "scheduled":
                 nra = task.get("next_run_at")
-                if nra and datetime.fromisoformat(nra) <= datetime.now():
+                run_at = _parse_comparable_datetime(nra) if nra else None
+                if run_at and run_at <= datetime.now():
                     self._spawn_task(task)
         due_heartbeats = self.db.get_due_heartbeats()
         for heartbeat in due_heartbeats:
@@ -1427,7 +1473,7 @@ class TaskScheduler(BusAwareSchedulerMixin):
         triggered_at = existing.get("triggered_at")
         if triggered_at:
             try:
-                triggered_dt = datetime.fromisoformat(triggered_at)
+                triggered_dt = _parse_comparable_datetime(triggered_at)
                 if cooldown > 0 and datetime.now() < triggered_dt + timedelta(seconds=cooldown):
                     return True
             except ValueError:
@@ -2211,6 +2257,7 @@ class TaskScheduler(BusAwareSchedulerMixin):
             task.status = TaskStatus.SCHEDULED
             if not task.next_run_at:
                 raise ValueError("scheduled_at requires next_run_at to be set")
+            task.next_run_at = _normalize_datetime_for_storage(task.next_run_at)
         elif task.schedule_type == ScheduleType.CRON:
             task.status = TaskStatus.SCHEDULED
             if task.cron_expr:
