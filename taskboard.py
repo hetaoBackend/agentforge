@@ -62,6 +62,14 @@ except ImportError:
     SLACK_CHANNEL_AVAILABLE = False
     SlackChannel = None
 
+try:
+    from channels.weixin_channel import WeixinChannel
+
+    WEIXIN_CHANNEL_AVAILABLE = True
+except ImportError:
+    WEIXIN_CHANNEL_AVAILABLE = False
+    WeixinChannel = None
+
 
 # ──────────────────────────── Helpers ────────────────────────────
 
@@ -115,6 +123,28 @@ def _normalize_datetime_for_storage(value: Optional[str]) -> Optional[str]:
     except ValueError:
         return value
     return dt.isoformat() if dt else None
+
+
+def _build_weixin_channel_status(db, weixin_channel) -> dict:
+    weixin_status = (
+        weixin_channel.get_status_snapshot()
+        if weixin_channel and hasattr(weixin_channel, "get_status_snapshot")
+        else {}
+    )
+    runtime_account_id = weixin_status.get("account_id", "")
+    configured_account_id = db.get_setting("weixin_account_id", "")
+    return {
+        "enabled": db.get_setting("weixin_enabled", "false") == "true",
+        "configured": bool(weixin_status.get("configured", False)),
+        "running": bool(weixin_channel and getattr(weixin_channel, "_running", False)),
+        "default_working_dir": db.get_setting("weixin_default_working_dir", "~"),
+        "base_url": db.get_setting("weixin_base_url", "https://ilinkai.weixin.qq.com"),
+        "account_id": runtime_account_id or configured_account_id,
+        "login_status": weixin_status.get("login_status", "idle"),
+        "qr_code_url": weixin_status.get("qr_code_url", ""),
+        "last_error": weixin_status.get("last_error", ""),
+        "user_id": weixin_status.get("user_id", ""),
+    }
 
 
 # ──────────────────────────── Models ────────────────────────────
@@ -2425,6 +2455,7 @@ class TaskAPIHandler(BaseHTTPRequestHandler):
     feishu_channel = None
     telegram_channel = None
     slack_channel = None
+    weixin_channel = None
 
     def do_OPTIONS(self):
         origin = self.headers.get("Origin", "")
@@ -2763,6 +2794,7 @@ class TaskAPIHandler(BaseHTTPRequestHandler):
                         "default_channel": self.db.get_setting("slack_default_channel", ""),
                         "default_user": self.db.get_setting("slack_default_user", ""),
                     },
+                    "weixin": _build_weixin_channel_status(self.db, self.weixin_channel),
                     "feishu": {
                         "configured": self.db.get_setting("feishu_enabled", "false") == "true",
                         "running": bool(
@@ -2969,6 +3001,10 @@ class TaskAPIHandler(BaseHTTPRequestHandler):
                 "slack_default_channel",
                 "slack_default_user",
                 "slack_enabled",
+                "weixin_default_working_dir",
+                "weixin_base_url",
+                "weixin_account_id",
+                "weixin_enabled",
             }
             for key, value in body.items():
                 if key in allowed:
@@ -3046,8 +3082,43 @@ class TaskAPIHandler(BaseHTTPRequestHandler):
             else:
                 logger.info("Slack channel disabled")
 
+            # ── Restart Weixin channel ──
+            wx_enabled = (
+                body.get("weixin_enabled") or self.db.get_setting("weixin_enabled", "false")
+            ) == "true"
+            if self.__class__.weixin_channel:
+                logger.info("Stopping existing Weixin channel...")
+                self.__class__.weixin_channel.stop()
+                self.__class__.weixin_channel = None
+            if wx_enabled and WEIXIN_CHANNEL_AVAILABLE:
+                logger.info("Starting Weixin channel with new settings...")
+                ch = WeixinChannel(
+                    bus=self.__class__.bus,
+                    db=self.db,
+                    scheduler=self.__class__.scheduler,
+                )
+                ch.start()
+                self.__class__.weixin_channel = ch
+                logger.info("Weixin channel started")
+            else:
+                logger.info("Weixin channel disabled")
+
             logger.info("Channel settings updated successfully")
             self._json_response({"status": "updated"})
+
+        elif path == "/api/channels/weixin/action":
+            action = (body.get("action") or "").strip().lower()
+            if not self.__class__.weixin_channel:
+                self._json_response({"error": "weixin channel not running"}, 400)
+                return
+            if action in {"login", "reconnect"}:
+                self.__class__.weixin_channel.request_login()
+                self._json_response({"status": "ok", "action": action})
+            elif action == "logout":
+                self.__class__.weixin_channel.request_logout()
+                self._json_response({"status": "ok", "action": action})
+            else:
+                self._json_response({"error": "unsupported action"}, 400)
 
         elif path == "/api/dag":
             # Batch-create a full DAG in one call.
@@ -3609,6 +3680,21 @@ def run_server(port: int = 9712):
         logger.info("Slack channel disabled")
     # ─────────────────────────────────────────────────────────────────────
 
+    # ── Weixin channel ───────────────────────────────────────────────────
+    weixin_channel = None
+    wx_enabled = db.get_setting("weixin_enabled", "false") == "true"
+    if WEIXIN_CHANNEL_AVAILABLE and wx_enabled:
+        logger.info("Starting Weixin channel...")
+        weixin_channel = WeixinChannel(
+            bus=bus,
+            db=db,
+            scheduler=scheduler,
+        )
+        weixin_channel.start()
+    else:
+        logger.info("Weixin channel disabled")
+    # ─────────────────────────────────────────────────────────────────────
+
     scheduler.start()
 
     TaskAPIHandler.scheduler = scheduler
@@ -3618,6 +3704,7 @@ def run_server(port: int = 9712):
     TaskAPIHandler.ui_channel = ui_channel
     TaskAPIHandler.telegram_channel = telegram_channel
     TaskAPIHandler.slack_channel = slack_channel
+    TaskAPIHandler.weixin_channel = weixin_channel
 
     server = QuietHTTPServer(("127.0.0.1", port), TaskAPIHandler)
     logger.info(f"API server running on http://127.0.0.1:{port}")
