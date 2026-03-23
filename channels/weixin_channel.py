@@ -315,6 +315,26 @@ class WeixinChannel(Channel):
         self._bridge_proc.stdin.write(json.dumps(payload, ensure_ascii=False) + "\n")
         self._bridge_proc.stdin.flush()
 
+    def request_login(self) -> None:
+        self._update_status(
+            configured=False,
+            login_status="idle",
+            qr_code_url="",
+            last_error="",
+            user_id="",
+        )
+        self._send_command({"type": "login"})
+
+    def request_logout(self) -> None:
+        self._update_status(
+            configured=False,
+            login_status="idle",
+            qr_code_url="",
+            last_error="",
+            user_id="",
+        )
+        self._send_command({"type": "logout"})
+
     def _update_status(self, **updates: Any) -> None:
         with self._status_lock:
             self._status.update({k: v for k, v in updates.items() if v is not None})

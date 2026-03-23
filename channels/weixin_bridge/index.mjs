@@ -382,6 +382,12 @@ async function handleCommand(command) {
   if (command.type === "login") {
     clearSession();
     await ensureLogin();
+    return;
+  }
+
+  if (command.type === "logout") {
+    clearSession();
+    emit({ type: "logged_out" });
   }
 }
 

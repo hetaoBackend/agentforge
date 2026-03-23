@@ -513,6 +513,13 @@ async function updateChannelsSettings(data) {
   });
 }
 
+async function runWeixinAction(action) {
+  await fetch(`${API}/channels/weixin/action`, {
+    method: "POST", headers: await csrfHeaders(),
+    body: JSON.stringify({ action }),
+  });
+}
+
 // ─── Components ───
 
 function Tooltip({ text, children }) {
@@ -2058,7 +2065,7 @@ function SettingsModal({ onClose, timeout: initialTimeout, defaultAgent: initial
   const [channelsSaving, setChannelsSaving] = useState(false);
   const [channelsMsg, setChannelsMsg] = useState(null);
   const [weixinQrSrc, setWeixinQrSrc] = useState("");
-  const [weixinQrDebug, setWeixinQrDebug] = useState("");
+  const [weixinActionBusy, setWeixinActionBusy] = useState(false);
   const [collapsedChannels, setCollapsedChannels] = useState({
     telegram: true,
     slack: true,
@@ -2090,49 +2097,54 @@ function SettingsModal({ onClose, timeout: initialTimeout, defaultAgent: initial
     const qrValue = channels.weixin?.qr_code_url || "";
     if (!qrValue) {
       setWeixinQrSrc("");
-      setWeixinQrDebug("empty");
       return () => {
         cancelled = true;
       };
     }
 
     if (isWeixinQrImageSource(qrValue)) {
-      const debug = `image-src len=${qrValue.length} prefix=${qrValue.slice(0, 80)}`;
-      console.log("[Weixin QR]", debug);
-      setWeixinQrDebug(debug);
       setWeixinQrSrc(qrValue);
       return () => {
         cancelled = true;
       };
     }
 
-    const payloadDebug = `payload len=${qrValue.length} prefix=${qrValue.slice(0, 80)}`;
-    console.log("[Weixin QR]", payloadDebug);
-    setWeixinQrDebug(payloadDebug);
     QRCode.toDataURL(qrValue, {
       errorCorrectionLevel: "M",
       margin: 2,
       width: 440,
     })
       .then((dataUrl) => {
-        console.log("[Weixin QR] generated data url", {
-          payloadLength: qrValue.length,
-          dataUrlPrefix: dataUrl.slice(0, 80),
-        });
         if (!cancelled) setWeixinQrSrc(dataUrl);
       })
       .catch((error) => {
         console.error("Failed to generate Weixin QR code", error);
-        if (!cancelled) {
-          setWeixinQrSrc("");
-          setWeixinQrDebug(`${payloadDebug} | generation failed: ${String(error)}`);
-        }
+        if (!cancelled) setWeixinQrSrc("");
       });
 
     return () => {
       cancelled = true;
     };
   }, [channels.weixin?.qr_code_url]);
+
+  const handleWeixinAction = async (action) => {
+    setWeixinActionBusy(true);
+    setChannelsMsg(null);
+    try {
+      await runWeixinAction(action);
+      const updated = await fetchChannelsStatus();
+      setChannels(c => mergeChannelsStatus(c, updated));
+      if (onChannelsSave) onChannelsSave(updated);
+      setChannelsMsg({
+        ok: true,
+        text: action === "logout" ? "Wechat logged out." : "Wechat login restarted.",
+      });
+    } catch (e) {
+      setChannelsMsg({ ok: false, text: String(e) });
+    } finally {
+      setWeixinActionBusy(false);
+    }
+  };
 
   const handleSaveGeneral = async () => {
     await updateSettings({ timeout: parseInt(timeout) || 600, default_agent: defaultAgent });
@@ -2581,6 +2593,43 @@ function SettingsModal({ onClose, timeout: initialTimeout, defaultAgent: initial
                         <div style={hintStyle}>Optional. Leave empty to let the bridge adopt the account id returned by QR login.</div>
                       </div>
 
+                      <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+                        <button
+                          onClick={() => handleWeixinAction("reconnect")}
+                          disabled={weixinActionBusy}
+                          style={{
+                            padding: "9px 14px",
+                            borderRadius: 8,
+                            border: `1px solid ${theme.border}`,
+                            background: theme.surface,
+                            color: theme.text,
+                            cursor: weixinActionBusy ? "not-allowed" : "pointer",
+                            fontSize: 12,
+                            fontWeight: 600,
+                            opacity: weixinActionBusy ? 0.6 : 1,
+                          }}
+                        >
+                          Reconnect
+                        </button>
+                        <button
+                          onClick={() => handleWeixinAction("logout")}
+                          disabled={weixinActionBusy}
+                          style={{
+                            padding: "9px 14px",
+                            borderRadius: 8,
+                            border: `1px solid ${theme.red}`,
+                            background: theme.redBg,
+                            color: theme.red,
+                            cursor: weixinActionBusy ? "not-allowed" : "pointer",
+                            fontSize: 12,
+                            fontWeight: 600,
+                            opacity: weixinActionBusy ? 0.6 : 1,
+                          }}
+                        >
+                          Logout
+                        </button>
+                      </div>
+
                       {(ch.qr_code_url || ch.login_status === "waiting_for_scan" || ch.login_status === "scanned" || ch.last_error) && (
                         <div style={{ marginBottom: 12, borderRadius: 8, border: `1px solid ${theme.border}`, background: theme.surface, padding: 12 }}>
                           <div style={{ fontSize: 12, fontWeight: 700, color: theme.text, marginBottom: 8 }}>
@@ -2590,6 +2639,11 @@ function SettingsModal({ onClose, timeout: initialTimeout, defaultAgent: initial
                             {statusLabelMap[ch.login_status] || "Idle"}
                             {ch.user_id ? ` · ${ch.user_id}` : ""}
                           </div>
+                          {ch.account_id && (
+                            <div style={{ fontSize: 11, color: theme.textMuted, marginBottom: 10 }}>
+                              Account ID: {ch.account_id}
+                            </div>
+                          )}
                           {weixinQrSrc && (
                             <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                               <img
@@ -2612,11 +2666,6 @@ function SettingsModal({ onClose, timeout: initialTimeout, defaultAgent: initial
                           {ch.last_error && (
                             <div style={{ marginTop: 10, fontSize: 11, color: theme.red }}>
                               {ch.last_error}
-                            </div>
-                          )}
-                          {weixinQrDebug && (
-                            <div style={{ marginTop: 10, fontSize: 10, color: theme.textDim, fontFamily: "'JetBrains Mono', monospace", wordBreak: "break-all" }}>
-                              {weixinQrDebug}
                             </div>
                           )}
                         </div>

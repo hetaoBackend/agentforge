@@ -125,6 +125,28 @@ def _normalize_datetime_for_storage(value: Optional[str]) -> Optional[str]:
     return dt.isoformat() if dt else None
 
 
+def _build_weixin_channel_status(db, weixin_channel) -> dict:
+    weixin_status = (
+        weixin_channel.get_status_snapshot()
+        if weixin_channel and hasattr(weixin_channel, "get_status_snapshot")
+        else {}
+    )
+    runtime_account_id = weixin_status.get("account_id", "")
+    configured_account_id = db.get_setting("weixin_account_id", "")
+    return {
+        "enabled": db.get_setting("weixin_enabled", "false") == "true",
+        "configured": bool(weixin_status.get("configured", False)),
+        "running": bool(weixin_channel and getattr(weixin_channel, "_running", False)),
+        "default_working_dir": db.get_setting("weixin_default_working_dir", "~"),
+        "base_url": db.get_setting("weixin_base_url", "https://ilinkai.weixin.qq.com"),
+        "account_id": runtime_account_id or configured_account_id,
+        "login_status": weixin_status.get("login_status", "idle"),
+        "qr_code_url": weixin_status.get("qr_code_url", ""),
+        "last_error": weixin_status.get("last_error", ""),
+        "user_id": weixin_status.get("user_id", ""),
+    }
+
+
 # ──────────────────────────── Models ────────────────────────────
 
 
@@ -2745,11 +2767,6 @@ class TaskAPIHandler(BaseHTTPRequestHandler):
             sl_app = self.db.get_setting("slack_app_token", "") or _os.environ.get(
                 "SLACK_APP_TOKEN", ""
             )
-            weixin_status = (
-                self.weixin_channel.get_status_snapshot()
-                if self.weixin_channel and hasattr(self.weixin_channel, "get_status_snapshot")
-                else {}
-            )
             self._json_response(
                 {
                     "telegram": {
@@ -2777,24 +2794,7 @@ class TaskAPIHandler(BaseHTTPRequestHandler):
                         "default_channel": self.db.get_setting("slack_default_channel", ""),
                         "default_user": self.db.get_setting("slack_default_user", ""),
                     },
-                    "weixin": {
-                        "enabled": self.db.get_setting("weixin_enabled", "false") == "true",
-                        "configured": bool(weixin_status.get("configured", False)),
-                        "running": bool(
-                            self.weixin_channel and getattr(self.weixin_channel, "_running", False)
-                        ),
-                        "default_working_dir": self.db.get_setting(
-                            "weixin_default_working_dir", "~"
-                        ),
-                        "base_url": self.db.get_setting(
-                            "weixin_base_url", "https://ilinkai.weixin.qq.com"
-                        ),
-                        "account_id": self.db.get_setting("weixin_account_id", ""),
-                        "login_status": weixin_status.get("login_status", "idle"),
-                        "qr_code_url": weixin_status.get("qr_code_url", ""),
-                        "last_error": weixin_status.get("last_error", ""),
-                        "user_id": weixin_status.get("user_id", ""),
-                    },
+                    "weixin": _build_weixin_channel_status(self.db, self.weixin_channel),
                     "feishu": {
                         "configured": self.db.get_setting("feishu_enabled", "false") == "true",
                         "running": bool(
@@ -3105,6 +3105,20 @@ class TaskAPIHandler(BaseHTTPRequestHandler):
 
             logger.info("Channel settings updated successfully")
             self._json_response({"status": "updated"})
+
+        elif path == "/api/channels/weixin/action":
+            action = (body.get("action") or "").strip().lower()
+            if not self.__class__.weixin_channel:
+                self._json_response({"error": "weixin channel not running"}, 400)
+                return
+            if action in {"login", "reconnect"}:
+                self.__class__.weixin_channel.request_login()
+                self._json_response({"status": "ok", "action": action})
+            elif action == "logout":
+                self.__class__.weixin_channel.request_logout()
+                self._json_response({"status": "ok", "action": action})
+            else:
+                self._json_response({"error": "unsupported action"}, 400)
 
         elif path == "/api/dag":
             # Batch-create a full DAG in one call.

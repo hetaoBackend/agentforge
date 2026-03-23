@@ -191,3 +191,34 @@ def test_weixin_channel_tracks_qr_and_login_status_from_bridge_events():
     assert snapshot["qr_code_url"] == ""
     assert snapshot["configured"] is True
     assert snapshot["user_id"] == "user-42"
+
+
+def test_weixin_channel_can_request_relogin_and_logout_via_bridge_commands():
+    from channels.weixin_channel import WeixinChannel
+
+    channel = WeixinChannel(bus=MessageBus(), db=StubDB(), scheduler=StubScheduler())
+    channel._bridge_proc = FakeProcess()
+    channel._running = True
+    channel._handle_bridge_event(
+        {
+            "type": "login_success",
+            "account_id": "wx-login",
+            "user_id": "user-42",
+        }
+    )
+
+    channel.request_login()
+    channel.request_logout()
+
+    commands = [
+        json.loads(line)
+        for line in channel._bridge_proc.stdin.getvalue().splitlines()
+        if line.strip()
+    ]
+    assert commands[0]["type"] == "login"
+    assert commands[1]["type"] == "logout"
+
+    snapshot = channel.get_status_snapshot()
+    assert snapshot["configured"] is False
+    assert snapshot["login_status"] == "idle"
+    assert snapshot["qr_code_url"] == ""
