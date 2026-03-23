@@ -114,11 +114,15 @@ def test_weixin_channel_resumes_task_when_reply_matches_notification():
     ]
     assert channel._task_origin[7]["message_id"] == "msg-2"
     assert channel._task_origin[7]["context_token"] == "ctx-2"
-    commands = [
-        json.loads(line)
-        for line in channel._bridge_proc.stdin.getvalue().splitlines()
-        if line.strip()
-    ] if channel._bridge_proc else []
+    commands = (
+        [
+            json.loads(line)
+            for line in channel._bridge_proc.stdin.getvalue().splitlines()
+            if line.strip()
+        ]
+        if channel._bridge_proc
+        else []
+    )
     if commands:
         assert commands[-1]["text"] == "▶️ 收到！正在唤醒 Task #7，请稍候～"
 

@@ -70,7 +70,9 @@ class WeixinChannel(Channel):
         self._running = True
         try:
             env = os.environ.copy()
-            env.setdefault("AGENTFORGE_WEIXIN_DATA_DIR", str(Path.home() / ".agentforge" / "weixin"))
+            env.setdefault(
+                "AGENTFORGE_WEIXIN_DATA_DIR", str(Path.home() / ".agentforge" / "weixin")
+            )
             env.setdefault(
                 "AGENTFORGE_WEIXIN_BASE_URL",
                 self.db.get_setting("weixin_base_url", "https://ilinkai.weixin.qq.com"),
@@ -175,9 +177,7 @@ class WeixinChannel(Channel):
             self._handle_sent_event(event)
         elif event_type == "qr":
             qr_value = event.get("qrcode_url", "") or ""
-            print(
-                f"[Weixin] QR payload len={len(qr_value)} prefix={qr_value[:80]!r}"
-            )
+            print(f"[Weixin] QR payload len={len(qr_value)} prefix={qr_value[:80]!r}")
             self._update_status(
                 login_status="waiting_for_scan",
                 qr_code_url=qr_value,
