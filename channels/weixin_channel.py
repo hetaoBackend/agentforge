@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import threading
 import uuid
@@ -123,10 +124,10 @@ class WeixinChannel(Channel):
         title = msg.payload.get("title") or f"Task #{task_id}"
         if msg.type == OutboundMessageType.TASK_COMPLETED:
             body = (msg.payload.get("result") or "").strip() or "Done."
-            text = f"✅ {title}\n{body}"
+            text = f"✅ Task #{task_id} · {title}\n{body}"
         else:
             body = (msg.payload.get("error") or "Unknown error").strip()
-            text = f"❌ {title}\n{body}"
+            text = f"❌ Task #{task_id} · {title}\n{body}"
 
         request_id = uuid.uuid4().hex
         with self._pending_lock:
@@ -216,14 +217,21 @@ class WeixinChannel(Channel):
     def _handle_sent_event(self, event: dict[str, Any]) -> None:
         request_id = event.get("request_id") or ""
         message_id = event.get("message_id") or ""
-        if not request_id or not message_id:
+        quoted_message_id = event.get("quoted_message_id") or ""
+        if not request_id or (not message_id and not quoted_message_id):
             return
         with self._pending_lock:
-            task_id = self._pending_notifications.pop(request_id, None)
+            task_id = self._pending_notifications.get(request_id)
         if task_id is None:
             return
         with self._notification_lock:
-            self._notification_map[message_id] = task_id
+            if message_id:
+                self._notification_map[message_id] = task_id
+            if quoted_message_id:
+                self._notification_map[quoted_message_id] = task_id
+        if quoted_message_id:
+            with self._pending_lock:
+                self._pending_notifications.pop(request_id, None)
 
     def _handle_message_event(self, event: dict[str, Any]) -> None:
         text = (event.get("text") or "").strip()
@@ -235,6 +243,8 @@ class WeixinChannel(Channel):
         from taskboard import ScheduleType, Task
 
         reply_to_message_id = event.get("reply_to_message_id") or ""
+        reply_to_message_title = event.get("reply_to_message_title") or ""
+        reply_to_message_text = event.get("reply_to_message_text") or ""
         peer_id = event.get("peer_id") or event.get("from_user_id") or ""
         account_id = event.get("account_id") or ""
         context_token = event.get("context_token") or ""
@@ -250,31 +260,39 @@ class WeixinChannel(Channel):
             self._reply_to_event(event, agent_reply)
             return
 
+        task_id = None
         if reply_to_message_id:
             with self._notification_lock:
                 task_id = self._notification_map.get(reply_to_message_id)
-            if task_id:
-                task = self.db.get_task(task_id)
-                if task and task.get("session_id"):
-                    self.db.update_task(
-                        task_id,
-                        status="pending",
-                        prompt=text,
-                        result=None,
-                        error=None,
-                        question=None,
-                    )
-                    with self._origin_lock:
-                        self._task_origin[task_id] = {
-                            "account_id": account_id,
-                            "peer_id": peer_id,
-                            "context_token": context_token,
-                            "message_id": message_id,
-                        }
-                    self._reply_to_event(event, "▶️")
-                    return
-                self._reply_to_event(event, f"❌ Task #{task_id} has no saved session to resume.")
+
+        if task_id is None:
+            task_id = self._extract_task_id_from_reply_reference(
+                reply_to_message_title,
+                reply_to_message_text,
+            )
+
+        if task_id is not None:
+            task = self.db.get_task(task_id)
+            if task and task.get("session_id"):
+                self.db.update_task(
+                    task_id,
+                    status="pending",
+                    prompt=text,
+                    result=None,
+                    error=None,
+                    question=None,
+                )
+                with self._origin_lock:
+                    self._task_origin[task_id] = {
+                        "account_id": account_id,
+                        "peer_id": peer_id,
+                        "context_token": context_token,
+                        "message_id": message_id,
+                    }
+                self._reply_to_event(event, f"▶️ 收到！正在唤醒 Task #{task_id}，请稍候～")
                 return
+            self._reply_to_event(event, f"❌ Task #{task_id} has no saved session to resume.")
+            return
 
         task = Task(
             title=f"[Weixin] {text[:60]}{'…' if len(text) > 60 else ''}",
@@ -308,6 +326,15 @@ class WeixinChannel(Channel):
                 "text": text,
             }
         )
+
+    def _extract_task_id_from_reply_reference(self, *parts: str) -> Optional[int]:
+        for part in parts:
+            if not part:
+                continue
+            match = re.search(r"\bTask\s+#(\d+)\b", part)
+            if match:
+                return int(match.group(1))
+        return None
 
     def _send_command(self, payload: dict[str, Any]) -> None:
         if not self._bridge_proc or not self._bridge_proc.stdin:

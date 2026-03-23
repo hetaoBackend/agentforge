@@ -16,6 +16,7 @@ let loginInFlight = null;
 let pollerStarted = false;
 let pollTimer = null;
 let state = loadState();
+const pendingSentMessages = new Map();
 
 function emit(event) {
   process.stdout.write(`${JSON.stringify(event)}\n`);
@@ -193,6 +194,56 @@ function extractReplyToMessageId(itemList = []) {
   return "";
 }
 
+function extractReplyReference(itemList = []) {
+  for (const item of itemList) {
+    const ref = item?.ref_msg;
+    if (!ref) {
+      continue;
+    }
+    return {
+      messageId: ref?.message_item?.msg_id ? String(ref.message_item.msg_id) : "",
+      title: ref?.title ? String(ref.title) : "",
+      text: ref?.message_item ? extractText([ref.message_item]) : "",
+    };
+  }
+  return { messageId: "", title: "", text: "" };
+}
+
+function extractQuotedMessageId(msg) {
+  for (const item of msg?.item_list || []) {
+    if (item?.msg_id) {
+      return String(item.msg_id);
+    }
+  }
+  if (msg?.message_id != null) {
+    return String(msg.message_id);
+  }
+  return "";
+}
+
+function maybeEmitSentConfirmation(msg) {
+  const clientId = String(msg?.client_id || "");
+  if (!clientId) {
+    return;
+  }
+  const pending = pendingSentMessages.get(clientId);
+  if (!pending) {
+    return;
+  }
+  const quotedMessageId = extractQuotedMessageId(msg);
+  if (!quotedMessageId) {
+    return;
+  }
+  pendingSentMessages.delete(clientId);
+  emit({
+    type: "sent",
+    request_id: pending.requestId,
+    message_id: clientId,
+    quoted_message_id: quotedMessageId,
+    peer_id: pending.peerId,
+  });
+}
+
 function normalizeInboundMessage(msg) {
   if (msg?.message_type !== 1) {
     return null;
@@ -202,13 +253,16 @@ function normalizeInboundMessage(msg) {
   if (!peerId || !text) {
     return null;
   }
+  const replyRef = extractReplyReference(msg.item_list || []);
   return {
     type: "message",
     account_id: state.accountId || ACCOUNT_ID_OVERRIDE || "",
     peer_id: peerId,
     context_token: msg.context_token || "",
     message_id: String(msg.message_id || msg.client_id || crypto.randomUUID()),
-    reply_to_message_id: extractReplyToMessageId(msg.item_list || []),
+    reply_to_message_id: replyRef.messageId,
+    reply_to_message_title: replyRef.title,
+    reply_to_message_text: replyRef.text,
     text,
     raw_message_type: msg.message_type || 0,
   };
@@ -240,10 +294,14 @@ async function sendTextMessage(command) {
     state.token,
     15000,
   );
+  pendingSentMessages.set(messageId, {
+    requestId: command.request_id || "",
+    peerId: command.peer_id || "",
+  });
   emit({
-    type: "sent",
+    type: "accepted",
     request_id: command.request_id || "",
-    message_id: messageId,
+    client_id: messageId,
     peer_id: command.peer_id,
   });
 }
@@ -278,6 +336,7 @@ async function pollUpdatesOnce() {
   }
 
   for (const msg of response?.msgs || []) {
+    maybeEmitSentConfirmation(msg);
     const normalized = normalizeInboundMessage(msg);
     if (normalized) {
       emit(normalized);

@@ -114,6 +114,13 @@ def test_weixin_channel_resumes_task_when_reply_matches_notification():
     ]
     assert channel._task_origin[7]["message_id"] == "msg-2"
     assert channel._task_origin[7]["context_token"] == "ctx-2"
+    commands = [
+        json.loads(line)
+        for line in channel._bridge_proc.stdin.getvalue().splitlines()
+        if line.strip()
+    ] if channel._bridge_proc else []
+    if commands:
+        assert commands[-1]["text"] == "▶️ 收到！正在唤醒 Task #7，请稍候～"
 
 
 def test_weixin_channel_sends_outbound_notifications_to_bridge():
@@ -146,6 +153,7 @@ def test_weixin_channel_sends_outbound_notifications_to_bridge():
     assert command["request_id"]
     assert command["peer_id"] == "user-3"
     assert command["context_token"] == "ctx-3"
+    assert "Task #3" in command["text"]
     assert "修好了" in command["text"]
 
     channel._handle_bridge_event(
@@ -157,6 +165,114 @@ def test_weixin_channel_sends_outbound_notifications_to_bridge():
     )
 
     assert channel._notification_map["wx-out-3"] == 3
+
+
+def test_weixin_channel_resumes_task_when_reply_matches_real_weixin_msg_id():
+    from channels.weixin_channel import WeixinChannel
+
+    bus = MessageBus()
+    db = StubDB()
+    db.tasks[9] = {"id": 9, "session_id": "sess-9", "status": "completed"}
+    scheduler = StubScheduler()
+    channel = WeixinChannel(bus=bus, db=db, scheduler=scheduler)
+    channel._running = True
+    channel._bridge_proc = FakeProcess()
+    channel._task_origin[9] = {
+        "account_id": "wx-1",
+        "peer_id": "user-9",
+        "context_token": "ctx-9",
+        "message_id": "incoming-9",
+    }
+
+    channel.send(
+        OutboundMessage(
+            type=OutboundMessageType.TASK_COMPLETED,
+            task_id=9,
+            payload={"title": "Fix resume", "result": "done"},
+        )
+    )
+
+    command = json.loads(channel._bridge_proc.stdin.getvalue().strip())
+    channel._handle_bridge_event(
+        {
+            "type": "sent",
+            "request_id": command["request_id"],
+            "message_id": command["request_id"],
+            "quoted_message_id": "wx-real-msg-9",
+        }
+    )
+
+    channel._handle_bridge_event(
+        {
+            "type": "message",
+            "account_id": "wx-1",
+            "peer_id": "user-9",
+            "context_token": "ctx-9b",
+            "message_id": "incoming-9b",
+            "reply_to_message_id": "wx-real-msg-9",
+            "text": "继续这个任务",
+        }
+    )
+
+    assert db.updated == [
+        (
+            9,
+            {
+                "status": "pending",
+                "prompt": "继续这个任务",
+                "result": None,
+                "error": None,
+                "question": None,
+            },
+        )
+    ]
+    assert channel._task_origin[9]["message_id"] == "incoming-9b"
+    assert channel._task_origin[9]["context_token"] == "ctx-9b"
+    commands = [
+        json.loads(line)
+        for line in channel._bridge_proc.stdin.getvalue().splitlines()
+        if line.strip()
+    ]
+    assert commands[-1]["text"] == "▶️ 收到！正在唤醒 Task #9，请稍候～"
+
+
+def test_weixin_channel_resumes_task_when_reply_quotes_task_number_without_msg_id():
+    from channels.weixin_channel import WeixinChannel
+
+    bus = MessageBus()
+    db = StubDB()
+    db.tasks[11] = {"id": 11, "session_id": "sess-11", "status": "completed"}
+    scheduler = StubScheduler()
+    channel = WeixinChannel(bus=bus, db=db, scheduler=scheduler)
+
+    channel._handle_bridge_event(
+        {
+            "type": "message",
+            "account_id": "wx-1",
+            "peer_id": "user-11",
+            "context_token": "ctx-11b",
+            "message_id": "incoming-11b",
+            "reply_to_message_id": "",
+            "reply_to_message_title": "✅ Task #11 · [Weixin] 你好",
+            "reply_to_message_text": "Task #11 已完成",
+            "text": "继续这个任务",
+        }
+    )
+
+    assert db.updated == [
+        (
+            11,
+            {
+                "status": "pending",
+                "prompt": "继续这个任务",
+                "result": None,
+                "error": None,
+                "question": None,
+            },
+        )
+    ]
+    assert channel._task_origin[11]["message_id"] == "incoming-11b"
+    assert channel._task_origin[11]["context_token"] == "ctx-11b"
 
 
 def test_weixin_channel_tracks_qr_and_login_status_from_bridge_events():
