@@ -255,6 +255,51 @@ Error: `claude CLI exit code 1`
 
 ---
 
+## Weixin Channel
+
+Experimental text-only Weixin channel backed by a Node sidecar bridge.
+
+### Current MVP Scope
+
+- Receive text messages and create tasks
+- Reply to task result messages to resume a saved session
+- Send task completion/failure text notifications back to the same peer
+- Start QR-code login automatically when there is no saved session
+- Reuse `/dir` and `/agent` command handling
+
+### 1. Enable the Channel
+
+```bash
+curl -X POST http://127.0.0.1:9712/api/channels/settings \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "weixin_enabled": "true",
+    "weixin_default_working_dir": "/path/to/your/project",
+    "weixin_base_url": "https://ilinkai.weixin.qq.com",
+    "weixin_account_id": ""
+  }'
+```
+
+### 2. Start AgentForge
+
+```bash
+uv run taskboard.py
+```
+
+If enabled, AgentForge will attempt to launch the bridge process. On a first-time login it will emit a QR event and keep polling until you confirm on your phone:
+
+```text
+[Weixin] Bridge started
+```
+
+### Notes
+
+- This is a text-only MVP.
+- The bridge implements the QR login flow and the documented `getupdates` / `sendmessage` HTTP protocol directly.
+- The first version is single-account oriented from the AgentForge side, even though the upstream Weixin plugin supports multiple accounts.
+
+---
+
 ## Adding New Channels
 
 Create a new file under `channels/` that imports and subclasses `Channel` from
