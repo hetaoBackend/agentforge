@@ -36,7 +36,8 @@
 - **Kanban Task Board** — Visual Queue / Running / Done columns with live output streaming
 - **DAG Pipelines** — Define task dependencies with automatic cascade execution and failure propagation
 - **Flexible Scheduling** — Immediate, delayed, one-time datetime, and cron-based recurring tasks
-- **Chat Control** — Create tasks and receive notifications from Telegram, Slack, or Feishu/Lark
+- **Dual Agent Backends** — Run tasks with Claude Code CLI or OpenAI Codex CLI; choose per-task or set a default
+- **Chat Control** — Create tasks and receive notifications from Telegram, Slack, Feishu/Lark, or WeChat
 - **Persistent Storage** — SQLite-backed task history, run logs, and streaming output
 - **Native macOS App** — Electron shell with one-click DMG install
 
@@ -47,7 +48,8 @@
 - macOS 12.0+ (Apple Silicon or Intel)
 - Python 3.12+
 - Node.js 18+
-- [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) installed and on `PATH`
+- [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) installed and on `PATH` (default agent)
+- [OpenAI Codex CLI](https://github.com/openai/codex) on `PATH` — optional, required only if using Codex as agent backend (`npm install -g @openai/codex`)
 
 ---
 
@@ -123,7 +125,7 @@ Once the app is running, the backend listens on `http://127.0.0.1:9712`.
 **Create a task via curl:**
 
 ```bash
-# Run immediately
+# Run immediately (uses default agent — claude)
 curl -X POST http://localhost:9712/api/tasks \
   -H "Content-Type: application/json" \
   -d '{
@@ -155,6 +157,25 @@ curl -X POST http://localhost:9712/api/tasks \
     "cron_expr": "0 9 * * *",
     "max_runs": 30
   }'
+
+# Use Codex CLI instead of Claude Code
+curl -X POST http://localhost:9712/api/tasks \
+  -H "Content-Type: application/json" \
+  -d '{
+    "title": "Refactor auth module",
+    "prompt": "Refactor the authentication module for clarity",
+    "working_dir": "~/projects/myapp",
+    "schedule_type": "immediate",
+    "agent": "codex"
+  }'
+```
+
+To set Codex as the default agent for all tasks:
+
+```bash
+curl -X PUT http://localhost:9712/api/settings \
+  -H "Content-Type: application/json" \
+  -d '{"default_agent": "codex"}'
 ```
 
 ---
@@ -168,6 +189,7 @@ Control AgentForge from your favorite messaging app. Channels auto-start when th
 | Telegram | Bot API (polling) | Easy |
 | Slack | Socket Mode | Moderate |
 | Feishu / Lark | WebSocket long-connection | Moderate |
+| WeChat | Node bridge (experimental) | Moderate |
 
 <details>
 <summary><b>Telegram setup</b></summary>
@@ -264,6 +286,36 @@ curl -X POST http://127.0.0.1:9712/api/feishu/settings \
 ```
 
 Or configure from the desktop app's settings page.
+
+</details>
+
+<details>
+<summary><b>WeChat setup (experimental)</b></summary>
+
+WeChat uses a Node.js sidecar bridge — no environment variables needed. Configure and enable it via the API or the desktop app's settings page.
+
+### 1. Enable via API
+
+```bash
+curl -X POST http://127.0.0.1:9712/api/channels/settings \
+  -H "Content-Type: application/json" \
+  -d '{
+    "weixin_enabled": "true",
+    "weixin_default_working_dir": "~/projects",
+    "weixin_base_url": "https://ilinkai.weixin.qq.com",
+    "weixin_account_id": ""
+  }'
+```
+
+### 2. Scan the QR code
+
+On first launch the bridge will request a QR code login. Scan it with your WeChat mobile app to authenticate. The session is saved for subsequent restarts.
+
+### Notes
+
+- Text-only MVP — rich media is not supported.
+- The bridge uses the `getupdates` / `sendmessage` HTTP protocol.
+- Single-account per AgentForge instance.
 
 </details>
 
@@ -386,7 +438,7 @@ launchctl load ~/Library/LaunchAgents/com.agentforge.taskboard.plist
                          [ SQLite DB ]   [ Scheduler ]   [ Claude CLI ]
 ```
 
-- **Python backend** (`taskboard.py`) — single-file `BaseHTTPRequestHandler` server. Manages tasks in SQLite (`~/.agentforge/tasks.db`), runs `claude` CLI via `AgentExecutor`, and schedules work with `TaskScheduler` (polls every 2 s, supports cron via `croniter`).
+- **Python backend** (`taskboard.py`) — single-file `BaseHTTPRequestHandler` server. Manages tasks in SQLite (`~/.agentforge/tasks.db`), runs `claude` or `codex` CLI via `AgentExecutor`, and schedules work with `TaskScheduler` (polls every 2 s, supports cron via `croniter`).
 - **Electron shell** (`taskboard-electron/`) — spawns the Python backend on start, kills it on quit. Loads React renderer from Vite dev server (dev) or bundled assets (prod).
 - **React frontend** (`App.jsx`) — single-component kanban board that polls the REST API and renders colorized streaming output.
 
@@ -405,7 +457,7 @@ Contributions are welcome! Here's how to get started:
 - `taskboard.py` — entire Python backend (DB, scheduler, executor, HTTP handlers)
 - `taskboard-electron/src/main.js` — Electron main process
 - `taskboard-electron/src/renderer/App.jsx` — React frontend (~1500 lines)
-- `channels/` — pluggable chat channel adapters
+- `channels/` — pluggable chat channel adapters (Telegram, Slack, Feishu, WeChat)
 - `skills/agentforge/` — Claude Code skill for agent-to-agent delegation
 
 ---
