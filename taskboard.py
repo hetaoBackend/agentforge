@@ -1187,6 +1187,8 @@ class TaskScheduler(BusAwareSchedulerMixin):
         self.on_task_update = on_task_update
         self.bus = bus  # MessageBus integration (optional)
         self._channels: list = []  # generic Channel instances (e.g. TelegramChannel)
+        self._output_event_listeners: list = []  # callables(task_id, run_id, event_type, content)
+        self._listeners_lock = threading.Lock()
         self._running = False
         self._shutting_down = False
         self._thread: Optional[threading.Thread] = None
@@ -1195,6 +1197,7 @@ class TaskScheduler(BusAwareSchedulerMixin):
         self._live_output: dict[int, str] = {}  # task_id -> accumulated stdout
         self._live_heartbeat_output: dict[int, str] = {}  # tick_id -> accumulated stdout/stderr
         self._active_pgids: dict[int, int] = {}  # task_id -> process group id
+        self._codex_item_text: dict[tuple[Optional[int], str], str] = {}
 
     def start(self):
         self._running = True
@@ -1660,19 +1663,70 @@ class TaskScheduler(BusAwareSchedulerMixin):
             self._live_heartbeat_output.pop(tick_id, None)
             self._active_heartbeats.pop(hid, None)
 
-    def _parse_codex_event(self, event: dict) -> tuple:
+    def _codex_text_delta(
+        self, run_id: Optional[int], item_id: str, current_text: str
+    ) -> Optional[str]:
+        """Return only the newly emitted text for a cumulative Codex message item."""
+        key = (run_id, item_id)
+        previous = self._codex_item_text.get(key, "")
+        self._codex_item_text[key] = current_text
+        if not current_text:
+            return None
+        if previous and current_text.startswith(previous):
+            delta = current_text[len(previous) :]
+            return delta or None
+        if current_text == previous:
+            return None
+        return current_text
+
+    def _codex_append_text_delta(
+        self, run_id: Optional[int], item_id: str, delta: str
+    ) -> Optional[str]:
+        if delta == "":
+            return None
+        key = (run_id, item_id)
+        self._codex_item_text[key] = self._codex_item_text.get(key, "") + delta
+        return delta
+
+    def _codex_event_delta_text(self, event: dict, item: dict) -> Optional[str]:
+        delta = item.get("delta", event.get("delta"))
+        if isinstance(delta, str):
+            return delta
+        if isinstance(delta, dict):
+            text = delta.get("text")
+            return text if isinstance(text, str) else None
+        return None
+
+    def _clear_codex_run_state(self, run_id: int) -> None:
+        for key in [key for key in self._codex_item_text if key[0] == run_id]:
+            self._codex_item_text.pop(key, None)
+
+    def _parse_codex_event(self, event: dict, run_id: Optional[int] = None) -> tuple:
         """Normalize a Codex JSONL event into (event_type, content) for storage.
 
         Returns (None, None) to skip events that carry no displayable content.
         """
         etype = event.get("type", "")
-        if etype == "item.completed":
+        if etype in ("item.updated", "item.completed"):
             item = event.get("item", {})
             itype = item.get("type", "")
             if itype == "agent_message":
-                return "assistant", item.get("text", "")
+                item_id = str(item.get("id") or item.get("item_id") or "agent_message")
+                event_delta = self._codex_event_delta_text(event, item)
+                if etype == "item.updated" and event_delta is not None:
+                    delta = self._codex_append_text_delta(run_id, item_id, event_delta)
+                else:
+                    delta = self._codex_text_delta(run_id, item_id, item.get("text", ""))
+                return ("assistant", delta) if delta is not None else (None, None)
             elif itype == "reasoning":
                 text = item.get("text", "")
+                if etype == "item.updated":
+                    item_id = str(item.get("id") or item.get("item_id") or "reasoning")
+                    event_delta = self._codex_event_delta_text(event, item)
+                    if event_delta is not None:
+                        text = self._codex_append_text_delta(run_id, item_id, event_delta) or ""
+                    else:
+                        text = self._codex_text_delta(run_id, item_id, text) or ""
                 return ("assistant", f"[thinking] {text}") if text else (None, None)
             elif itype == "command_execution":
                 cmd = item.get("command", "")
@@ -1692,7 +1746,7 @@ class TaskScheduler(BusAwareSchedulerMixin):
         elif etype == "turn.completed":
             # turn.completed only carries usage stats; final text comes from agent_message items
             return None, None
-        elif etype in ("thread.started", "turn.started", "item.started", "item.updated"):
+        elif etype in ("thread.started", "turn.started", "item.started"):
             return None, None
         else:
             return etype, json.dumps(event, ensure_ascii=False)
@@ -1706,9 +1760,11 @@ class TaskScheduler(BusAwareSchedulerMixin):
             event = json.loads(line)
 
             if agent == "codex":
-                event_type, content = self._parse_codex_event(event)
+                event_type, content = self._parse_codex_event(event, run_id)
                 if event_type and content:
                     self.db.add_output_event(task_id, run_id, event_type, content)
+                    if event_type == "assistant":
+                        self._fire_output_listeners(task_id, run_id, event_type, content)
                 return
 
             # Claude stream-json
@@ -1717,6 +1773,8 @@ class TaskScheduler(BusAwareSchedulerMixin):
                 text_content, image_events = self._extract_message_content(event)
                 if text_content:
                     self.db.add_output_event(task_id, run_id, event_type, text_content)
+                    if event_type == "assistant":
+                        self._fire_output_listeners(task_id, run_id, event_type, text_content)
                 for img_json in image_events:
                     self.db.add_output_event(task_id, run_id, "image_content", img_json)
             else:
@@ -2141,6 +2199,8 @@ class TaskScheduler(BusAwareSchedulerMixin):
             self._active_pgids.pop(tid, None)
 
         self._live_output.pop(tid, None)
+        if agent == "codex":
+            self._clear_codex_run_state(run_id)
 
         # Extract session_id from output (format differs by agent)
         extracted_session_id = None
@@ -2233,6 +2293,34 @@ class TaskScheduler(BusAwareSchedulerMixin):
             self._on_task_completed(tid)
         else:
             self._on_task_failed(tid)
+
+    def _fire_output_listeners(
+        self, task_id: int, run_id: int, event_type: str, content: str
+    ) -> None:
+        """Fire all registered output listeners (non-blocking; errors are swallowed)."""
+        with self._listeners_lock:
+            listeners = list(self._output_event_listeners)
+        for cb in listeners:
+            try:
+                cb(task_id, run_id, event_type, content)
+            except Exception as e:
+                logger.error(f"Output listener error: {e}")
+
+    def add_output_listener(self, cb) -> None:
+        """Register a callback invoked for each assistant output event.
+
+        Signature: cb(task_id: int, run_id: int, event_type: str, content: str)
+        Called from the task execution thread — must be non-blocking.
+        """
+        with self._listeners_lock:
+            self._output_event_listeners.append(cb)
+
+    def remove_output_listener(self, cb) -> None:
+        with self._listeners_lock:
+            try:
+                self._output_event_listeners.remove(cb)
+            except ValueError:
+                pass
 
     def _notify(self, task_id: int):
         if self.on_task_update:
@@ -2467,6 +2555,15 @@ class TaskAPIHandler(BaseHTTPRequestHandler):
         self._cors_headers()
         self.end_headers()
 
+    def _task_output_payload(self, task_id: int) -> dict:
+        is_running = task_id in self.scheduler._live_output
+        if is_running:
+            output = self.scheduler._live_output.get(task_id, "")
+        else:
+            runs = self.db.get_task_runs(task_id, limit=1)
+            output = (runs[0].get("raw_output") or "") if runs else ""
+        return {"output": output, "is_running": is_running}
+
     def _validate_heartbeat_payload(
         self, body: dict, existing: Optional[dict] = None
     ) -> tuple[Optional[Heartbeat], Optional[tuple[dict, int]]]:
@@ -2646,8 +2743,7 @@ class TaskAPIHandler(BaseHTTPRequestHandler):
 
         elif path.startswith("/api/tasks/") and path.endswith("/output"):
             tid = int(path.split("/")[3])
-            live = self.scheduler._live_output.get(tid, "")
-            self._json_response({"output": live, "is_running": tid in self.scheduler._live_output})
+            self._json_response(self._task_output_payload(tid))
 
         elif path.startswith("/api/tasks/") and path.endswith("/events"):
             tid = int(path.split("/")[3])

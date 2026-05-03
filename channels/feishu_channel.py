@@ -15,6 +15,7 @@ Configure via settings API:
 import base64
 import json
 import threading
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
@@ -34,6 +35,8 @@ try:
         CreateMessageRequestBody,
         Emoji,
         GetMessageResourceRequest,
+        PatchMessageRequest,
+        PatchMessageRequestBody,
         ReplyMessageRequest,
         ReplyMessageRequestBody,
     )
@@ -67,6 +70,106 @@ HELP_TEXT = """\
 
 FEISHU_CARD_MARKDOWN_CHUNK = 7000
 FEISHU_FALLBACK_MARKDOWN_LIMIT = 8000
+FEISHU_STREAMING_MAX_OUTPUT = 4000  # max chars of output to show in streaming card
+
+
+class _FeishuStreamWriter:
+    """Rate-limited, event-driven Feishu card updater for a single running task.
+
+    Registered as an output listener on TaskScheduler. Each time the agent emits
+    an assistant event the writer appends the chunk and schedules a card patch.
+    Patches are rate-limited to at most one every MIN_INTERVAL seconds so we don't
+    hammer the Feishu API. Patch requests are serialized so older requests cannot
+    race and overwrite newer content.
+
+    run_id is latched from the first event received, so the writer can be registered
+    before the run row is created in the DB.
+    """
+
+    MIN_INTERVAL = 0.25  # seconds between patches
+
+    def __init__(self, task_id: int, msg_id: str, channel: "FeishuChannel", task_title: str):
+        self.task_id = task_id
+        self.msg_id = msg_id
+        self._channel = channel
+        self._task_title = task_title
+
+        self._run_id: Optional[int] = None  # latched on first event
+        self._parts: list[str] = []
+        self._parts_lock = threading.Lock()
+        self._last_patch = 0.0
+        self._timer: Optional[threading.Timer] = None
+        self._state_lock = threading.Lock()
+        self._stopped = False
+        self._patch_in_flight = False
+        self._dirty = False
+
+    # called from the executor thread — must not block
+    def on_event(self, task_id: int, run_id: int, event_type: str, content: str) -> None:
+        if self._stopped or task_id != self.task_id:
+            return
+        if event_type != "assistant" or content == "":
+            return
+        with self._parts_lock:
+            # Latch the run_id on the first event; reset parts if run_id changes (resume)
+            if self._run_id is None:
+                self._run_id = run_id
+            elif self._run_id != run_id:
+                self._run_id = run_id
+                self._parts.clear()
+            self._parts.append(content)
+        self._schedule()
+
+    def _schedule(self) -> None:
+        with self._state_lock:
+            if self._stopped:
+                return
+            self._dirty = True
+            self._schedule_dirty_locked()
+
+    def _schedule_dirty_locked(self) -> None:
+        if self._stopped or not self._dirty or self._patch_in_flight or self._timer:
+            return
+
+        delay = max(0.0, self.MIN_INTERVAL - (time.time() - self._last_patch))
+        if delay <= 0:
+            self._start_patch_locked()
+            return
+
+        self._timer = threading.Timer(delay, self._timer_fired)
+        self._timer.daemon = True
+        self._timer.start()
+
+    def _start_patch_locked(self) -> None:
+        self._patch_in_flight = True
+        self._dirty = False
+        threading.Thread(target=self._do_patch, daemon=True).start()
+
+    def _timer_fired(self) -> None:
+        with self._state_lock:
+            self._timer = None
+            self._schedule_dirty_locked()
+
+    def _do_patch(self) -> None:
+        with self._parts_lock:
+            text = "".join(self._parts)
+        if len(text) > FEISHU_STREAMING_MAX_OUTPUT:
+            text = "…" + text[-FEISHU_STREAMING_MAX_OUTPUT:]
+        card = self._channel._build_streaming_card(self.task_id, self._task_title, text)
+        try:
+            self._channel._patch_message(self.msg_id, card)
+        finally:
+            with self._state_lock:
+                self._last_patch = time.time()
+                self._patch_in_flight = False
+                self._schedule_dirty_locked()
+
+    def stop(self) -> None:
+        with self._state_lock:
+            self._stopped = True
+            if self._timer:
+                self._timer.cancel()
+                self._timer = None
 
 
 class FeishuChannel(Channel):
@@ -92,6 +195,14 @@ class FeishuChannel(Channel):
         # root_message_id -> task_id for thread-based session resume
         self._root_msg_map: dict[str, int] = {}
         self._root_msg_lock = threading.Lock()
+
+        # task_id -> _FeishuStreamWriter for live card updates
+        self._writers: dict[int, "_FeishuStreamWriter"] = {}
+        self._writers_lock = threading.Lock()
+
+        # task_id -> running card message_id (used by send() to patch instead of reply)
+        self._streaming_msg: dict[int, str] = {}
+        self._streaming_lock = threading.Lock()
 
         # Subscribe to outbound bus messages for task notifications
         bus.subscribe_outbound(self._on_outbound)
@@ -222,13 +333,26 @@ class FeishuChannel(Channel):
         with self._origin_lock:
             origin = self._task_origin.get(task_id)
 
+        # Stop streaming thread and get the running card message_id if any
+        streaming_msg_id = None
+        with self._streaming_lock:
+            streaming_msg_id = self._streaming_msg.pop(task_id, None)
+        self._stop_streaming(task_id)
+
         sent_id = None
         if origin:
             reply_to_chat, root_msg_id, reaction_msg_id = origin
             # Add emoji reaction to the message that triggered the task (or resume)
             emoji = "DONE" if is_completed else "Cry"
             self._add_reaction(reaction_msg_id, emoji)
-            sent_id = self._reply_message(root_msg_id, content, card=card)
+
+            # If we have a streaming card, patch it with the final result
+            if streaming_msg_id:
+                patched = self._patch_message(streaming_msg_id, card)
+                if patched:
+                    sent_id = streaming_msg_id
+            if not sent_id:
+                sent_id = self._reply_message(root_msg_id, content, card=card)
 
         # Fallback: send to default chat if no origin or reply failed
         if not sent_id:
@@ -386,6 +510,75 @@ class FeishuChannel(Channel):
 
         print(f"[Feishu] Reply failed: {response.code} {response.msg}")
         return None
+
+    def _patch_message(self, message_id: str, card: dict[str, Any]) -> bool:
+        """Patch an existing interactive card message with new content."""
+        if not self._client or not FEISHU_AVAILABLE:
+            return False
+        try:
+            request = (
+                PatchMessageRequest.builder()
+                .message_id(message_id)
+                .request_body(
+                    PatchMessageRequestBody.builder()
+                    .content(json.dumps(card, ensure_ascii=False))
+                    .build()
+                )
+                .build()
+            )
+            response = self._client.im.v1.message.patch(request)
+            if response.success():
+                return True
+            print(f"[Feishu] Patch failed: {response.code} {response.msg}")
+            return False
+        except Exception as e:
+            print(f"[Feishu] Error patching message {message_id}: {e}")
+            return False
+
+    def _build_streaming_card(
+        self, task_id: int, task_title: str, output_text: str, done: bool = False
+    ) -> dict[str, Any]:
+        """Build a card showing live streaming output."""
+        if done:
+            display_text = output_text.strip() or "完成"
+        else:
+            body = output_text.strip() or "Thinking"
+            display_text = body + " ▌"
+        return {
+            "schema": "2.0",
+            "config": {"wide_screen_mode": True, "width_mode": "fill"},
+            "body": {
+                "elements": [
+                    {
+                        "tag": "markdown",
+                        "content": display_text,
+                    }
+                ]
+            },
+        }
+
+    def _start_streaming(self, task_id: int, running_msg_id: str, task_title: str) -> None:
+        """Register an event-driven writer that patches the running card on each assistant event."""
+        # Stop any previous writer for this task
+        self._stop_streaming(task_id)
+
+        writer = _FeishuStreamWriter(task_id, running_msg_id, self, task_title)
+        with self._writers_lock:
+            self._writers[task_id] = writer
+        with self._streaming_lock:
+            self._streaming_msg[task_id] = running_msg_id
+
+        self.scheduler.add_output_listener(writer.on_event)
+        print(f"[Feishu] Streaming writer registered for task {task_id}, msg_id={running_msg_id}")
+
+    def _stop_streaming(self, task_id: int) -> None:
+        """Unregister the streaming writer for task_id."""
+        with self._writers_lock:
+            writer = self._writers.pop(task_id, None)
+        if writer:
+            self.scheduler.remove_output_listener(writer.on_event)
+            writer.stop()
+            print(f"[Feishu] Streaming writer stopped for task {task_id}")
 
     def _build_notification_card(
         self,
@@ -941,10 +1134,14 @@ class FeishuChannel(Channel):
                     )
                     with self._origin_lock:
                         self._task_origin[tid] = (reply_to, message.message_id, message.message_id)
-                    self._reply_message(
-                        message.message_id,
-                        f"▶️ 收到！正在唤醒 Task #{tid}，请稍候～",
+                    task_obj = self.db.get_task(tid)
+                    resume_title = (task_obj or {}).get("title", f"Task #{tid}")
+                    running_card = self._build_streaming_card(tid, resume_title, "")
+                    running_msg_id = self._create_reply(
+                        parent_message_id=message.message_id, card=running_card
                     )
+                    if running_msg_id:
+                        self._start_streaming(tid, running_msg_id, resume_title)
                     print(f"[Feishu] Task {tid} resumed")
                 else:
                     self._send_message(
@@ -1050,10 +1247,14 @@ class FeishuChannel(Channel):
                     )
                     with self._origin_lock:
                         self._task_origin[task_id] = (reply_to, thread_root, message.message_id)
-                    self._reply_message(
-                        thread_root,
-                        f"▶️ 收到！正在唤醒 Task #{task_id}，请稍候～",
+                    task_obj = self.db.get_task(task_id)
+                    resume_title = (task_obj or {}).get("title", f"Task #{task_id}")
+                    running_card = self._build_streaming_card(task_id, resume_title, "")
+                    running_msg_id = self._create_reply(
+                        parent_message_id=thread_root, card=running_card
                     )
+                    if running_msg_id:
+                        self._start_streaming(task_id, running_msg_id, resume_title)
                     print(f"[Feishu] Auto-resuming task {task_id} from thread reply")
                     return
                 else:
@@ -1133,12 +1334,16 @@ class FeishuChannel(Channel):
             else ""
         )
 
-        # Reply with a brief running hint and track origin for completion notification
-        self._reply_message(message.message_id, f"Task #{task_id} is running…")
+        # Send running card and start streaming
+        task_title = f"[Feishu] {title}"
+        running_card = self._build_streaming_card(task_id, task_title, "")
+        running_msg_id = self._create_reply(parent_message_id=message.message_id, card=running_card)
         with self._origin_lock:
             self._task_origin[task_id] = (reply_to, message.message_id, message.message_id)
         with self._root_msg_lock:
             self._root_msg_map[message.message_id] = task_id
+        if running_msg_id:
+            self._start_streaming(task_id, running_msg_id, task_title)
         print(
             f"[Feishu] Task {task_id} origin tracked: reply_to={reply_to}, root_msg={message.message_id}"
         )

@@ -2,6 +2,20 @@
 
 ## In Progress
 
+- [x] **修复流式输出链路问题** — 去掉飞书侧二次 token 拆分，串行化 Feishu PatchMessage 更新，并让任务完成后的 `/output` 接口回落到最新 run 的 `raw_output`
+  - ✅ 已修复：飞书 streaming writer 现在按 agent 原始 assistant 事件追加内容，不再拆词做本地打字机效果
+  - ✅ 已修复：Feishu PatchMessage 更新增加 in-flight/dirty 状态，避免并发 patch 乱序覆盖
+  - ✅ 已修复：`/api/tasks/{id}/output` 在任务结束后回落读取最新 run 的 `raw_output`
+  - ✅ 验证：`make check` 通过，`82 passed`
+
+- [x] **系统 review 流式输出链路** — 梳理后端 CLI 读取、事件持久化、前端轮询展示和 Feishu 卡片更新，确认 Feishu 本地打字机拆分是主要问题，并记录并发 patch 与输出保留风险
+  - ✅ 验证：`uv run pytest -q tests/test_feishu_message_rendering.py tests/test_codex_streaming_events.py` 通过，`14 passed`
+
+- [x] **飞书 channel 流式返回消息** — 任务运行时每 5 秒向飞书推送一次当前输出，用 PatchMessage 更新同一条卡片；任务完成/失败后将该卡片更新为最终结果
+  - ✅ 已实现：新建任务和 resume 任务时发送初始运行卡片，启动后台轮询线程每 5 秒 patch 一次
+  - ✅ 已实现：任务结束时 patch 同一条卡片为最终结果，减少回复消息数
+  - ✅ 验证：`uv run pytest -q` 通过，73 passed
+
 - [x] **修复 Feishu 卡片展开后仍显示 truncated 内容** — 排查折叠面板完整结果的组装逻辑，确保展开后显示完整正文而不是再次裁剪后的剩余片段
   - ✅ 已修复：长结果卡片改为”折叠态仅显示 summary，展开态显示完整正文”，不再在面板外额外渲染截断预览
   - ✅ 已修复：展开区按 chunk 承载完整正文，避免 `truncated` 出现在展开内容里，也避免预览与正文重复阅读

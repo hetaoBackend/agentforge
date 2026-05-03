@@ -219,3 +219,72 @@ class TestFeishuNotificationCards:
 
         _, kwargs = mock_feishu_channel._build_notification_card.call_args
         assert kwargs["body_text"] == long_result
+
+
+class TestFeishuStreaming:
+    def test_streaming_card_uses_thinking_placeholder(self, mock_feishu_channel):
+        card = mock_feishu_channel._build_streaming_card(12, "Streaming task", "")
+
+        assert card["body"]["elements"][0]["content"] == "Thinking ▌"
+
+    def test_stream_writer_appends_agent_events_without_resplitting(self, mock_feishu_channel):
+        from channels.feishu_channel import _FeishuStreamWriter
+
+        writer = _FeishuStreamWriter(12, "om_msg", mock_feishu_channel, "Streaming task")
+        writer._schedule = Mock()
+
+        writer.on_event(12, 34, "assistant", "Hello")
+        writer.on_event(12, 34, "assistant", " ")
+        writer.on_event(12, 34, "assistant", "world")
+
+        mock_feishu_channel._build_streaming_card = Mock(return_value={"card": True})
+        mock_feishu_channel._patch_message = Mock()
+
+        writer._do_patch()
+
+        mock_feishu_channel._build_streaming_card.assert_called_once_with(
+            12, "Streaming task", "Hello world"
+        )
+
+    def test_stream_writer_resets_when_run_changes(self, mock_feishu_channel):
+        from channels.feishu_channel import _FeishuStreamWriter
+
+        writer = _FeishuStreamWriter(12, "om_msg", mock_feishu_channel, "Streaming task")
+        writer._schedule = Mock()
+
+        writer.on_event(12, 34, "assistant", "old")
+        writer.on_event(12, 35, "assistant", "new")
+
+        mock_feishu_channel._build_streaming_card = Mock(return_value={"card": True})
+        mock_feishu_channel._patch_message = Mock()
+
+        writer._do_patch()
+
+        mock_feishu_channel._build_streaming_card.assert_called_once_with(
+            12, "Streaming task", "new"
+        )
+
+    def test_stream_writer_keeps_completed_message_as_single_event(self, mock_feishu_channel):
+        from channels.feishu_channel import _FeishuStreamWriter
+
+        writer = _FeishuStreamWriter(12, "om_msg", mock_feishu_channel, "Streaming task")
+        writer._schedule = Mock()
+
+        writer.on_event(12, 34, "assistant", "Hello world")
+
+        assert writer._parts == ["Hello world"]
+        writer._schedule.assert_called_once()
+
+    def test_stream_writer_does_not_overlap_patch_requests(self, mock_feishu_channel):
+        from channels.feishu_channel import _FeishuStreamWriter
+
+        writer = _FeishuStreamWriter(12, "om_msg", mock_feishu_channel, "Streaming task")
+        writer._start_patch_locked = Mock()
+
+        with writer._state_lock:
+            writer._patch_in_flight = True
+
+        writer.on_event(12, 34, "assistant", "Hello world")
+
+        writer._start_patch_locked.assert_not_called()
+        assert writer._dirty is True
