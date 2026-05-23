@@ -1,1 +1,14 @@
+- [completed] 提交并推送当前全部工作树改动
+- [completed] 对照 agentara 修复飞书折叠思考换行展示
+- [completed] 确认并修复飞书思考过程折叠面板换行展示
+- [completed] 恢复飞书流式折叠卡片并在最终态剔除最终答案
+- [completed] 按 agentara 分离飞书思考面板和最终结果
+- [completed] 深入研究 agentara 的飞书流式与最终卡片方案
+- [completed] 移除飞书流式思考面板下方的重复预览文本
+- [completed] 修复飞书最终结果保留折叠思考且将思考面板置顶
+- [completed] 用折叠面板保留飞书完整流式思考过程
+- [completed] 修复飞书流式卡片展示时换行被吞掉的问题
+- [completed] 调查飞书 streaming 修改后变成整段返回的问题
+- [completed] 将飞书 streaming 初始占位文案改为 Thinking
+- [completed] 修复飞书端 coding agent 输出 token-by-token streaming 展示问题
 - [completed] 修复飞书长结果卡片在转发场景下首屏不可读且展开重复预览的问题

@@ -38,6 +38,15 @@ logging.basicConfig(
 )
 logger = logging.getLogger("agentforge")
 
+CLAUDE_STREAM_JSON_ARGS = [
+    "--output-format",
+    "stream-json",
+    "--include-partial-messages",
+    "--verbose",
+    "--permission-mode",
+    "bypassPermissions",
+]
+
 try:
     from channels.feishu_channel import FeishuChannel
 
@@ -1128,15 +1137,7 @@ class AgentExecutor:
                 for img_path in image_paths:
                     cmd.extend(["-i", img_path])
 
-            cmd.extend(
-                [
-                    "--output-format",
-                    "stream-json",
-                    "--verbose",
-                    "--permission-mode",
-                    "bypassPermissions",
-                ]
-            )
+            cmd.extend(CLAUDE_STREAM_JSON_ARGS)
 
             result = subprocess.run(
                 cmd,
@@ -1198,6 +1199,7 @@ class TaskScheduler(BusAwareSchedulerMixin):
         self._live_heartbeat_output: dict[int, str] = {}  # tick_id -> accumulated stdout/stderr
         self._active_pgids: dict[int, int] = {}  # task_id -> process group id
         self._codex_item_text: dict[tuple[Optional[int], str], str] = {}
+        self._claude_message_text: dict[tuple[Optional[int], str], str] = {}
 
     def start(self):
         self._running = True
@@ -1379,16 +1381,7 @@ class TaskScheduler(BusAwareSchedulerMixin):
                 prompt,
             ]
         else:
-            cmd = [
-                "claude",
-                "-p",
-                prompt,
-                "--output-format",
-                "stream-json",
-                "--verbose",
-                "--permission-mode",
-                "bypassPermissions",
-            ]
+            cmd = ["claude", "-p", prompt, *CLAUDE_STREAM_JSON_ARGS]
         return self._run_agent_command(agent, cmd, working_dir_expanded)
 
     def _run_agent_command(
@@ -1701,6 +1694,44 @@ class TaskScheduler(BusAwareSchedulerMixin):
         for key in [key for key in self._codex_item_text if key[0] == run_id]:
             self._codex_item_text.pop(key, None)
 
+    def _claude_text_delta(
+        self, run_id: Optional[int], message_id: str, current_text: str
+    ) -> Optional[str]:
+        """Return newly emitted text for Claude partial/cumulative assistant messages."""
+        key = (run_id, message_id)
+        previous = self._claude_message_text.get(key, "")
+        if not current_text:
+            return None
+
+        if not previous:
+            self._claude_message_text[key] = current_text
+            return current_text
+
+        if current_text == previous:
+            return None
+
+        if current_text.startswith(previous):
+            self._claude_message_text[key] = current_text
+            delta = current_text[len(previous) :]
+            return delta or None
+
+        # Claude can emit either cumulative partial messages or text chunks. For
+        # same-message non-cumulative chunks, keep our own accumulated state.
+        self._claude_message_text[key] = previous + current_text
+        return current_text
+
+    def _claude_message_id(self, event: dict, run_id: Optional[int]) -> str:
+        message = event.get("message", {})
+        if isinstance(message, dict):
+            message_id = message.get("id") or message.get("message_id")
+            if message_id:
+                return str(message_id)
+        return f"assistant:{run_id}"
+
+    def _clear_claude_run_state(self, run_id: int) -> None:
+        for key in [key for key in self._claude_message_text if key[0] == run_id]:
+            self._claude_message_text.pop(key, None)
+
     def _parse_codex_event(self, event: dict, run_id: Optional[int] = None) -> tuple:
         """Normalize a Codex JSONL event into (event_type, content) for storage.
 
@@ -1719,14 +1750,12 @@ class TaskScheduler(BusAwareSchedulerMixin):
                     delta = self._codex_text_delta(run_id, item_id, item.get("text", ""))
                 return ("assistant", delta) if delta is not None else (None, None)
             elif itype == "reasoning":
-                text = item.get("text", "")
-                if etype == "item.updated":
-                    item_id = str(item.get("id") or item.get("item_id") or "reasoning")
-                    event_delta = self._codex_event_delta_text(event, item)
-                    if event_delta is not None:
-                        text = self._codex_append_text_delta(run_id, item_id, event_delta) or ""
-                    else:
-                        text = self._codex_text_delta(run_id, item_id, text) or ""
+                item_id = str(item.get("id") or item.get("item_id") or "reasoning")
+                event_delta = self._codex_event_delta_text(event, item)
+                if etype == "item.updated" and event_delta is not None:
+                    text = self._codex_append_text_delta(run_id, item_id, event_delta) or ""
+                else:
+                    text = self._codex_text_delta(run_id, item_id, item.get("text", "")) or ""
                 return ("assistant", f"[thinking] {text}") if text else (None, None)
             elif itype == "command_execution":
                 cmd = item.get("command", "")
@@ -1769,12 +1798,20 @@ class TaskScheduler(BusAwareSchedulerMixin):
 
             # Claude stream-json
             event_type = event.get("type", "unknown")
-            if event_type in ("user", "assistant"):
+            if event_type == "assistant":
+                text_content, image_events = self._extract_message_content(event)
+                if text_content:
+                    message_id = self._claude_message_id(event, run_id)
+                    text_content = self._claude_text_delta(run_id, message_id, text_content)
+                if text_content:
+                    self.db.add_output_event(task_id, run_id, event_type, text_content)
+                    self._fire_output_listeners(task_id, run_id, event_type, text_content)
+                for img_json in image_events:
+                    self.db.add_output_event(task_id, run_id, "image_content", img_json)
+            elif event_type == "user":
                 text_content, image_events = self._extract_message_content(event)
                 if text_content:
                     self.db.add_output_event(task_id, run_id, event_type, text_content)
-                    if event_type == "assistant":
-                        self._fire_output_listeners(task_id, run_id, event_type, text_content)
                 for img_json in image_events:
                     self.db.add_output_event(task_id, run_id, "image_content", img_json)
             else:
@@ -2001,23 +2038,10 @@ class TaskScheduler(BusAwareSchedulerMixin):
                 "-p",
                 "--input-format",
                 "stream-json",
-                "--output-format",
-                "stream-json",
-                "--verbose",
-                "--permission-mode",
-                "bypassPermissions",
+                *CLAUDE_STREAM_JSON_ARGS,
             ]
         else:
-            cmd = [
-                "claude",
-                "-p",
-                prompt,
-                "--output-format",
-                "stream-json",
-                "--verbose",
-                "--permission-mode",
-                "bypassPermissions",
-            ]
+            cmd = ["claude", "-p", prompt, *CLAUDE_STREAM_JSON_ARGS]
         if agent == "claude" and task.get("session_id"):
             cmd.extend(["--resume", task["session_id"]])
         raw_stdout = ""
@@ -2201,6 +2225,8 @@ class TaskScheduler(BusAwareSchedulerMixin):
         self._live_output.pop(tid, None)
         if agent == "codex":
             self._clear_codex_run_state(run_id)
+        elif agent == "claude":
+            self._clear_claude_run_state(run_id)
 
         # Extract session_id from output (format differs by agent)
         extracted_session_id = None

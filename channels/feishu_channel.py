@@ -14,6 +14,7 @@ Configure via settings API:
 
 import base64
 import json
+import re
 import threading
 import time
 from datetime import datetime, timedelta, timezone
@@ -70,7 +71,10 @@ HELP_TEXT = """\
 
 FEISHU_CARD_MARKDOWN_CHUNK = 7000
 FEISHU_FALLBACK_MARKDOWN_LIMIT = 8000
-FEISHU_STREAMING_MAX_OUTPUT = 4000  # max chars of output to show in streaming card
+FEISHU_CARD_MAX_ELEMENTS = 200
+FEISHU_PANEL_MAX_LINE_ELEMENTS = FEISHU_CARD_MAX_ELEMENTS - 20
+FEISHU_PANEL_PLAIN_TEXT_CHUNK = 1800
+FEISHU_THINKING_PREFIX = "[thinking] "
 
 
 class _FeishuStreamWriter:
@@ -110,6 +114,7 @@ class _FeishuStreamWriter:
             return
         if event_type != "assistant" or content == "":
             return
+        display_content = self._display_content(content)
         with self._parts_lock:
             # Latch the run_id on the first event; reset parts if run_id changes (resume)
             if self._run_id is None:
@@ -117,8 +122,13 @@ class _FeishuStreamWriter:
             elif self._run_id != run_id:
                 self._run_id = run_id
                 self._parts.clear()
-            self._parts.append(content)
+            self._parts.append(display_content)
         self._schedule()
+
+    def _display_content(self, content: str) -> str:
+        if content.startswith(FEISHU_THINKING_PREFIX):
+            return content[len(FEISHU_THINKING_PREFIX) :]
+        return content
 
     def _schedule(self) -> None:
         with self._state_lock:
@@ -153,8 +163,6 @@ class _FeishuStreamWriter:
     def _do_patch(self) -> None:
         with self._parts_lock:
             text = "".join(self._parts)
-        if len(text) > FEISHU_STREAMING_MAX_OUTPUT:
-            text = "…" + text[-FEISHU_STREAMING_MAX_OUTPUT:]
         card = self._channel._build_streaming_card(self.task_id, self._task_title, text)
         try:
             self._channel._patch_message(self.msg_id, card)
@@ -163,6 +171,10 @@ class _FeishuStreamWriter:
                 self._last_patch = time.time()
                 self._patch_in_flight = False
                 self._schedule_dirty_locked()
+
+    def snapshot_text(self) -> str:
+        with self._parts_lock:
+            return "".join(self._parts)
 
     def stop(self) -> None:
         with self._state_lock:
@@ -322,22 +334,23 @@ class FeishuChannel(Channel):
             ]
             content = error_text
 
+        # Try to reply in thread if we have an origin message
+        with self._origin_lock:
+            origin = self._task_origin.get(task_id)
+
+        # Stop streaming thread and get the running card message_id/history if any
+        streaming_msg_id = None
+        with self._streaming_lock:
+            streaming_msg_id = self._streaming_msg.pop(task_id, None)
+        streaming_history = self._stop_streaming(task_id)
+
         card = self._build_notification_card(
             task_id=task_id,
             task=task,
             is_completed=is_completed,
             body_text=content,
+            streaming_history=streaming_history,
         )
-
-        # Try to reply in thread if we have an origin message
-        with self._origin_lock:
-            origin = self._task_origin.get(task_id)
-
-        # Stop streaming thread and get the running card message_id if any
-        streaming_msg_id = None
-        with self._streaming_lock:
-            streaming_msg_id = self._streaming_msg.pop(task_id, None)
-        self._stop_streaming(task_id)
 
         sent_id = None
         if origin:
@@ -539,23 +552,100 @@ class FeishuChannel(Channel):
         self, task_id: int, task_title: str, output_text: str, done: bool = False
     ) -> dict[str, Any]:
         """Build a card showing live streaming output."""
+        elements: list[dict[str, Any]]
         if done:
             display_text = output_text.strip() or "完成"
+            elements = [
+                {
+                    "tag": "markdown",
+                    "content": self._preserve_feishu_markdown_linebreaks(display_text),
+                }
+            ]
+        elif not output_text.strip():
+            elements = [{"tag": "markdown", "content": "Thinking ▌"}]
         else:
-            body = output_text.strip() or "Thinking"
-            display_text = body + " ▌"
+            elements = [self._build_streaming_history_panel(output_text, expanded=True)]
         return {
             "schema": "2.0",
             "config": {"wide_screen_mode": True, "width_mode": "fill"},
             "body": {
-                "elements": [
-                    {
-                        "tag": "markdown",
-                        "content": display_text,
-                    }
-                ]
+                "elements": elements,
             },
         }
+
+    def _build_streaming_history_panel(
+        self, output_text: str, expanded: bool = False
+    ) -> dict[str, Any]:
+        elements = self._build_streaming_history_elements(output_text)
+        return {
+            "tag": "collapsible_panel",
+            "expanded": expanded,
+            "header": {
+                "title": {
+                    "tag": "plain_text",
+                    "content": "思考过程",
+                },
+                "vertical_align": "center",
+                "icon": {
+                    "tag": "standard_icon",
+                    "token": "down-small-ccm_outlined",
+                    "color": "",
+                    "size": "16px 16px",
+                },
+                "icon_position": "right",
+                "icon_expanded_angle": -180,
+            },
+            "border": {
+                "color": "grey",
+                "corner_radius": "5px",
+            },
+            "vertical_spacing": "8px",
+            "padding": "8px 8px 8px 8px",
+            "elements": elements,
+        }
+
+    def _build_streaming_history_elements(self, output_text: str) -> list[dict[str, Any]]:
+        normalized = output_text.replace("\r\n", "\n").replace("\r", "\n").rstrip("\n")
+        if not normalized:
+            return []
+
+        line_elements = self._build_streaming_history_line_elements(normalized)
+        if len(line_elements) <= FEISHU_PANEL_MAX_LINE_ELEMENTS:
+            return line_elements
+
+        return [
+            {
+                "tag": "markdown",
+                "content": self._wrap_feishu_code_block(normalized),
+            }
+        ]
+
+    def _build_streaming_history_line_elements(self, text: str) -> list[dict[str, Any]]:
+        elements: list[dict[str, Any]] = []
+        for line in text.split("\n"):
+            chunks = self._chunk_text(line, FEISHU_PANEL_PLAIN_TEXT_CHUNK) if line else [" "]
+            for chunk in chunks:
+                elements.append(self._build_streaming_history_line(chunk))
+        return elements
+
+    def _build_streaming_history_line(self, content: str) -> dict[str, Any]:
+        return {
+            "tag": "div",
+            "text": {
+                "tag": "plain_text",
+                "text_color": "grey",
+                "text_size": "notation",
+                "content": content,
+            },
+        }
+
+    def _wrap_feishu_code_block(self, text: str) -> str:
+        longest_backtick_run = max((len(run) for run in re.findall(r"`+", text)), default=0)
+        fence = "`" * max(3, longest_backtick_run + 1)
+        return f"{fence}\n{text}\n{fence}"
+
+    def _preserve_feishu_markdown_linebreaks(self, text: str) -> str:
+        return text.replace("\r\n", "\n").replace("\r", "\n")
 
     def _start_streaming(self, task_id: int, running_msg_id: str, task_title: str) -> None:
         """Register an event-driven writer that patches the running card on each assistant event."""
@@ -571,14 +661,17 @@ class FeishuChannel(Channel):
         self.scheduler.add_output_listener(writer.on_event)
         print(f"[Feishu] Streaming writer registered for task {task_id}, msg_id={running_msg_id}")
 
-    def _stop_streaming(self, task_id: int) -> None:
+    def _stop_streaming(self, task_id: int) -> Optional[str]:
         """Unregister the streaming writer for task_id."""
         with self._writers_lock:
             writer = self._writers.pop(task_id, None)
         if writer:
             self.scheduler.remove_output_listener(writer.on_event)
+            history = writer.snapshot_text()
             writer.stop()
             print(f"[Feishu] Streaming writer stopped for task {task_id}")
+            return history
+        return None
 
     def _build_notification_card(
         self,
@@ -586,10 +679,19 @@ class FeishuChannel(Channel):
         task: dict[str, Any],
         is_completed: bool,
         body_text: str,
+        streaming_history: Optional[str] = None,
     ) -> dict[str, Any]:
         clean_body = (body_text or "").strip() or ("Done." if is_completed else "Unknown error")
         summary = self._truncate_text(clean_body.splitlines()[0], 120) if clean_body else ""
         elements = self._build_result_elements(body_text=clean_body)
+        if streaming_history and streaming_history.strip():
+            panel_text = (
+                self._strip_final_result_from_history(streaming_history, clean_body)
+                if is_completed
+                else streaming_history
+            )
+            if panel_text.strip():
+                elements = [self._build_streaming_history_panel(panel_text)] + elements
 
         if not is_completed:
             elements.append(
@@ -611,6 +713,16 @@ class FeishuChannel(Channel):
                 "elements": elements,
             },
         }
+
+    def _strip_final_result_from_history(self, history: str, final_text: str) -> str:
+        final_body = (final_text or "").strip()
+        if not final_body:
+            return history
+
+        trimmed_history = history.rstrip()
+        if trimmed_history.endswith(final_body):
+            return trimmed_history[: -len(final_body)].rstrip()
+        return history
 
     def _build_result_elements(self, body_text: str) -> list[dict[str, Any]]:
         clean_body = (body_text or "").strip() or "Done."

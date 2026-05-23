@@ -24,6 +24,22 @@ def mock_feishu_channel():
         return channel
 
 
+def _panel_texts(panel):
+    return [element["text"]["content"] for element in panel["elements"] if element["tag"] == "div"]
+
+
+def _count_card_elements(value):
+    if not isinstance(value, dict):
+        return 0
+    count = 1 if isinstance(value.get("tag"), str) else 0
+    for child in value.values():
+        if isinstance(child, list):
+            count += sum(_count_card_elements(item) for item in child)
+        elif isinstance(child, dict):
+            count += _count_card_elements(child)
+    return count
+
+
 class TestFeishuNotificationCards:
     def test_build_completed_card_shows_result_only(self, mock_feishu_channel):
         task = {
@@ -165,6 +181,33 @@ class TestFeishuNotificationCards:
         )
         assert "".join(element["content"] for element in card["body"]["elements"]) == long_text
 
+    def test_build_completed_card_places_streaming_history_above_result(
+        self, mock_feishu_channel
+    ):
+        task = {
+            "id": 103,
+            "title": "Finished task",
+            "prompt": "输出最终结果",
+            "agent": "codex",
+            "working_dir": "~/workspace/agentforge",
+        }
+
+        card = mock_feishu_channel._build_notification_card(
+            task_id=103,
+            task=task,
+            is_completed=True,
+            body_text="最终结果",
+            streaming_history="思考第一步\n思考第二步",
+        )
+
+        panel = card["body"]["elements"][0]
+        result = card["body"]["elements"][1]
+        assert panel["tag"] == "collapsible_panel"
+        assert panel["expanded"] is False
+        assert panel["header"]["title"]["content"] == "思考过程"
+        assert _panel_texts(panel) == ["思考第一步", "思考第二步"]
+        assert result == {"tag": "markdown", "content": "最终结果"}
+
     def test_send_uses_structured_card_and_fallback_content(self, mock_feishu_channel):
         task = {
             "id": 5,
@@ -220,6 +263,97 @@ class TestFeishuNotificationCards:
         _, kwargs = mock_feishu_channel._build_notification_card.call_args
         assert kwargs["body_text"] == long_result
 
+    def test_send_final_patch_preserves_streaming_history(self, mock_feishu_channel):
+        from channels.feishu_channel import _FeishuStreamWriter
+
+        task = {
+            "id": 8,
+            "title": "Streaming final",
+            "prompt": "发布最终结果",
+            "result": "final result",
+            "error": None,
+            "agent": "codex",
+            "working_dir": "~/workspace/agentforge",
+        }
+        writer = _FeishuStreamWriter(8, "om_stream", mock_feishu_channel, "Streaming final")
+        writer._schedule = Mock()
+        writer.on_event(8, 44, "assistant", "[thinking] thinking line\n")
+        writer.on_event(8, 44, "assistant", "[thinking] more thinking")
+        writer.on_event(8, 44, "assistant", "final result")
+
+        mock_feishu_channel.db.get_task.return_value = task
+        mock_feishu_channel._task_origin[8] = ("oc_chat", "root_msg", "reaction_msg")
+        mock_feishu_channel._streaming_msg[8] = "om_stream"
+        mock_feishu_channel._writers[8] = writer
+        mock_feishu_channel._add_reaction = Mock()
+        mock_feishu_channel._patch_message = Mock(return_value=True)
+
+        msg = OutboundMessage(
+            type=OutboundMessageType.TASK_COMPLETED,
+            task_id=8,
+            payload={"result": "final result", "title": "Streaming final"},
+        )
+
+        mock_feishu_channel.send(msg)
+
+        _, patched_card = mock_feishu_channel._patch_message.call_args.args
+        panel = patched_card["body"]["elements"][0]
+        result = patched_card["body"]["elements"][1]
+        assert panel["tag"] == "collapsible_panel"
+        assert panel["header"]["title"]["content"] == "思考过程"
+        assert _panel_texts(panel) == ["thinking line", "more thinking"]
+        assert "final result" not in "".join(_panel_texts(panel))
+        assert result == {"tag": "markdown", "content": "final result"}
+        mock_feishu_channel.scheduler.remove_output_listener.assert_called_once_with(
+            writer.on_event
+        )
+
+    def test_build_completed_card_removes_final_answer_from_history(
+        self, mock_feishu_channel
+    ):
+        task = {
+            "id": 9,
+            "title": "Streaming final",
+            "prompt": "发布最终结果",
+            "agent": "claude",
+            "working_dir": "~/workspace/agentforge",
+        }
+
+        card = mock_feishu_channel._build_notification_card(
+            task_id=9,
+            task=task,
+            is_completed=True,
+            body_text="final result",
+            streaming_history="working...\nfinal result",
+        )
+
+        panel = card["body"]["elements"][0]
+        result = card["body"]["elements"][1]
+        assert panel["tag"] == "collapsible_panel"
+        assert _panel_texts(panel) == ["working..."]
+        assert result == {"tag": "markdown", "content": "final result"}
+
+    def test_build_completed_card_omits_panel_when_history_is_only_final_answer(
+        self, mock_feishu_channel
+    ):
+        task = {
+            "id": 10,
+            "title": "Streaming final",
+            "prompt": "发布最终结果",
+            "agent": "claude",
+            "working_dir": "~/workspace/agentforge",
+        }
+
+        card = mock_feishu_channel._build_notification_card(
+            task_id=10,
+            task=task,
+            is_completed=True,
+            body_text="final result",
+            streaming_history="final result",
+        )
+
+        assert card["body"]["elements"] == [{"tag": "markdown", "content": "final result"}]
+
 
 class TestFeishuStreaming:
     def test_streaming_card_uses_thinking_placeholder(self, mock_feishu_channel):
@@ -227,15 +361,71 @@ class TestFeishuStreaming:
 
         assert card["body"]["elements"][0]["content"] == "Thinking ▌"
 
-    def test_stream_writer_appends_agent_events_without_resplitting(self, mock_feishu_channel):
+    def test_streaming_card_preserves_single_newlines(self, mock_feishu_channel):
+        card = mock_feishu_channel._build_streaming_card(
+            12, "Streaming task", "first line\nsecond line\n"
+        )
+
+        panel = card["body"]["elements"][0]
+        assert len(card["body"]["elements"]) == 1
+        assert panel["tag"] == "collapsible_panel"
+        assert panel["expanded"] is True
+        assert _panel_texts(panel) == ["first line", "second line"]
+
+    def test_streaming_card_normalizes_crlf_newlines(self, mock_feishu_channel):
+        card = mock_feishu_channel._build_streaming_card(
+            12, "Streaming task", "first line\r\nsecond line"
+        )
+
+        panel = card["body"]["elements"][0]
+        assert _panel_texts(panel) == ["first line", "second line"]
+
+    def test_streaming_card_preserves_blank_lines_as_separate_rows(
+        self, mock_feishu_channel
+    ):
+        card = mock_feishu_channel._build_streaming_card(
+            12, "Streaming task", "first line\n\nthird line"
+        )
+
+        panel = card["body"]["elements"][0]
+        assert _panel_texts(panel) == ["first line", " ", "third line"]
+
+    def test_streaming_card_keeps_full_output_in_collapsible_panel(self, mock_feishu_channel):
+        long_text = "start\n" + ("A" * 1600) + "\nend"
+
+        card = mock_feishu_channel._build_streaming_card(12, "Streaming task", long_text)
+
+        panel = card["body"]["elements"][0]
+        assert len(card["body"]["elements"]) == 1
+        assert panel["tag"] == "collapsible_panel"
+        assert panel["expanded"] is True
+        assert panel["header"]["title"]["content"] == "思考过程"
+        assert _panel_texts(panel) == ["start", "A" * 1600, "end"]
+
+    def test_streaming_card_uses_code_block_fallback_for_many_lines(
+        self, mock_feishu_channel
+    ):
+        long_text = "\n".join(f"line {i}" for i in range(220))
+
+        card = mock_feishu_channel._build_streaming_card(12, "Streaming task", long_text)
+
+        panel = card["body"]["elements"][0]
+        assert panel["elements"] == [
+            {"tag": "markdown", "content": f"```\n{long_text}\n```"}
+        ]
+        assert _count_card_elements(card) <= 200
+
+    def test_stream_writer_appends_thinking_events_without_resplitting(
+        self, mock_feishu_channel
+    ):
         from channels.feishu_channel import _FeishuStreamWriter
 
         writer = _FeishuStreamWriter(12, "om_msg", mock_feishu_channel, "Streaming task")
         writer._schedule = Mock()
 
-        writer.on_event(12, 34, "assistant", "Hello")
-        writer.on_event(12, 34, "assistant", " ")
-        writer.on_event(12, 34, "assistant", "world")
+        writer.on_event(12, 34, "assistant", "[thinking] Hello")
+        writer.on_event(12, 34, "assistant", "[thinking]  ")
+        writer.on_event(12, 34, "assistant", "[thinking] world")
 
         mock_feishu_channel._build_streaming_card = Mock(return_value={"card": True})
         mock_feishu_channel._patch_message = Mock()
@@ -246,14 +436,32 @@ class TestFeishuStreaming:
             12, "Streaming task", "Hello world"
         )
 
+    def test_stream_writer_keeps_full_text_for_folded_history(self, mock_feishu_channel):
+        from channels.feishu_channel import _FeishuStreamWriter
+
+        long_text = "A" * 5000
+        writer = _FeishuStreamWriter(12, "om_msg", mock_feishu_channel, "Streaming task")
+        writer._schedule = Mock()
+
+        writer.on_event(12, 34, "assistant", f"[thinking] {long_text}")
+
+        mock_feishu_channel._build_streaming_card = Mock(return_value={"card": True})
+        mock_feishu_channel._patch_message = Mock()
+
+        writer._do_patch()
+
+        mock_feishu_channel._build_streaming_card.assert_called_once_with(
+            12, "Streaming task", long_text
+        )
+
     def test_stream_writer_resets_when_run_changes(self, mock_feishu_channel):
         from channels.feishu_channel import _FeishuStreamWriter
 
         writer = _FeishuStreamWriter(12, "om_msg", mock_feishu_channel, "Streaming task")
         writer._schedule = Mock()
 
-        writer.on_event(12, 34, "assistant", "old")
-        writer.on_event(12, 35, "assistant", "new")
+        writer.on_event(12, 34, "assistant", "[thinking] old")
+        writer.on_event(12, 35, "assistant", "[thinking] new")
 
         mock_feishu_channel._build_streaming_card = Mock(return_value={"card": True})
         mock_feishu_channel._patch_message = Mock()
@@ -264,7 +472,9 @@ class TestFeishuStreaming:
             12, "Streaming task", "new"
         )
 
-    def test_stream_writer_keeps_completed_message_as_single_event(self, mock_feishu_channel):
+    def test_stream_writer_keeps_plain_assistant_text_for_live_card(
+        self, mock_feishu_channel
+    ):
         from channels.feishu_channel import _FeishuStreamWriter
 
         writer = _FeishuStreamWriter(12, "om_msg", mock_feishu_channel, "Streaming task")
@@ -284,7 +494,7 @@ class TestFeishuStreaming:
         with writer._state_lock:
             writer._patch_in_flight = True
 
-        writer.on_event(12, 34, "assistant", "Hello world")
+        writer.on_event(12, 34, "assistant", "[thinking] Hello world")
 
         writer._start_patch_locked.assert_not_called()
         assert writer._dirty is True

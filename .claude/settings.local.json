@@ -16,7 +16,8 @@
       "Bash(git fetch:*)",
       "Bash(git merge:*)",
       "Bash(uv run:*)",
-      "Bash(git:*)"
+      "Bash(git:*)",
+      "Bash(python3:*)"
     ]
   }
 }

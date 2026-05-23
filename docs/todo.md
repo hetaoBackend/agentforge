@@ -2,6 +2,11 @@
 
 ## In Progress
 
+- [x] **补齐 Claude Code 模式飞书流式输出** — 开启 Claude CLI partial message chunks，并将 Claude partial/cumulative assistant 消息转成增量事件推送给飞书 running card
+  - ✅ 已修复：所有 Claude stream-json 命令统一带 `--include-partial-messages`
+  - ✅ 已修复：Claude assistant partial/cumulative 文本按 message id 去重，只向 Feishu writer 推送新增内容
+  - ✅ 验证：`make check` 通过，`86 passed`
+
 - [x] **修复流式输出链路问题** — 去掉飞书侧二次 token 拆分，串行化 Feishu PatchMessage 更新，并让任务完成后的 `/output` 接口回落到最新 run 的 `raw_output`
   - ✅ 已修复：飞书 streaming writer 现在按 agent 原始 assistant 事件追加内容，不再拆词做本地打字机效果
   - ✅ 已修复：Feishu PatchMessage 更新增加 in-flight/dirty 状态，避免并发 patch 乱序覆盖
