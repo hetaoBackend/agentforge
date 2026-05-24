@@ -181,9 +181,7 @@ class TestFeishuNotificationCards:
         )
         assert "".join(element["content"] for element in card["body"]["elements"]) == long_text
 
-    def test_build_completed_card_places_streaming_history_above_result(
-        self, mock_feishu_channel
-    ):
+    def test_build_completed_card_places_streaming_history_above_result(self, mock_feishu_channel):
         task = {
             "id": 103,
             "title": "Finished task",
@@ -308,9 +306,7 @@ class TestFeishuNotificationCards:
             writer.on_event
         )
 
-    def test_build_completed_card_removes_final_answer_from_history(
-        self, mock_feishu_channel
-    ):
+    def test_build_completed_card_removes_final_answer_from_history(self, mock_feishu_channel):
         task = {
             "id": 9,
             "title": "Streaming final",
@@ -380,9 +376,7 @@ class TestFeishuStreaming:
         panel = card["body"]["elements"][0]
         assert _panel_texts(panel) == ["first line", "second line"]
 
-    def test_streaming_card_preserves_blank_lines_as_separate_rows(
-        self, mock_feishu_channel
-    ):
+    def test_streaming_card_preserves_blank_lines_as_separate_rows(self, mock_feishu_channel):
         card = mock_feishu_channel._build_streaming_card(
             12, "Streaming task", "first line\n\nthird line"
         )
@@ -402,22 +396,16 @@ class TestFeishuStreaming:
         assert panel["header"]["title"]["content"] == "思考过程"
         assert _panel_texts(panel) == ["start", "A" * 1600, "end"]
 
-    def test_streaming_card_uses_code_block_fallback_for_many_lines(
-        self, mock_feishu_channel
-    ):
+    def test_streaming_card_uses_code_block_fallback_for_many_lines(self, mock_feishu_channel):
         long_text = "\n".join(f"line {i}" for i in range(220))
 
         card = mock_feishu_channel._build_streaming_card(12, "Streaming task", long_text)
 
         panel = card["body"]["elements"][0]
-        assert panel["elements"] == [
-            {"tag": "markdown", "content": f"```\n{long_text}\n```"}
-        ]
+        assert panel["elements"] == [{"tag": "markdown", "content": f"```\n{long_text}\n```"}]
         assert _count_card_elements(card) <= 200
 
-    def test_stream_writer_appends_thinking_events_without_resplitting(
-        self, mock_feishu_channel
-    ):
+    def test_stream_writer_appends_thinking_events_without_resplitting(self, mock_feishu_channel):
         from channels.feishu_channel import _FeishuStreamWriter
 
         writer = _FeishuStreamWriter(12, "om_msg", mock_feishu_channel, "Streaming task")
@@ -472,9 +460,7 @@ class TestFeishuStreaming:
             12, "Streaming task", "new"
         )
 
-    def test_stream_writer_keeps_plain_assistant_text_for_live_card(
-        self, mock_feishu_channel
-    ):
+    def test_stream_writer_keeps_plain_assistant_text_for_live_card(self, mock_feishu_channel):
         from channels.feishu_channel import _FeishuStreamWriter
 
         writer = _FeishuStreamWriter(12, "om_msg", mock_feishu_channel, "Streaming task")
