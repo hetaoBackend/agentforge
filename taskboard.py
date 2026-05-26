@@ -3,6 +3,7 @@ AgentForge - macOS App
 A kanban-style task board for orchestrating AI coding agents with cron scheduling and delayed execution.
 """
 
+import base64
 import json
 import logging
 import os
@@ -18,6 +19,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from enum import Enum
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from pathlib import Path
 from typing import Callable, Optional
 from urllib.parse import parse_qs, urlparse
 
@@ -46,6 +48,33 @@ CLAUDE_STREAM_JSON_ARGS = [
     "--permission-mode",
     "bypassPermissions",
 ]
+
+LIVE_OUTPUT_EVENT_TYPES = {
+    "assistant",
+    "tool_call",
+    "tool_result",
+    "command_execution",
+    "file_change",
+    "web_search",
+    "error",
+}
+SECRET_KEY_FRAGMENTS = (
+    "api_key",
+    "apikey",
+    "authorization",
+    "auth_token",
+    "credential",
+    "password",
+    "secret",
+    "token",
+)
+GENERATED_IMAGE_MEDIA_TYPES = {
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".gif": "image/gif",
+    ".webp": "image/webp",
+}
 
 try:
     from channels.feishu_channel import FeishuChannel
@@ -1694,6 +1723,93 @@ class TaskScheduler(BusAwareSchedulerMixin):
         for key in [key for key in self._codex_item_text if key[0] == run_id]:
             self._codex_item_text.pop(key, None)
 
+    def _extract_codex_thread_id(self, raw_stdout: str) -> Optional[str]:
+        for line in raw_stdout.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if event.get("type") == "thread.started" and event.get("thread_id"):
+                return str(event["thread_id"])
+        return None
+
+    def _codex_generated_images_root(self) -> Path:
+        codex_home = os.environ.get("CODEX_HOME") or os.path.join(os.path.expanduser("~"), ".codex")
+        return Path(codex_home).expanduser() / "generated_images"
+
+    def _find_codex_generated_images(
+        self, thread_id: Optional[str], since_timestamp: Optional[float] = None
+    ) -> list[str]:
+        if not thread_id:
+            return []
+        image_dir = self._codex_generated_images_root() / thread_id
+        if not image_dir.is_dir():
+            return []
+        paths = []
+        for path in image_dir.rglob("*"):
+            if not path.is_file() or path.suffix.lower() not in GENERATED_IMAGE_MEDIA_TYPES:
+                continue
+            if since_timestamp is not None:
+                try:
+                    if path.stat().st_mtime < since_timestamp:
+                        continue
+                except OSError:
+                    continue
+            paths.append(path)
+        return [str(path) for path in sorted(paths)]
+
+    def _image_media_type(self, image_path: str) -> str:
+        return GENERATED_IMAGE_MEDIA_TYPES.get(Path(image_path).suffix.lower(), "image/png")
+
+    def _extract_codex_success_output(
+        self, raw_stdout: str, generated_images: Optional[list[str]] = None
+    ) -> str:
+        out = ""
+        for line in raw_stdout.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if (
+                event.get("type") == "item.completed"
+                and event.get("item", {}).get("type") == "agent_message"
+            ):
+                out = event["item"].get("text", "")
+
+        parts = []
+        if out.strip():
+            parts.append(out.strip())
+        if generated_images:
+            image_lines = "\n".join(f"- {path}" for path in generated_images)
+            parts.append(f"已生成 {len(generated_images)} 张图片：\n{image_lines}")
+        return "\n\n".join(parts)
+
+    def _store_generated_image_events(
+        self, task_id: int, run_id: int, generated_images: list[str]
+    ) -> None:
+        for image_path in generated_images:
+            media_type = self._image_media_type(image_path)
+            metadata = {"path": image_path, "media_type": media_type}
+            self._store_output_event(task_id, run_id, "generated_image", self._trace_json(metadata))
+            try:
+                with open(image_path, "rb") as f:
+                    image_data = base64.b64encode(f.read()).decode("utf-8")
+            except OSError as e:
+                logger.warning(f"Task {task_id}: failed to read generated image {image_path}: {e}")
+                continue
+            self.db.add_output_event(
+                task_id,
+                run_id,
+                "image_content",
+                json.dumps({**metadata, "data": image_data}, ensure_ascii=False),
+            )
+
     def _claude_text_delta(
         self, run_id: Optional[int], message_id: str, current_text: str
     ) -> Optional[str]:
@@ -1732,6 +1848,59 @@ class TaskScheduler(BusAwareSchedulerMixin):
         for key in [key for key in self._claude_message_text if key[0] == run_id]:
             self._claude_message_text.pop(key, None)
 
+    def _redact_display_payload(self, value):
+        if isinstance(value, dict):
+            redacted = {}
+            for key, child in value.items():
+                key_str = str(key)
+                if any(fragment in key_str.lower() for fragment in SECRET_KEY_FRAGMENTS):
+                    redacted[key] = "[redacted]"
+                else:
+                    redacted[key] = self._redact_display_payload(child)
+            return redacted
+        if isinstance(value, list):
+            return [self._redact_display_payload(item) for item in value]
+        return value
+
+    def _compact_payload(self, payload: dict) -> dict:
+        return {key: value for key, value in payload.items() if value is not None}
+
+    def _trace_json(self, payload: dict) -> str:
+        return json.dumps(self._redact_display_payload(payload), ensure_ascii=False)
+
+    def _content_to_display_text(self, content) -> str:
+        if content is None:
+            return ""
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            parts = []
+            for item in content:
+                if isinstance(item, str):
+                    parts.append(item)
+                elif isinstance(item, dict) and item.get("type") == "text":
+                    parts.append(item.get("text", ""))
+                elif isinstance(item, dict) and item.get("type") == "image":
+                    parts.append("[image]")
+                else:
+                    parts.append(json.dumps(self._redact_display_payload(item), ensure_ascii=False))
+            return "".join(parts)
+        if isinstance(content, dict):
+            if content.get("type") == "text":
+                return content.get("text", "")
+            return json.dumps(self._redact_display_payload(content), ensure_ascii=False)
+        return str(content)
+
+    def _should_stream_event(self, event_type: str) -> bool:
+        return event_type in LIVE_OUTPUT_EVENT_TYPES
+
+    def _store_output_event(self, task_id: int, run_id: int, event_type: str, content: str) -> None:
+        if not content:
+            return
+        self.db.add_output_event(task_id, run_id, event_type, content)
+        if self._should_stream_event(event_type):
+            self._fire_output_listeners(task_id, run_id, event_type, content)
+
     def _parse_codex_event(self, event: dict, run_id: Optional[int] = None) -> tuple:
         """Normalize a Codex JSONL event into (event_type, content) for storage.
 
@@ -1758,12 +1927,52 @@ class TaskScheduler(BusAwareSchedulerMixin):
                     text = self._codex_text_delta(run_id, item_id, item.get("text", "")) or ""
                 return ("assistant", f"[thinking] {text}") if text else (None, None)
             elif itype == "command_execution":
-                cmd = item.get("command", "")
-                out = item.get("aggregated_output", "")
-                content = (
-                    f"$ {cmd}\n{out}".strip() if cmd else json.dumps(event, ensure_ascii=False)
+                return "command_execution", self._trace_json(
+                    self._compact_payload(
+                        {
+                            "id": item.get("id") or item.get("item_id"),
+                            "command": item.get("command", ""),
+                            "output": item.get("aggregated_output", ""),
+                            "exit_code": item.get("exit_code"),
+                            "status": item.get("status"),
+                        }
+                    )
                 )
-                return etype, content
+            elif itype in ("mcp_tool_call", "collab_tool_call"):
+                return "tool_call", self._trace_json(
+                    self._compact_payload(
+                        {
+                            "id": item.get("id") or item.get("item_id"),
+                            "server": item.get("server"),
+                            "name": item.get("tool") or item.get("name"),
+                            "input": item.get("arguments") or item.get("input"),
+                            "result": item.get("result"),
+                            "status": item.get("status"),
+                            "error": item.get("error"),
+                        }
+                    )
+                )
+            elif itype == "web_search":
+                return "web_search", self._trace_json(
+                    self._compact_payload(
+                        {
+                            "id": item.get("id") or item.get("item_id"),
+                            "query": item.get("query"),
+                            "action": item.get("action"),
+                            "status": item.get("status"),
+                        }
+                    )
+                )
+            elif itype == "file_change":
+                return "file_change", self._trace_json(
+                    self._compact_payload(
+                        {
+                            "id": item.get("id") or item.get("item_id"),
+                            "changes": item.get("changes"),
+                            "status": item.get("status"),
+                        }
+                    )
+                )
             else:
                 return etype, json.dumps(event, ensure_ascii=False)
         elif etype == "turn.failed":
@@ -1791,29 +2000,30 @@ class TaskScheduler(BusAwareSchedulerMixin):
             if agent == "codex":
                 event_type, content = self._parse_codex_event(event, run_id)
                 if event_type and content:
-                    self.db.add_output_event(task_id, run_id, event_type, content)
-                    if event_type == "assistant":
-                        self._fire_output_listeners(task_id, run_id, event_type, content)
+                    self._store_output_event(task_id, run_id, event_type, content)
                 return
 
             # Claude stream-json
             event_type = event.get("type", "unknown")
             if event_type == "assistant":
-                text_content, image_events = self._extract_message_content(event)
+                text_content, image_events, trace_events = self._extract_message_content(event)
                 if text_content:
                     message_id = self._claude_message_id(event, run_id)
                     text_content = self._claude_text_delta(run_id, message_id, text_content)
                 if text_content:
-                    self.db.add_output_event(task_id, run_id, event_type, text_content)
-                    self._fire_output_listeners(task_id, run_id, event_type, text_content)
+                    self._store_output_event(task_id, run_id, event_type, text_content)
                 for img_json in image_events:
                     self.db.add_output_event(task_id, run_id, "image_content", img_json)
+                for trace_type, trace_content in trace_events:
+                    self._store_output_event(task_id, run_id, trace_type, trace_content)
             elif event_type == "user":
-                text_content, image_events = self._extract_message_content(event)
+                text_content, image_events, trace_events = self._extract_message_content(event)
                 if text_content:
                     self.db.add_output_event(task_id, run_id, event_type, text_content)
                 for img_json in image_events:
                     self.db.add_output_event(task_id, run_id, "image_content", img_json)
+                for trace_type, trace_content in trace_events:
+                    self._store_output_event(task_id, run_id, trace_type, trace_content)
             else:
                 content = ""
                 if event_type == "result":
@@ -1825,7 +2035,7 @@ class TaskScheduler(BusAwareSchedulerMixin):
                     content = json.dumps(event, ensure_ascii=False)
 
                 if content:
-                    self.db.add_output_event(task_id, run_id, event_type, content)
+                    self._store_output_event(task_id, run_id, event_type, content)
         except json.JSONDecodeError:
             # If it's not valid JSON, store as raw text
             if line.strip() and len(line.strip()) > 10:  # Only store meaningful non-JSON lines
@@ -1834,13 +2044,14 @@ class TaskScheduler(BusAwareSchedulerMixin):
     def _extract_message_content(self, event: dict) -> tuple:
         """Extract text and image content from user/assistant messages.
 
-        Returns (text: str, image_events: list[str]) where each image_event is a
-        JSON string with {"media_type": ..., "data": ...} for image_content events.
+        Returns (text, image_events, trace_events), where image_events and
+        trace_events contain already serialized display payloads.
         """
         message = event.get("message", {})
         content = message.get("content", [])
         text_parts = []
         image_events = []
+        trace_events = []
 
         for item in content:
             if isinstance(item, str):
@@ -1860,8 +2071,40 @@ class TaskScheduler(BusAwareSchedulerMixin):
                         )
                         image_events.append(img_json)
                     # Non-base64 image sources (url, etc.) are ignored silently
+                elif item.get("type") == "tool_use":
+                    trace_events.append(
+                        (
+                            "tool_call",
+                            self._trace_json(
+                                self._compact_payload(
+                                    {
+                                        "id": item.get("id"),
+                                        "name": item.get("name"),
+                                        "input": item.get("input"),
+                                    }
+                                )
+                            ),
+                        )
+                    )
+                elif item.get("type") == "tool_result":
+                    trace_events.append(
+                        (
+                            "tool_result",
+                            self._trace_json(
+                                self._compact_payload(
+                                    {
+                                        "tool_use_id": item.get("tool_use_id"),
+                                        "content": self._content_to_display_text(
+                                            item.get("content")
+                                        ),
+                                        "is_error": item.get("is_error", False),
+                                    }
+                                )
+                            ),
+                        )
+                    )
 
-        return "".join(text_parts), image_events
+        return "".join(text_parts), image_events, trace_events
 
     def _extract_error_summary(self, raw_stderr: str, raw_stdout: str) -> str:
         """Extract a clean, human-readable error summary from raw CLI output.
@@ -2158,22 +2401,14 @@ class TaskScheduler(BusAwareSchedulerMixin):
                 success, output = False, f"Task timed out after {timeout_secs}s"
             elif proc.returncode == 0:
                 if agent == "codex":
-                    # Codex JSONL: final output is the last agent_message item text
-                    out = ""
-                    for line in raw_stdout.splitlines():
-                        line = line.strip()
-                        if not line:
-                            continue
-                        try:
-                            event = json.loads(line)
-                            if (
-                                event.get("type") == "item.completed"
-                                and event.get("item", {}).get("type") == "agent_message"
-                            ):
-                                out = event["item"].get("text", "")
-                        except json.JSONDecodeError:
-                            pass
-                    success, output = True, out or raw_stdout
+                    thread_id = self._extract_codex_thread_id(raw_stdout)
+                    generated_images = self._find_codex_generated_images(
+                        thread_id, since_timestamp=start_time
+                    )
+                    if generated_images:
+                        self._store_generated_image_events(tid, run_id, generated_images)
+                    success = True
+                    output = self._extract_codex_success_output(raw_stdout, generated_images)
                 else:
                     # Claude stream-json: find the last result event and last assistant text
                     out = ""
@@ -2232,17 +2467,7 @@ class TaskScheduler(BusAwareSchedulerMixin):
         extracted_session_id = None
         if agent == "codex":
             # Codex emits session_id in the thread.started event at the beginning
-            for line in raw_stdout.splitlines():
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    event = json.loads(line)
-                    if event.get("type") == "thread.started" and event.get("thread_id"):
-                        extracted_session_id = event["thread_id"]
-                        break
-                except json.JSONDecodeError:
-                    pass
+            extracted_session_id = self._extract_codex_thread_id(raw_stdout)
         else:
             # Claude emits session_id in the result event at the end
             for line in reversed(raw_stdout.splitlines()):

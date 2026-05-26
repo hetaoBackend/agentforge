@@ -90,6 +90,14 @@ const AGENTS = {
   codex: { label: "Codex CLI", icon: "◈", color: "#10a37f" },
 };
 
+const TRACE_EVENT_TYPES = new Set([
+  "tool_call",
+  "tool_result",
+  "command_execution",
+  "file_change",
+  "web_search",
+]);
+
 // ─── Formatted Output Component ───
 function FormattedOutput({ content, theme }) {
   if (!content) return null;
@@ -133,10 +141,82 @@ function FormattedOutput({ content, theme }) {
                     ? `data:${c.source.media_type || 'image/jpeg'};base64,${c.source.data}`
                     : null;
                   if (src) parsedLines.push({ type: 'image', src });
+                } else if (c.type === 'tool_use') {
+                  flushText();
+                  const rows = buildTraceRows("tool_call", {
+                    id: c.id,
+                    name: c.name,
+                    input: c.input,
+                  }, "");
+                  parsedLines.push({
+                    type: 'tool_call',
+                    text: rows.map(row => `${row.label}: ${row.value}`).join('\n'),
+                    style: { color: theme.cyan, fontSize: '11px', fontFamily: 'monospace' }
+                  });
+                } else if (c.type === 'tool_result') {
+                  flushText();
+                  const rows = buildTraceRows("tool_result", {
+                    tool_use_id: c.tool_use_id,
+                    content: Array.isArray(c.content)
+                      ? c.content.map(part => part && part.type === "text" ? part.text || "" : JSON.stringify(part)).join("")
+                      : c.content,
+                    is_error: c.is_error,
+                  }, "");
+                  parsedLines.push({
+                    type: 'tool_result',
+                    text: rows.map(row => `${row.label}: ${row.value}`).join('\n'),
+                    style: { color: c.is_error ? theme.red : theme.blue, fontSize: '11px', fontFamily: 'monospace' }
+                  });
                 }
               }
             }
             flushText();
+            break;
+          }
+
+          case 'item.completed': {
+            const item = event.item || {};
+            if (item.type === 'command_execution') {
+              const rows = buildTraceRows("command_execution", {
+                command: item.command,
+                output: item.aggregated_output,
+                exit_code: item.exit_code,
+                status: item.status,
+              }, "");
+              parsedLines.push({
+                type: 'command_execution',
+                text: rows.map(row => `${row.label}: ${row.value}`).join('\n'),
+                style: { color: theme.orange, fontSize: '11px', fontFamily: 'monospace' }
+              });
+            } else if (item.type === 'mcp_tool_call' || item.type === 'collab_tool_call') {
+              const rows = buildTraceRows("tool_call", {
+                server: item.server,
+                name: item.tool || item.name,
+                input: item.arguments || item.input,
+                result: item.result,
+                status: item.status,
+                error: item.error,
+              }, "");
+              parsedLines.push({
+                type: 'tool_call',
+                text: rows.map(row => `${row.label}: ${row.value}`).join('\n'),
+                style: { color: theme.cyan, fontSize: '11px', fontFamily: 'monospace' }
+              });
+            } else if (item.type === 'web_search') {
+              const rows = buildTraceRows("web_search", item, "");
+              parsedLines.push({
+                type: 'web_search',
+                text: rows.map(row => `${row.label}: ${row.value}`).join('\n'),
+                style: { color: theme.cyan, fontSize: '11px', fontFamily: 'monospace' }
+              });
+            } else if (item.type === 'file_change') {
+              const rows = buildTraceRows("file_change", item, "");
+              parsedLines.push({
+                type: 'file_change',
+                text: rows.map(row => `${row.label}: ${row.value}`).join('\n'),
+                style: { color: theme.accent, fontSize: '11px', fontFamily: 'monospace' }
+              });
+            }
             break;
           }
 
@@ -269,6 +349,10 @@ function EventContent({ content, eventType }) {
     return <span>[image]</span>;
   }
 
+  if (TRACE_EVENT_TYPES.has(eventType)) {
+    return <TraceEventContent content={content} eventType={eventType} />;
+  }
+
   // Backward compat: legacy text events may contain embedded __image__ JSON markers
   const imgRe = /\{"__image__":true[^}]*,"source":\{[^}]*\}[^}]*\}/g;
   if (!imgRe.test(content)) {
@@ -306,6 +390,101 @@ function EventContent({ content, eventType }) {
       )}
     </>
   );
+}
+
+function TraceEventContent({ content, eventType }) {
+  const payload = parseTracePayload(content);
+  if (!payload) return <span>{content}</span>;
+  const rows = buildTraceRows(eventType, payload, content);
+  if (rows.length === 0) return <span>{content}</span>;
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+      {rows.map((row, i) => (
+        <div key={i}>
+          <span style={{ color: theme.textMuted, fontWeight: 700 }}>{row.label}: </span>
+          <span>{row.value}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function parseTracePayload(content) {
+  try {
+    const payload = JSON.parse(content);
+    return payload && typeof payload === "object" && !Array.isArray(payload) ? payload : null;
+  } catch {
+    return null;
+  }
+}
+
+function formatTraceValue(value) {
+  if (value === undefined || value === null) return "";
+  if (typeof value === "string") return value;
+  return JSON.stringify(value, null, 2);
+}
+
+function buildTraceRows(eventType, payload, rawContent) {
+  const row = (label, value) => {
+    const formatted = formatTraceValue(value);
+    return formatted === "" ? null : { label, value: formatted };
+  };
+  const compact = rows => rows.filter(Boolean);
+
+  if (eventType === "tool_call") {
+    const name = payload.server
+      ? `${payload.server}.${payload.name || payload.tool || "unknown"}`
+      : (payload.name || payload.tool || "unknown");
+    return compact([
+      row("Tool", name),
+      row("Input", payload.input || payload.arguments),
+      row("Result", payload.result),
+      row("Status", payload.status),
+      row("Error", payload.error),
+    ]);
+  }
+
+  if (eventType === "tool_result") {
+    return compact([
+      row(payload.is_error ? "Tool Error" : "Tool Result", payload.tool_use_id || "result"),
+      row("Content", payload.content),
+    ]);
+  }
+
+  if (eventType === "command_execution") {
+    return compact([
+      row("Command", payload.command),
+      row("Output", payload.output),
+      row("Exit", payload.exit_code),
+      row("Status", payload.status),
+    ]);
+  }
+
+  if (eventType === "file_change") {
+    const changes = Array.isArray(payload.changes)
+      ? payload.changes.map(change => {
+        if (!change || typeof change !== "object") return formatTraceValue(change);
+        const kind = change.kind || change.type || "changed";
+        const path = change.path || change.file || "";
+        return path ? `${kind}: ${path}` : kind;
+      }).join("\n")
+      : payload.changes;
+    return compact([
+      row("Changes", changes),
+      row("Status", payload.status),
+    ]);
+  }
+
+  if (eventType === "web_search") {
+    return compact([
+      row("Query", payload.query),
+      row("Action", payload.action),
+      row("Status", payload.status),
+    ]);
+  }
+
+  return [{ label: eventType, value: rawContent }];
 }
 
 // ─── CSRF token ───
@@ -1589,10 +1768,19 @@ function DetailPanel({ task, onClose, onRespond, onResume }) {
   }, [task.id, showMessages]);
 
   useEffect(() => {
-    if (showEvents) {
-      fetchTaskEvents(task.id).then(setEvents);
+    if (!showEvents) return;
+    let cancelled = false;
+    const load = async () => {
+      const nextEvents = await fetchTaskEvents(task.id);
+      if (!cancelled) setEvents(nextEvents);
+    };
+    load();
+    if (task.status !== "running") {
+      return () => { cancelled = true; };
     }
-  }, [task.id, showEvents]);
+    const interval = setInterval(load, 1000);
+    return () => { cancelled = true; clearInterval(interval); };
+  }, [task.id, task.status, showEvents]);
 
   useEffect(() => {
     if (messagesRef.current) {
@@ -1870,7 +2058,7 @@ function DetailPanel({ task, onClose, onRespond, onResume }) {
               transition: "all 0.15s",
             }}
           >
-            Output Events
+            Execution Events
           </button>
         </div>
 
@@ -1914,7 +2102,7 @@ function DetailPanel({ task, onClose, onRespond, onResume }) {
           </div>
         )}
 
-        {/* Output Events History */}
+        {/* Execution Events History */}
         {showEvents && (
           <div
             ref={eventsRef}
@@ -2043,6 +2231,11 @@ function getEventTypeColor(eventType) {
     case "error": return theme.red;
     case "text": return theme.blue;
     case "image_content": return theme.accent;
+    case "tool_call": return theme.cyan;
+    case "tool_result": return theme.blue;
+    case "command_execution": return theme.orange;
+    case "file_change": return theme.accent;
+    case "web_search": return theme.cyan;
     default: return theme.textMuted;
   }
 }
