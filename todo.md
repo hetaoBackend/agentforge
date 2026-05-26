@@ -1,3 +1,6 @@
+- [completed] 提交并推送 Feishu 多图展示修复
+- [completed] 修复 Feishu 多张生成图以 Markdown 形式发送后不可见
+- [completed] 分析 Feishu 图片展示与连续 chunk 观感优化方案
 - [completed] 提交并推送当前全部工作树改动
 - [completed] 对照 agentara 修复飞书折叠思考换行展示
 - [completed] 确认并修复飞书思考过程折叠面板换行展示

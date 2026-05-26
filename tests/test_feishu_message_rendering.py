@@ -324,6 +324,56 @@ class TestFeishuNotificationCards:
         assert kwargs["card"]["body"]["elements"][-1]["img_key"] == "img_v2_result"
         mock_feishu_channel._upload_image.assert_called_once_with(str(image_path))
 
+    def test_send_uploads_markdown_generated_image_references(self, mock_feishu_channel, tmp_path):
+        image_dir = tmp_path / ".codex" / "generated_images" / "thread_2"
+        image_dir.mkdir(parents=True)
+        first_image = image_dir / "first.png"
+        second_image = image_dir / "second.png"
+        first_image.write_bytes(b"\x89PNG\r\n\x1a\nfirst")
+        second_image.write_bytes(b"\x89PNG\r\n\x1a\nsecond")
+        result_text = f"生成好了：\n\n- ![第一张图]({first_image})\n- ![第二张图]({second_image})"
+        task = {
+            "id": 11,
+            "title": "Multi image result",
+            "prompt": "生成两张图片",
+            "result": result_text,
+            "error": None,
+            "agent": "codex",
+            "working_dir": "~/workspace/agentforge",
+        }
+        mock_feishu_channel.db.get_task.return_value = task
+        mock_feishu_channel.db.get_setting.return_value = "oc_test_chat"
+        mock_feishu_channel.db.get_task_runs.return_value = []
+        mock_feishu_channel._upload_image = Mock(side_effect=["img_first", "img_second"])
+        mock_feishu_channel._send_message = Mock(return_value="msg_789")
+
+        msg = OutboundMessage(
+            type=OutboundMessageType.TASK_COMPLETED,
+            task_id=11,
+            payload={"result": result_text, "title": "Multi image result"},
+        )
+
+        mock_feishu_channel.send(msg)
+
+        _, kwargs = mock_feishu_channel._send_message.call_args
+        elements = kwargs["card"]["body"]["elements"]
+        markdown_text = "\n".join(
+            element.get("content", "") for element in elements if element.get("tag") == "markdown"
+        )
+        assert "![第一张图]" not in markdown_text
+        assert "![第二张图]" not in markdown_text
+        assert str(first_image) not in markdown_text
+        assert str(second_image) not in markdown_text
+        assert markdown_text.strip() == "生成好了："
+        assert [element.get("img_key") for element in elements[-2:]] == [
+            "img_first",
+            "img_second",
+        ]
+        assert [call.args[0] for call in mock_feishu_channel._upload_image.call_args_list] == [
+            str(first_image),
+            str(second_image),
+        ]
+
     def test_send_final_patch_preserves_streaming_history(self, mock_feishu_channel):
         from channels.feishu_channel import _FeishuStreamWriter
 
