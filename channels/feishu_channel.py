@@ -30,6 +30,8 @@ if TYPE_CHECKING:
 try:
     import lark_oapi as lark
     from lark_oapi.api.im.v1 import (
+        CreateImageRequest,
+        CreateImageRequestBody,
         CreateMessageReactionRequest,
         CreateMessageReactionRequestBody,
         CreateMessageRequest,
@@ -72,16 +74,26 @@ HELP_TEXT = """\
 FEISHU_CARD_MARKDOWN_CHUNK = 7000
 FEISHU_FALLBACK_MARKDOWN_LIMIT = 8000
 FEISHU_CARD_MAX_ELEMENTS = 200
-FEISHU_PANEL_MAX_LINE_ELEMENTS = FEISHU_CARD_MAX_ELEMENTS - 20
+FEISHU_PANEL_MAX_LINE_ELEMENTS = 80
 FEISHU_PANEL_PLAIN_TEXT_CHUNK = 1800
 FEISHU_THINKING_PREFIX = "[thinking] "
+FEISHU_STREAM_EVENT_TYPES = {
+    "assistant",
+    "tool_call",
+    "tool_result",
+    "command_execution",
+    "file_change",
+    "web_search",
+    "error",
+}
 
 
 class _FeishuStreamWriter:
     """Rate-limited, event-driven Feishu card updater for a single running task.
 
     Registered as an output listener on TaskScheduler. Each time the agent emits
-    an assistant event the writer appends the chunk and schedules a card patch.
+    displayable output or trace events, the writer appends the chunk and schedules
+    a card patch.
     Patches are rate-limited to at most one every MIN_INTERVAL seconds so we don't
     hammer the Feishu API. Patch requests are serialized so older requests cannot
     race and overwrite newer content.
@@ -112,9 +124,11 @@ class _FeishuStreamWriter:
     def on_event(self, task_id: int, run_id: int, event_type: str, content: str) -> None:
         if self._stopped or task_id != self.task_id:
             return
-        if event_type != "assistant" or content == "":
+        if event_type not in FEISHU_STREAM_EVENT_TYPES or content == "":
             return
-        display_content = self._display_content(content)
+        display_content = self._display_content(event_type, content)
+        if not display_content:
+            return
         with self._parts_lock:
             # Latch the run_id on the first event; reset parts if run_id changes (resume)
             if self._run_id is None:
@@ -122,13 +136,90 @@ class _FeishuStreamWriter:
             elif self._run_id != run_id:
                 self._run_id = run_id
                 self._parts.clear()
+            if event_type != "assistant" and self._parts and not self._parts[-1].endswith("\n"):
+                display_content = "\n" + display_content
             self._parts.append(display_content)
         self._schedule()
 
-    def _display_content(self, content: str) -> str:
+    def _display_content(self, event_type: str, content: str) -> str:
+        if event_type != "assistant":
+            return self._format_trace_event(event_type, content)
         if content.startswith(FEISHU_THINKING_PREFIX):
             return content[len(FEISHU_THINKING_PREFIX) :]
         return content
+
+    def _load_trace_payload(self, content: str) -> dict[str, Any]:
+        try:
+            payload = json.loads(content)
+        except json.JSONDecodeError:
+            return {"content": content}
+        return payload if isinstance(payload, dict) else {"content": payload}
+
+    def _format_trace_value(self, value: Any) -> str:
+        if isinstance(value, (dict, list)):
+            return json.dumps(value, ensure_ascii=False)
+        return str(value)
+
+    def _format_trace_event(self, event_type: str, content: str) -> str:
+        payload = self._load_trace_payload(content)
+        lines: list[str] = []
+
+        if event_type == "tool_call":
+            name = payload.get("name") or payload.get("tool") or "unknown"
+            if payload.get("server"):
+                name = f"{payload['server']}.{name}"
+            lines.append(f"调用工具: {name}")
+            tool_input = payload.get("input") or payload.get("arguments")
+            if tool_input not in (None, "", {}, []):
+                lines.append(f"参数: {self._format_trace_value(tool_input)}")
+            if payload.get("result") not in (None, "", {}, []):
+                lines.append(f"返回: {self._format_trace_value(payload['result'])}")
+            if payload.get("status"):
+                lines.append(f"状态: {payload['status']}")
+            if payload.get("error"):
+                lines.append(f"错误: {self._format_trace_value(payload['error'])}")
+        elif event_type == "tool_result":
+            label = "工具错误" if payload.get("is_error") else "工具返回"
+            if payload.get("tool_use_id"):
+                label = f"{label}: {payload['tool_use_id']}"
+            lines.append(label)
+            if payload.get("content"):
+                lines.append(self._format_trace_value(payload["content"]))
+        elif event_type == "command_execution":
+            command = payload.get("command") or payload.get("content") or ""
+            lines.append(f"执行命令: {command}".rstrip())
+            if payload.get("output"):
+                lines.append(f"输出: {self._format_trace_value(payload['output'])}")
+            if payload.get("exit_code") is not None:
+                lines.append(f"退出码: {payload['exit_code']}")
+            if payload.get("status"):
+                lines.append(f"状态: {payload['status']}")
+        elif event_type == "file_change":
+            lines.append("文件变更")
+            changes = payload.get("changes")
+            if isinstance(changes, list):
+                for change in changes:
+                    if isinstance(change, dict):
+                        path = change.get("path") or change.get("file") or ""
+                        kind = change.get("kind") or change.get("type") or "changed"
+                        lines.append(f"{kind}: {path}".strip())
+            elif changes:
+                lines.append(self._format_trace_value(changes))
+            if payload.get("status"):
+                lines.append(f"状态: {payload['status']}")
+        elif event_type == "web_search":
+            query = payload.get("query") or payload.get("content") or ""
+            lines.append(f"网页搜索: {query}".rstrip())
+            if payload.get("action"):
+                lines.append(f"动作: {payload['action']}")
+            if payload.get("status"):
+                lines.append(f"状态: {payload['status']}")
+        elif event_type == "error":
+            lines.append(f"错误: {payload.get('message') or payload.get('content') or content}")
+        else:
+            lines.append(f"[{event_type}] {content}")
+
+        return "\n".join(line for line in lines if line) + "\n"
 
     def _schedule(self) -> None:
         with self._state_lock:
@@ -343,6 +434,12 @@ class FeishuChannel(Channel):
         with self._streaming_lock:
             streaming_msg_id = self._streaming_msg.pop(task_id, None)
         streaming_history = self._stop_streaming(task_id)
+        image_keys = []
+        if is_completed:
+            image_paths = self._generated_image_paths_for_task(task_id)
+            image_keys = self._upload_images(image_paths)
+            if image_keys:
+                content = self._hide_generated_image_paths(content, len(image_keys))
 
         card = self._build_notification_card(
             task_id=task_id,
@@ -350,6 +447,7 @@ class FeishuChannel(Channel):
             is_completed=is_completed,
             body_text=content,
             streaming_history=streaming_history,
+            image_keys=image_keys,
         )
 
         sent_id = None
@@ -393,6 +491,89 @@ class FeishuChannel(Channel):
     def _on_outbound(self, msg: OutboundMessage) -> None:
         """MessageBus outbound subscriber callback."""
         self.send(msg)
+
+    def _generated_image_paths_for_task(self, task_id: int) -> list[str]:
+        try:
+            runs = self.db.get_task_runs(task_id, limit=1)
+        except Exception as e:
+            print(f"[Feishu] Failed to load runs for generated images: {e}")
+            return []
+        if not isinstance(runs, list) or not runs:
+            return []
+
+        run_id = runs[0].get("id") if isinstance(runs[0], dict) else None
+        if not run_id:
+            return []
+        try:
+            events = self.db.get_run_output_events(run_id, limit=1000)
+        except Exception as e:
+            print(f"[Feishu] Failed to load output events for generated images: {e}")
+            return []
+        if not isinstance(events, list):
+            return []
+
+        paths = []
+        seen = set()
+        for event in events:
+            if not isinstance(event, dict) or event.get("event_type") != "generated_image":
+                continue
+            try:
+                payload = json.loads(event.get("content") or "{}")
+            except json.JSONDecodeError:
+                continue
+            path = payload.get("path") if isinstance(payload, dict) else None
+            if not path or path in seen or not Path(path).is_file():
+                continue
+            seen.add(path)
+            paths.append(path)
+        return paths
+
+    def _upload_images(self, image_paths: list[str]) -> list[str]:
+        image_keys = []
+        for image_path in image_paths:
+            image_key = self._upload_image(image_path)
+            if image_key:
+                image_keys.append(image_key)
+        return image_keys
+
+    def _upload_image(self, image_path: str) -> Optional[str]:
+        if not self._client:
+            return None
+        try:
+            with open(image_path, "rb") as image_file:
+                request = (
+                    CreateImageRequest.builder()
+                    .request_body(
+                        CreateImageRequestBody.builder()
+                        .image_type("message")
+                        .image(image_file)
+                        .build()
+                    )
+                    .build()
+                )
+                response = self._client.im.v1.image.create(request)
+        except Exception as e:
+            print(f"[Feishu] Failed to upload generated image {image_path}: {e}")
+            return None
+
+        if response.success():
+            image_key = response.data.image_key
+            print(f"[Feishu] Uploaded generated image {image_path}, image_key={image_key}")
+            return image_key
+        print(f"[Feishu] Image upload failed: {response.code} {response.msg}")
+        return None
+
+    def _hide_generated_image_paths(self, content: str, image_count: int) -> str:
+        lines = []
+        for line in (content or "").splitlines():
+            stripped = line.strip()
+            if stripped.startswith("- ") and "/.codex/generated_images/" in stripped:
+                continue
+            lines.append(line)
+        cleaned = "\n".join(lines).strip()
+        if not cleaned or cleaned.startswith("已生成"):
+            return f"已生成 {image_count} 张图片。"
+        return cleaned
 
     # ── outbound: low-level send ──────────────────────────────────
 
@@ -583,7 +764,7 @@ class FeishuChannel(Channel):
             "header": {
                 "title": {
                     "tag": "plain_text",
-                    "content": "思考过程",
+                    "content": "执行过程",
                 },
                 "vertical_align": "center",
                 "icon": {
@@ -613,11 +794,12 @@ class FeishuChannel(Channel):
         if len(line_elements) <= FEISHU_PANEL_MAX_LINE_ELEMENTS:
             return line_elements
 
+        return self._build_streaming_history_markdown_elements(normalized)
+
+    def _build_streaming_history_markdown_elements(self, text: str) -> list[dict[str, Any]]:
+        chunks = self._chunk_text(text, FEISHU_CARD_MARKDOWN_CHUNK - 16)
         return [
-            {
-                "tag": "markdown",
-                "content": self._wrap_feishu_code_block(normalized),
-            }
+            {"tag": "markdown", "content": self._wrap_feishu_code_block(chunk)} for chunk in chunks
         ]
 
     def _build_streaming_history_line_elements(self, text: str) -> list[dict[str, Any]]:
@@ -680,10 +862,11 @@ class FeishuChannel(Channel):
         is_completed: bool,
         body_text: str,
         streaming_history: Optional[str] = None,
+        image_keys: Optional[list[str]] = None,
     ) -> dict[str, Any]:
         clean_body = (body_text or "").strip() or ("Done." if is_completed else "Unknown error")
         summary = self._truncate_text(clean_body.splitlines()[0], 120) if clean_body else ""
-        elements = self._build_result_elements(body_text=clean_body)
+        elements = self._build_result_elements(body_text=clean_body, image_keys=image_keys)
         if streaming_history and streaming_history.strip():
             panel_text = (
                 self._strip_final_result_from_history(streaming_history, clean_body)
@@ -724,12 +907,23 @@ class FeishuChannel(Channel):
             return trimmed_history[: -len(final_body)].rstrip()
         return history
 
-    def _build_result_elements(self, body_text: str) -> list[dict[str, Any]]:
+    def _build_result_elements(
+        self, body_text: str, image_keys: Optional[list[str]] = None
+    ) -> list[dict[str, Any]]:
         clean_body = (body_text or "").strip() or "Done."
-        return [
+        elements = [
             {"tag": "markdown", "content": chunk}
             for chunk in self._chunk_text(clean_body, FEISHU_CARD_MARKDOWN_CHUNK)
         ]
+        for index, image_key in enumerate(image_keys or [], start=1):
+            elements.append(
+                {
+                    "tag": "img",
+                    "img_key": image_key,
+                    "alt": {"tag": "plain_text", "content": f"generated image {index}"},
+                }
+            )
+        return elements
 
     def _build_legacy_markdown_card(self, content: str) -> dict[str, Any]:
         return {

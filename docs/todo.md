@@ -2,6 +2,28 @@
 
 ## In Progress
 
+- [x] **修复图片生成 Feishu 实际展示** — 继续排查图片生成任务只发本地路径、缺少折叠执行过程的问题，确保 Feishu 最终消息可直接看到图片和执行过程
+  - ✅ 已确认：`#320` 结构化卡片实际带了 `img_key`，但因执行过程面板拆成 334 个元素触发飞书 `element exceeds the limit`，随后 fallback 成 legacy markdown，只剩本地路径
+  - ✅ 已修复：执行过程超过 80 行时改为折叠面板内 markdown/code block 分块，真实 `#320` 数据重建后卡片元素数降为 8
+  - ✅ 已修复：图片上传成功时 Feishu 正文隐藏本地 generated_images 路径，只展示“已生成 N 张图片。”和图片元素
+  - ✅ 验证：`make check` 通过，`109 passed`
+
+- [x] **修复图片生成任务结果丢失** — 排查 Codex 图片生成 case 中最终回复被 Skill 读取内容替代的问题，确保生成结果正确落库并返回到 Feishu/前端
+  - ✅ 已确认：任务 `#319` 的第二次 run 把整段 Codex JSONL 存成了 `result`，但图片实际生成在 `~/.codex/generated_images/019e6224-.../`
+  - ✅ 已修复：Codex 空最终消息不再回退 raw JSONL；会按 thread id 查找 generated images，落 `generated_image` 与 `image_content` 事件，并把图片路径摘要写入结果
+  - ✅ 已修复：Feishu 完成通知会读取生成图片事件、上传图片并在最终卡片中展示图片元素
+  - ✅ 验证：`make check` 通过，`107 passed`
+
+- [x] **实现中间工具调用与返回结果展示** — 新增 agent trace 事件归一化层，展示 Claude/Codex 的工具调用、命令输出、工具返回和文件/搜索等中间事件
+  - ✅ 已实现：后端将 Claude `tool_use/tool_result` 和 Codex `command_execution/mcp_tool_call/web_search/file_change` 归一化为稳定事件类型，并对常见密钥字段脱敏
+  - ✅ 已实现：Feishu running card 的折叠面板改为“执行过程”，实时追加 assistant、工具调用、工具返回、命令、文件变更、搜索和错误事件
+  - ✅ 已实现：桌面端 Execution Events 可读化展示 trace JSON，并在任务运行时刷新；live raw stream 也能识别常见工具块
+  - ✅ 验证：`make check` 通过，`103 passed`；`cd taskboard-electron && npx vite build --config vite.renderer.config.mjs` 通过
+
+- [x] **调查中间工具调用与返回结果展示方案** — 对照当前 AgentForge/Feishu 流式事件链路，梳理可展示工具调用、命令输出和工具返回结果的实现路径
+  - ✅ 已确认：后端当前只向实时 listener 推送 `assistant` 文本事件，Claude 的 `tool_use/tool_result` content block 会被忽略，Codex 的命令/MCP 工具事件只入库不流式推送
+  - ✅ 已整理：可选方案包括前端 raw JSON 解析、后端归一化事件层、以及 raw trace 审计视图；推荐以后端归一化事件层为主
+
 - [x] **补齐 Claude Code 模式飞书流式输出** — 开启 Claude CLI partial message chunks，并将 Claude partial/cumulative assistant 消息转成增量事件推送给飞书 running card
   - ✅ 已修复：所有 Claude stream-json 命令统一带 `--include-partial-messages`
   - ✅ 已修复：Claude assistant partial/cumulative 文本按 message id 去重，只向 Feishu writer 推送新增内容

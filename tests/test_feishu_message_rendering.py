@@ -2,6 +2,7 @@
 Tests for Feishu outbound message card rendering.
 """
 
+import json
 from unittest.mock import Mock, patch
 
 import pytest
@@ -202,7 +203,7 @@ class TestFeishuNotificationCards:
         result = card["body"]["elements"][1]
         assert panel["tag"] == "collapsible_panel"
         assert panel["expanded"] is False
-        assert panel["header"]["title"]["content"] == "思考过程"
+        assert panel["header"]["title"]["content"] == "执行过程"
         assert _panel_texts(panel) == ["思考第一步", "思考第二步"]
         assert result == {"tag": "markdown", "content": "最终结果"}
 
@@ -261,6 +262,68 @@ class TestFeishuNotificationCards:
         _, kwargs = mock_feishu_channel._build_notification_card.call_args
         assert kwargs["body_text"] == long_result
 
+    def test_build_completed_card_includes_generated_image_elements(self, mock_feishu_channel):
+        task = {
+            "id": 7,
+            "title": "Image result",
+            "prompt": "生成图片",
+            "agent": "codex",
+            "working_dir": "~/workspace/agentforge",
+        }
+
+        card = mock_feishu_channel._build_notification_card(
+            task_id=7,
+            task=task,
+            is_completed=True,
+            body_text="已生成 1 张图片：",
+            image_keys=["img_v2_result"],
+        )
+
+        assert card["body"]["elements"][-1] == {
+            "tag": "img",
+            "img_key": "img_v2_result",
+            "alt": {"tag": "plain_text", "content": "generated image 1"},
+        }
+
+    def test_send_uploads_generated_images_from_run_events(self, mock_feishu_channel, tmp_path):
+        image_path = tmp_path / ".codex" / "generated_images" / "thread_1" / "result.png"
+        image_path.parent.mkdir(parents=True)
+        image_path.write_bytes(b"\x89PNG\r\n\x1a\nfakepng")
+        task = {
+            "id": 7,
+            "title": "Image result",
+            "prompt": "生成图片",
+            "result": f"已生成 1 张图片：\n- {image_path}",
+            "error": None,
+            "agent": "codex",
+            "working_dir": "~/workspace/agentforge",
+        }
+        mock_feishu_channel.db.get_task.return_value = task
+        mock_feishu_channel.db.get_setting.return_value = "oc_test_chat"
+        mock_feishu_channel.db.get_task_runs.return_value = [{"id": 99}]
+        mock_feishu_channel.db.get_run_output_events.return_value = [
+            {
+                "event_type": "generated_image",
+                "content": json.dumps({"path": str(image_path), "media_type": "image/png"}),
+            }
+        ]
+        mock_feishu_channel._upload_image = Mock(return_value="img_v2_result")
+        mock_feishu_channel._send_message = Mock(return_value="msg_456")
+
+        msg = OutboundMessage(
+            type=OutboundMessageType.TASK_COMPLETED,
+            task_id=7,
+            payload={"result": task["result"], "title": "Image result"},
+        )
+
+        mock_feishu_channel.send(msg)
+
+        _, kwargs = mock_feishu_channel._send_message.call_args
+        assert kwargs["card"]["body"]["elements"][0]["content"] == "已生成 1 张图片。"
+        assert "/.codex/generated_images/" not in kwargs["card"]["body"]["elements"][0]["content"]
+        assert kwargs["card"]["body"]["elements"][-1]["img_key"] == "img_v2_result"
+        mock_feishu_channel._upload_image.assert_called_once_with(str(image_path))
+
     def test_send_final_patch_preserves_streaming_history(self, mock_feishu_channel):
         from channels.feishu_channel import _FeishuStreamWriter
 
@@ -298,7 +361,7 @@ class TestFeishuNotificationCards:
         panel = patched_card["body"]["elements"][0]
         result = patched_card["body"]["elements"][1]
         assert panel["tag"] == "collapsible_panel"
-        assert panel["header"]["title"]["content"] == "思考过程"
+        assert panel["header"]["title"]["content"] == "执行过程"
         assert _panel_texts(panel) == ["thinking line", "more thinking"]
         assert "final result" not in "".join(_panel_texts(panel))
         assert result == {"tag": "markdown", "content": "final result"}
@@ -393,7 +456,7 @@ class TestFeishuStreaming:
         assert len(card["body"]["elements"]) == 1
         assert panel["tag"] == "collapsible_panel"
         assert panel["expanded"] is True
-        assert panel["header"]["title"]["content"] == "思考过程"
+        assert panel["header"]["title"]["content"] == "执行过程"
         assert _panel_texts(panel) == ["start", "A" * 1600, "end"]
 
     def test_streaming_card_uses_code_block_fallback_for_many_lines(self, mock_feishu_channel):
@@ -403,6 +466,36 @@ class TestFeishuStreaming:
 
         panel = card["body"]["elements"][0]
         assert panel["elements"] == [{"tag": "markdown", "content": f"```\n{long_text}\n```"}]
+        assert _count_card_elements(card) <= 200
+
+    def test_notification_card_keeps_history_and_image_under_feishu_element_limit(
+        self, mock_feishu_channel
+    ):
+        history = "\n".join(f"line {i}" for i in range(165))
+
+        card = mock_feishu_channel._build_notification_card(
+            task_id=12,
+            task={"id": 12, "title": "Image task"},
+            is_completed=True,
+            body_text="已生成 1 张图片：\n- /tmp/generated.png",
+            streaming_history=history,
+            image_keys=["img_v3_generated"],
+        )
+
+        panel = card["body"]["elements"][0]
+        assert panel["tag"] == "collapsible_panel"
+        assert panel["elements"][0]["tag"] == "markdown"
+        assert card["body"]["elements"][-1]["img_key"] == "img_v3_generated"
+        assert _count_card_elements(card) <= 200
+
+    def test_streaming_history_markdown_fallback_chunks_long_content(self, mock_feishu_channel):
+        long_text = "\n".join(f"{i}: {'A' * 120}" for i in range(140))
+
+        card = mock_feishu_channel._build_streaming_card(12, "Streaming task", long_text)
+
+        panel = card["body"]["elements"][0]
+        assert len(panel["elements"]) > 1
+        assert all(element["tag"] == "markdown" for element in panel["elements"])
         assert _count_card_elements(card) <= 200
 
     def test_stream_writer_appends_thinking_events_without_resplitting(self, mock_feishu_channel):
@@ -423,6 +516,48 @@ class TestFeishuStreaming:
         mock_feishu_channel._build_streaming_card.assert_called_once_with(
             12, "Streaming task", "Hello world"
         )
+
+    def test_stream_writer_appends_tool_trace_events(self, mock_feishu_channel):
+        from channels.feishu_channel import _FeishuStreamWriter
+
+        writer = _FeishuStreamWriter(12, "om_msg", mock_feishu_channel, "Streaming task")
+        writer._schedule = Mock()
+
+        writer.on_event(
+            12,
+            34,
+            "tool_call",
+            json.dumps({"id": "toolu_1", "name": "Bash", "input": {"command": "pytest -q"}}),
+        )
+        writer.on_event(
+            12,
+            34,
+            "tool_result",
+            json.dumps({"tool_use_id": "toolu_1", "content": "42 passed", "is_error": False}),
+        )
+        writer.on_event(
+            12,
+            34,
+            "command_execution",
+            json.dumps(
+                {
+                    "command": "pytest -q",
+                    "output": "42 passed",
+                    "exit_code": 0,
+                }
+            ),
+        )
+
+        assert writer.snapshot_text() == (
+            "调用工具: Bash\n"
+            '参数: {"command": "pytest -q"}\n'
+            "工具返回: toolu_1\n"
+            "42 passed\n"
+            "执行命令: pytest -q\n"
+            "输出: 42 passed\n"
+            "退出码: 0\n"
+        )
+        assert writer._schedule.call_count == 3
 
     def test_stream_writer_keeps_full_text_for_folded_history(self, mock_feishu_channel):
         from channels.feishu_channel import _FeishuStreamWriter
