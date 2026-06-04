@@ -5,7 +5,7 @@ a = Analysis(
     ['taskboard.py'],
     pathex=[],
     binaries=[],
-    datas=[],
+    datas=[('vendor/skill-creator', 'vendor/skill-creator')],
     hiddenimports=['croniter', 'dateutil', 'pytz'],
     hookspath=[],
     hooksconfig={},

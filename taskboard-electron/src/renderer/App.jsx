@@ -3120,6 +3120,21 @@ function SettingsModal({ onClose, timeout: initialTimeout, defaultAgent: initial
 
 // ─── App ───
 
+function parseSkillFrontmatter(body) {
+  const m = (body || "").match(/^---\s*\n([\s\S]*?)\n---/);
+  if (!m) return { name: "", description: "" };
+  const out = { name: "", description: "" };
+  for (const line of m[1].split("\n")) {
+    const i = line.indexOf(":");
+    if (i === -1) continue;
+    const k = line.slice(0, i).trim().toLowerCase();
+    const v = line.slice(i + 1).trim();
+    if (k === "name" && !out.name) out.name = v;
+    if (k === "description" && !out.description) out.description = v;
+  }
+  return out;
+}
+
 function SkillKindBadge({ kind }) {
   const isPitfall = kind === "pitfall";
   return (
@@ -3133,22 +3148,19 @@ function SkillKindBadge({ kind }) {
   );
 }
 
-function SkillPatternCard({ p, onDraft, onApprove, onDismiss }) {
-  let taskCount = 0;
-  try { taskCount = (JSON.parse(p.contributing_task_ids || "[]")).length; } catch { /* ignore */ }
+function SkillPatternCard({ p, tasks, onDraft, onApprove, onDismiss }) {
+  let taskIds = [];
+  try { taskIds = JSON.parse(p.contributing_task_ids || "[]"); } catch { /* ignore */ }
+  const taskCount = taskIds.length;
   const ready = p.recurrence_count >= 3 && taskCount >= 2;
   const draftStatus = p.draft_status;
-  const [name, setName] = useState(p.draft_name || "");
-  const [desc, setDesc] = useState(p.draft_description || "");
+  const [expanded, setExpanded] = useState(false);
   const [body, setBody] = useState(p.draft_body || "");
-  // Sync local edit buffers when a fresh draft arrives (body is stable across polls).
+  // The full SKILL.md is the single source of truth (name + description live in
+  // its frontmatter). Sync the buffer when a fresh draft arrives.
   useEffect(() => {
-    if (draftStatus === "ready") {
-      setName(p.draft_name || "");
-      setDesc(p.draft_description || "");
-      setBody(p.draft_body || "");
-    }
-  }, [draftStatus, p.draft_body, p.draft_name, p.draft_description]);
+    if (draftStatus === "ready") setBody(p.draft_body || "");
+  }, [draftStatus, p.draft_body]);
 
   const borderColor =
     p.status === "promoted" ? theme.green
@@ -3173,25 +3185,71 @@ function SkillPatternCard({ p, onDraft, onApprove, onDismiss }) {
         </span>
       </div>
       <div style={{ color: theme.textMuted, fontSize: 13, marginBottom: 10 }}>{p.summary || "—"}</div>
-      <div style={{ display: "flex", gap: 12, fontSize: 11, color: theme.textDim, marginBottom: 10 }}>
+      <div style={{ display: "flex", gap: 12, fontSize: 11, color: theme.textDim, marginBottom: 10, alignItems: "center" }}>
         <span>复发 {p.recurrence_count}×</span>
         <span>{taskCount} 个任务</span>
         <span>{p.status}</span>
         {ready && p.status !== "promoted" && <span style={{ color: theme.accent, fontWeight: 700 }}>✓ 达标</span>}
+        <button
+          onClick={() => setExpanded(v => !v)}
+          style={{ marginLeft: "auto", background: "transparent", border: "none",
+            color: theme.accent, cursor: "pointer", fontSize: 11, fontWeight: 700 }}
+        >
+          {expanded ? "收起 ▲" : "详情 ▼"}
+        </button>
       </div>
+
+      {expanded && (
+        <div style={{
+          background: theme.bg, border: `1px solid ${theme.border}`, borderRadius: 8,
+          padding: 10, marginBottom: 10, fontSize: 11, color: theme.textMuted,
+        }}>
+          <div style={{ marginBottom: 6 }}>
+            <span style={{ color: theme.textDim }}>首次 </span>{(p.first_seen || "").replace("T", " ").slice(0, 19) || "—"}
+            <span style={{ color: theme.textDim }}>　最近 </span>{(p.last_seen || "").replace("T", " ").slice(0, 19) || "—"}
+          </div>
+          <div style={{ color: theme.textDim, marginBottom: 4 }}>贡献的任务（{taskCount}）：</div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+            {taskIds.length === 0 && <span style={{ color: theme.textDim }}>—</span>}
+            {taskIds.map(tid => {
+              const t = (tasks || []).find(x => x.id === tid);
+              return (
+                <span key={tid} style={{ fontFamily: "monospace" }}>
+                  #{tid} {t ? t.title : <span style={{ color: theme.textDim }}>(已删除)</span>}
+                </span>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {draftStatus === "ready" && p.draft_worthy !== null && p.draft_worthy !== undefined && (
+        <div style={{
+          fontSize: 11, padding: "7px 10px", borderRadius: 7, marginBottom: 8,
+          background: p.draft_worthy ? "rgba(34,197,94,0.12)" : "rgba(245,158,11,0.14)",
+          color: p.draft_worthy ? theme.green : "#f59e0b",
+          border: `1px solid ${p.draft_worthy ? "rgba(34,197,94,0.3)" : "rgba(245,158,11,0.35)"}`,
+        }}>
+          {p.draft_worthy ? "✓ agent 建议沉淀" : "⚠ agent 认为价值有限（可仍批准或驳回）"}
+          {p.draft_worthiness_reason ? `：${p.draft_worthiness_reason}` : ""}
+        </div>
+      )}
 
       {p.status === "promoted" && (
         <div style={{ fontSize: 12, color: theme.green, fontWeight: 700 }}>✓ 已沉淀为 Skill</div>
       )}
 
-      {p.status === "candidate" && draftStatus !== "ready" && draftStatus !== "drafting" && (
-        <div style={{ display: "flex", gap: 8 }}>
+      {(p.status === "candidate" || p.status === "tracking") && draftStatus !== "ready" && draftStatus !== "drafting" && (
+        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
           <button onClick={() => onDraft(p.id)} style={btn(theme.accent, "#fff")}>
             {draftStatus === "error" ? "重试蒸馏" : "蒸馏成 Skill"}
           </button>
           <button onClick={() => onDismiss(p.id)} style={btn("transparent", theme.textMuted)}>驳回</button>
+          {p.status === "tracking" && (
+            <span style={{ color: theme.textDim, fontSize: 11 }}>未达自动阈值，可手动蒸馏（agent 会判断是否值得）</span>
+          )}
           {draftStatus === "error" && (
-            <span style={{ color: theme.red, fontSize: 11, alignSelf: "center" }}>蒸馏失败：{p.draft_error}</span>
+            <span style={{ color: theme.red, fontSize: 11 }}>蒸馏失败：{p.draft_error}</span>
           )}
         </div>
       )}
@@ -3200,37 +3258,144 @@ function SkillPatternCard({ p, onDraft, onApprove, onDismiss }) {
         <div style={{ fontSize: 12, color: theme.textMuted }}>蒸馏中…</div>
       )}
 
-      {draftStatus === "ready" && (
-        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-          <input
-            value={name} onChange={e => setName(e.target.value)} placeholder="skill name"
-            style={{ padding: "6px 10px", borderRadius: 7, border: `1px solid ${theme.border}`,
-              background: theme.bg, color: theme.text, fontSize: 12, fontFamily: "monospace" }}
-          />
-          <input
-            value={desc} onChange={e => setDesc(e.target.value)} placeholder="description (trigger)"
-            style={{ padding: "6px 10px", borderRadius: 7, border: `1px solid ${theme.border}`,
-              background: theme.bg, color: theme.text, fontSize: 12 }}
-          />
-          <textarea
-            value={body} onChange={e => setBody(e.target.value)} rows={8}
-            style={{ padding: "8px 10px", borderRadius: 7, border: `1px solid ${theme.border}`,
-              background: theme.bg, color: theme.text, fontSize: 11, fontFamily: "monospace", resize: "vertical" }}
-          />
-          <div style={{ display: "flex", gap: 8 }}>
-            <button onClick={() => onApprove(p.id, { name, description: desc, body })} style={btn(theme.green, "#fff")}>
-              批准并写入 ~/.claude/skills
-            </button>
-            <button onClick={() => onDismiss(p.id)} style={btn("transparent", theme.textMuted)}>驳回</button>
+      {draftStatus === "ready" && (() => {
+        const fm = parseSkillFrontmatter(body);
+        return (
+          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+            {/* preview header */}
+            <div style={{ display: "flex", alignItems: "baseline", gap: 8, flexWrap: "wrap" }}>
+              <span style={{
+                fontFamily: "ui-monospace, Menlo, monospace", fontSize: 12, fontWeight: 800,
+                color: theme.accent, background: theme.accentGlow, padding: "3px 9px", borderRadius: 6,
+              }}>{fm.name || "(无 name)"}</span>
+              <span style={{ fontSize: 11, color: theme.textDim }}>
+                → ~/.claude/skills/{fm.name || "…"}/SKILL.md
+              </span>
+            </div>
+            {fm.description && (
+              <div style={{ fontSize: 12, color: theme.textMuted, lineHeight: 1.55 }}>{fm.description}</div>
+            )}
+            {/* editor */}
+            <div>
+              <div style={{ fontSize: 10.5, color: theme.textDim, marginBottom: 5, fontWeight: 600, letterSpacing: 0.3 }}>
+                SKILL.md · 可编辑（frontmatter 决定名称与触发描述）
+              </div>
+              <textarea
+                value={body} onChange={e => setBody(e.target.value)} rows={16} spellCheck={false}
+                style={{
+                  width: "100%", boxSizing: "border-box", padding: "12px 14px", borderRadius: 10,
+                  border: `1px solid ${theme.border}`, background: theme.bg, color: theme.text,
+                  fontSize: 12, fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+                  lineHeight: 1.65, resize: "vertical", outline: "none",
+                }}
+              />
+            </div>
+            <div style={{ display: "flex", gap: 8 }}>
+              <button
+                onClick={() => onApprove(p.id, { body })}
+                style={{ ...btn(theme.green, "#fff"), padding: "8px 18px", fontSize: 12 }}
+              >✓ 批准并写入</button>
+              <button
+                onClick={() => onDismiss(p.id)}
+                style={{ ...btn("transparent", theme.textMuted), padding: "8px 18px", fontSize: 12 }}
+              >驳回</button>
+            </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
     </div>
   );
 }
 
-function SkillsView({ skillData, skills, onSweep, onDraft, onApprove, onDismiss, onToggleSkill, onDeleteSkill }) {
-  const patterns = skillData.patterns || [];
+function SkillRegistryCard({ s, tasks, onToggle, onDelete }) {
+  const [expanded, setExpanded] = useState(false);
+  const [content, setContent] = useState(null);
+  const [loading, setLoading] = useState(false);
+
+  let sourceTaskIds = [];
+  try { sourceTaskIds = JSON.parse(s.source_task_ids || "[]"); } catch { /* ignore */ }
+
+  const toggleDetail = async () => {
+    const next = !expanded;
+    setExpanded(next);
+    if (next && content === null) {
+      setLoading(true);
+      try {
+        const res = await fetch(`${API}/skills/${s.id}/content`);
+        const d = await res.json();
+        setContent(d.content ?? "");
+      } catch (e) {
+        setContent(`(加载失败：${e.message})`);
+      } finally {
+        setLoading(false);
+      }
+    }
+  };
+
+  return (
+    <div style={{
+      background: theme.surface, border: `1px solid ${theme.border}`,
+      borderRadius: 12, padding: 14, opacity: s.enabled ? 1 : 0.55,
+    }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+        <SkillKindBadge kind={s.kind} />
+        <span style={{ fontFamily: "monospace", fontSize: 12, color: theme.text, fontWeight: 700 }}>{s.name}</span>
+        <button
+          onClick={toggleDetail}
+          style={{ marginLeft: "auto", background: "transparent", border: "none",
+            color: theme.accent, cursor: "pointer", fontSize: 11, fontWeight: 700 }}
+        >{expanded ? "收起 ▲" : "查看 SKILL.md ▼"}</button>
+      </div>
+      <div style={{ color: theme.textMuted, fontSize: 12, marginBottom: 10, lineHeight: 1.5 }}>{s.description || "—"}</div>
+
+      {expanded && (
+        <div style={{ marginBottom: 10 }}>
+          <div style={{ fontSize: 11, color: theme.textDim, marginBottom: 6 }}>
+            <span style={{ fontFamily: "monospace" }}>{s.path}</span>
+            {s.source_pattern_key && <span>　来源 pattern：{s.source_pattern_key}</span>}
+            {sourceTaskIds.length > 0 && (
+              <span>　来源任务：{sourceTaskIds.map(tid => {
+                const t = (tasks || []).find(x => x.id === tid);
+                return `#${tid}${t ? "（" + t.title + "）" : ""}`;
+              }).join("、")}</span>
+            )}
+          </div>
+          <pre style={{
+            margin: 0, padding: "12px 14px", borderRadius: 10,
+            border: `1px solid ${theme.border}`, background: theme.bg, color: theme.text,
+            fontSize: 12, fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+            lineHeight: 1.6, whiteSpace: "pre-wrap", wordBreak: "break-word",
+            maxHeight: 360, overflow: "auto",
+          }}>{loading ? "加载中…" : content}</pre>
+        </div>
+      )}
+
+      <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+        <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11, color: theme.textDim, cursor: "pointer" }}>
+          <input
+            type="checkbox" checked={!!s.enabled}
+            onChange={e => onToggle(s.id, e.target.checked)}
+            style={{ cursor: "pointer" }}
+          />
+          {s.enabled ? "已启用（claude/codex 加载中）" : "已停用（symlink 已摘除）"}
+        </label>
+        <button
+          onClick={() => onDelete(s.id)}
+          style={{
+            marginLeft: "auto", padding: "4px 10px", borderRadius: 6,
+            border: `1px solid ${theme.border}`, background: "transparent",
+            color: theme.red, cursor: "pointer", fontSize: 11, fontWeight: 700,
+          }}
+        >删除</button>
+      </div>
+    </div>
+  );
+}
+
+function SkillsView({ skillData, skills, tasks, onSweep, onDraft, onApprove, onDismiss, onToggleSkill, onDeleteSkill }) {
+  // Only recurrence >= 2 is worth surfacing; single-occurrence rows are noise.
+  // (The backend still tracks them so the count can accumulate across sweeps.)
+  const patterns = (skillData.patterns || []).filter(p => p.recurrence_count >= 2);
   const sweep = skillData.sweep || {};
   const running = sweep.running;
   const last = sweep.last;
@@ -3238,7 +3403,9 @@ function SkillsView({ skillData, skills, onSweep, onDraft, onApprove, onDismiss,
   if (last) {
     lastNote = last.error
       ? `上次扫描失败：${last.error}`
-      : `上次扫描：扫描 ${last.scanned}、检出 ${last.detected}、候选 ${last.candidates ?? 0}（agent ${last.agent}）`;
+      : last.scanned === 0
+        ? `上次扫描：没有已完成的任务可分析（agent ${last.agent}）`
+        : `上次扫描：分析 ${last.scanned} 个任务、新增 ${last.new ?? 0} 次复发、候选 ${last.candidates ?? 0}（agent ${last.agent}）`;
   }
   return (
     <div style={{ padding: 28, minHeight: "calc(100vh - 72px)" }}>
@@ -3269,34 +3436,7 @@ function SkillsView({ skillData, skills, onSweep, onDraft, onApprove, onDismiss,
           </div>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(360px, 1fr))", gap: 12 }}>
             {skills.map(s => (
-              <div key={s.id} style={{
-                background: theme.surface, border: `1px solid ${theme.border}`,
-                borderRadius: 12, padding: 14, opacity: s.enabled ? 1 : 0.55,
-              }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
-                  <SkillKindBadge kind={s.kind} />
-                  <span style={{ fontFamily: "monospace", fontSize: 12, color: theme.text, fontWeight: 700 }}>{s.name}</span>
-                </div>
-                <div style={{ color: theme.textMuted, fontSize: 12, marginBottom: 10 }}>{s.description || "—"}</div>
-                <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                  <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11, color: theme.textDim, cursor: "pointer" }}>
-                    <input
-                      type="checkbox" checked={!!s.enabled}
-                      onChange={e => onToggleSkill(s.id, e.target.checked)}
-                      style={{ cursor: "pointer" }}
-                    />
-                    {s.enabled ? "已启用（claude/codex 加载中）" : "已停用（symlink 已摘除）"}
-                  </label>
-                  <button
-                    onClick={() => onDeleteSkill(s.id)}
-                    style={{
-                      marginLeft: "auto", padding: "4px 10px", borderRadius: 6,
-                      border: `1px solid ${theme.border}`, background: "transparent",
-                      color: theme.red, cursor: "pointer", fontSize: 11, fontWeight: 700,
-                    }}
-                  >删除</button>
-                </div>
-              </div>
+              <SkillRegistryCard key={s.id} s={s} tasks={tasks} onToggle={onToggleSkill} onDelete={onDeleteSkill} />
             ))}
           </div>
         </div>
@@ -3308,7 +3448,7 @@ function SkillsView({ skillData, skills, onSweep, onDraft, onApprove, onDismiss,
           border: `1px dashed ${theme.border}`, borderRadius: 12,
           padding: 32, textAlign: "center", color: theme.textDim, fontSize: 12,
         }}>
-          还没有检测到模式 — 点「扫一遍」让 agent 分析最近完成的任务
+          还没有复发 ≥2 的模式 — 点「扫一遍」让 agent 分析最近完成的任务（复发 1 次的暂不展示）
         </div>
       ) : (
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(360px, 1fr))", gap: 14 }}>
@@ -3316,6 +3456,7 @@ function SkillsView({ skillData, skills, onSweep, onDraft, onApprove, onDismiss,
             <SkillPatternCard
               key={p.id}
               p={p}
+              tasks={tasks}
               onDraft={onDraft}
               onApprove={onApprove}
               onDismiss={onDismiss}
@@ -3854,6 +3995,7 @@ export default function App() {
         <SkillsView
           skillData={skillData}
           skills={skills}
+          tasks={tasks}
           onSweep={handleSweep}
           onDraft={handleSkillDraft}
           onApprove={handleSkillApprove}
