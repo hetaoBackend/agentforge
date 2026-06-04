@@ -526,6 +526,76 @@ async function createTask(data) {
   return res.json();
 }
 
+async function fetchSkillPatterns() {
+  const res = await fetch(`${API}/skill-patterns`);
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json();
+}
+
+async function triggerSkillSweep(agent) {
+  const res = await fetch(`${API}/skills/sweep`, {
+    method: "POST", headers: await csrfHeaders(),
+    body: JSON.stringify(agent ? { agent } : {}),
+  });
+  const payload = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(payload.error || `HTTP ${res.status}`);
+  return payload;
+}
+
+async function triggerSkillDraft(id, agent) {
+  const res = await fetch(`${API}/skill-patterns/${id}/draft`, {
+    method: "POST", headers: await csrfHeaders(),
+    body: JSON.stringify(agent ? { agent } : {}),
+  });
+  const payload = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(payload.error || `HTTP ${res.status}`);
+  return payload;
+}
+
+async function approveSkill(id, data) {
+  const res = await fetch(`${API}/skill-patterns/${id}/approve`, {
+    method: "POST", headers: await csrfHeaders(),
+    body: JSON.stringify(data),
+  });
+  const payload = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(payload.error || `HTTP ${res.status}`);
+  return payload;
+}
+
+async function dismissSkillPattern(id) {
+  const res = await fetch(`${API}/skill-patterns/${id}/dismiss`, {
+    method: "POST", headers: await csrfHeaders(), body: "{}",
+  });
+  const payload = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(payload.error || `HTTP ${res.status}`);
+  return payload;
+}
+
+async function fetchSkills() {
+  const res = await fetch(`${API}/skills`);
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json();
+}
+
+async function setSkillEnabledApi(id, enabled) {
+  const res = await fetch(`${API}/skills/${id}`, {
+    method: "PUT", headers: await csrfHeaders(),
+    body: JSON.stringify({ enabled }),
+  });
+  const payload = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(payload.error || `HTTP ${res.status}`);
+  return payload;
+}
+
+async function deleteSkillApi(id) {
+  const res = await fetch(`${API}/skills/${id}`, {
+    method: "DELETE", headers: await csrfHeaders(),
+  });
+  const payload = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(payload.error || `HTTP ${res.status}`);
+  return payload;
+}
+
 async function createHeartbeat(data) {
   const res = await fetch(`${API}/heartbeats`, {
     method: "POST", headers: await csrfHeaders(),
@@ -2244,6 +2314,9 @@ function SettingsModal({ onClose, timeout: initialTimeout, defaultAgent: initial
   const [tab, setTab] = useState("general");
   const [timeout, setTimeout] = useState(initialTimeout ?? 600);
   const [defaultAgent, setDefaultAgent] = useState(initialDefaultAgent ?? "claude");
+  const [skillEnabled, setSkillEnabled] = useState(false);
+  const [skillSweepAgent, setSkillSweepAgent] = useState("claude");
+  const [skillSweepCron, setSkillSweepCron] = useState("0 3 * * *");
   const [feishu, setFeishu] = useState({
     feishu_app_id: "",
     feishu_app_secret: "",
@@ -2278,6 +2351,13 @@ function SettingsModal({ onClose, timeout: initialTimeout, defaultAgent: initial
     const intervalId = setInterval(refreshChannels, 2000);
     fetchFeishuSettings().then(s => {
       if (s && Object.keys(s).length) setFeishu(f => ({ ...f, ...s }));
+    });
+    fetchSettings().then(s => {
+      if (s && typeof s === "object") {
+        if (typeof s.skill_library_enabled === "boolean") setSkillEnabled(s.skill_library_enabled);
+        if (s.skill_sweep_agent) setSkillSweepAgent(s.skill_sweep_agent);
+        if (s.skill_sweep_cron) setSkillSweepCron(s.skill_sweep_cron);
+      }
     });
     return () => {
       cancelled = true;
@@ -2340,7 +2420,13 @@ function SettingsModal({ onClose, timeout: initialTimeout, defaultAgent: initial
   };
 
   const handleSaveGeneral = async () => {
-    await updateSettings({ timeout: parseInt(timeout) || 600, default_agent: defaultAgent });
+    await updateSettings({
+      timeout: parseInt(timeout) || 600,
+      default_agent: defaultAgent,
+      skill_library_enabled: skillEnabled ? "1" : "0",
+      skill_sweep_agent: skillSweepAgent,
+      skill_sweep_cron: skillSweepCron,
+    });
     onSave(parseInt(timeout) || 600, defaultAgent);
     onClose();
   };
@@ -2451,6 +2537,48 @@ function SettingsModal({ onClose, timeout: initialTimeout, defaultAgent: initial
               </select>
               <div style={hintStyle}>Agent used for new tasks unless overridden per-task.</div>
             </div>
+
+            {/* ── Skill Library ── */}
+            <div style={{
+              marginBottom: 20, paddingTop: 16, borderTop: `1px solid ${theme.border}`,
+            }}>
+              <label style={{ ...labelStyle, display: "flex", alignItems: "center", gap: 10, cursor: "pointer" }}>
+                <input
+                  type="checkbox"
+                  checked={skillEnabled}
+                  onChange={e => setSkillEnabled(e.target.checked)}
+                  style={{ width: 16, height: 16, cursor: "pointer" }}
+                />
+                Skill Library 自动扫描
+              </label>
+              <div style={hintStyle}>
+                定时让 agent 扫描已完成任务、检测复发模式（消耗 token，默认关闭）。
+                手动「扫一遍」按钮不受此开关影响。
+              </div>
+            </div>
+            {skillEnabled && (
+              <>
+                <div style={{ marginBottom: 20 }}>
+                  <label style={labelStyle}>扫描 Agent</label>
+                  <select value={skillSweepAgent} onChange={e => setSkillSweepAgent(e.target.value)} style={fieldStyle}>
+                    <option value="claude">Claude Code (claude CLI)</option>
+                    <option value="codex">Codex CLI (openai/codex)</option>
+                  </select>
+                  <div style={hintStyle}>运行 sweep 的 agent。</div>
+                </div>
+                <div style={{ marginBottom: 20 }}>
+                  <label style={labelStyle}>扫描节奏 (cron)</label>
+                  <input
+                    value={skillSweepCron}
+                    onChange={e => setSkillSweepCron(e.target.value)}
+                    placeholder="0 3 * * *"
+                    style={{ ...fieldStyle, fontFamily: "monospace" }}
+                  />
+                  <div style={hintStyle}>默认每日凌晨 3 点。增量扫描，只看上次以来的新任务。</div>
+                </div>
+              </>
+            )}
+
             <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
               <button onClick={onClose} style={{
                 padding: "10px 20px", borderRadius: 8, border: `1px solid ${theme.border}`,
@@ -2992,10 +3120,219 @@ function SettingsModal({ onClose, timeout: initialTimeout, defaultAgent: initial
 
 // ─── App ───
 
+function SkillKindBadge({ kind }) {
+  const isPitfall = kind === "pitfall";
+  return (
+    <span style={{
+      fontSize: 10, fontWeight: 700, padding: "2px 7px", borderRadius: 6, letterSpacing: 0.4,
+      background: isPitfall ? "rgba(239,68,68,0.15)" : "rgba(34,197,94,0.15)",
+      color: isPitfall ? theme.red : theme.green,
+    }}>
+      {isPitfall ? "PITFALL" : "RECIPE"}
+    </span>
+  );
+}
+
+function SkillPatternCard({ p, onDraft, onApprove, onDismiss }) {
+  let taskCount = 0;
+  try { taskCount = (JSON.parse(p.contributing_task_ids || "[]")).length; } catch { /* ignore */ }
+  const ready = p.recurrence_count >= 3 && taskCount >= 2;
+  const draftStatus = p.draft_status;
+  const [name, setName] = useState(p.draft_name || "");
+  const [desc, setDesc] = useState(p.draft_description || "");
+  const [body, setBody] = useState(p.draft_body || "");
+  // Sync local edit buffers when a fresh draft arrives (body is stable across polls).
+  useEffect(() => {
+    if (draftStatus === "ready") {
+      setName(p.draft_name || "");
+      setDesc(p.draft_description || "");
+      setBody(p.draft_body || "");
+    }
+  }, [draftStatus, p.draft_body, p.draft_name, p.draft_description]);
+
+  const borderColor =
+    p.status === "promoted" ? theme.green
+    : p.status === "candidate" ? theme.accent
+    : theme.border;
+  const muted = p.status === "dismissed";
+
+  const btn = (bg, color) => ({
+    padding: "6px 14px", borderRadius: 7, border: bg === "transparent" ? `1px solid ${theme.border}` : "none",
+    background: bg, color, cursor: "pointer", fontSize: 11, fontWeight: 700,
+  });
+
+  return (
+    <div style={{
+      background: theme.surface, border: `1px solid ${borderColor}`,
+      borderRadius: 12, padding: 16, opacity: muted ? 0.5 : 1,
+    }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+        <SkillKindBadge kind={p.kind} />
+        <span style={{ fontFamily: "monospace", fontSize: 12, color: theme.text, fontWeight: 700 }}>
+          {p.pattern_key}
+        </span>
+      </div>
+      <div style={{ color: theme.textMuted, fontSize: 13, marginBottom: 10 }}>{p.summary || "—"}</div>
+      <div style={{ display: "flex", gap: 12, fontSize: 11, color: theme.textDim, marginBottom: 10 }}>
+        <span>复发 {p.recurrence_count}×</span>
+        <span>{taskCount} 个任务</span>
+        <span>{p.status}</span>
+        {ready && p.status !== "promoted" && <span style={{ color: theme.accent, fontWeight: 700 }}>✓ 达标</span>}
+      </div>
+
+      {p.status === "promoted" && (
+        <div style={{ fontSize: 12, color: theme.green, fontWeight: 700 }}>✓ 已沉淀为 Skill</div>
+      )}
+
+      {p.status === "candidate" && draftStatus !== "ready" && draftStatus !== "drafting" && (
+        <div style={{ display: "flex", gap: 8 }}>
+          <button onClick={() => onDraft(p.id)} style={btn(theme.accent, "#fff")}>
+            {draftStatus === "error" ? "重试蒸馏" : "蒸馏成 Skill"}
+          </button>
+          <button onClick={() => onDismiss(p.id)} style={btn("transparent", theme.textMuted)}>驳回</button>
+          {draftStatus === "error" && (
+            <span style={{ color: theme.red, fontSize: 11, alignSelf: "center" }}>蒸馏失败：{p.draft_error}</span>
+          )}
+        </div>
+      )}
+
+      {draftStatus === "drafting" && (
+        <div style={{ fontSize: 12, color: theme.textMuted }}>蒸馏中…</div>
+      )}
+
+      {draftStatus === "ready" && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          <input
+            value={name} onChange={e => setName(e.target.value)} placeholder="skill name"
+            style={{ padding: "6px 10px", borderRadius: 7, border: `1px solid ${theme.border}`,
+              background: theme.bg, color: theme.text, fontSize: 12, fontFamily: "monospace" }}
+          />
+          <input
+            value={desc} onChange={e => setDesc(e.target.value)} placeholder="description (trigger)"
+            style={{ padding: "6px 10px", borderRadius: 7, border: `1px solid ${theme.border}`,
+              background: theme.bg, color: theme.text, fontSize: 12 }}
+          />
+          <textarea
+            value={body} onChange={e => setBody(e.target.value)} rows={8}
+            style={{ padding: "8px 10px", borderRadius: 7, border: `1px solid ${theme.border}`,
+              background: theme.bg, color: theme.text, fontSize: 11, fontFamily: "monospace", resize: "vertical" }}
+          />
+          <div style={{ display: "flex", gap: 8 }}>
+            <button onClick={() => onApprove(p.id, { name, description: desc, body })} style={btn(theme.green, "#fff")}>
+              批准并写入 ~/.claude/skills
+            </button>
+            <button onClick={() => onDismiss(p.id)} style={btn("transparent", theme.textMuted)}>驳回</button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function SkillsView({ skillData, skills, onSweep, onDraft, onApprove, onDismiss, onToggleSkill, onDeleteSkill }) {
+  const patterns = skillData.patterns || [];
+  const sweep = skillData.sweep || {};
+  const running = sweep.running;
+  const last = sweep.last;
+  let lastNote = null;
+  if (last) {
+    lastNote = last.error
+      ? `上次扫描失败：${last.error}`
+      : `上次扫描：扫描 ${last.scanned}、检出 ${last.detected}、候选 ${last.candidates ?? 0}（agent ${last.agent}）`;
+  }
+  return (
+    <div style={{ padding: 28, minHeight: "calc(100vh - 72px)" }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16, gap: 12 }}>
+        <div style={{ color: theme.textMuted, fontSize: 12 }}>
+          跨任务复发模式账本 · 复发 ≥3 且跨 ≥2 任务即可沉淀为 Skill
+          {lastNote && <span style={{ marginLeft: 10, color: theme.textDim }}>· {lastNote}</span>}
+        </div>
+        <button
+          onClick={onSweep}
+          disabled={running}
+          style={{
+            padding: "8px 18px", borderRadius: 8, border: "none",
+            background: running ? theme.border : theme.accent,
+            color: "#fff", cursor: running ? "default" : "pointer",
+            fontSize: 12, fontWeight: 700, letterSpacing: 0.3, whiteSpace: "nowrap",
+            boxShadow: running ? "none" : `0 0 24px ${theme.accentGlow}`,
+          }}
+        >
+          {running ? "扫描中…" : "扫一遍"}
+        </button>
+      </div>
+
+      {(skills || []).length > 0 && (
+        <div style={{ marginBottom: 26 }}>
+          <div style={{ color: theme.text, fontSize: 13, fontWeight: 700, marginBottom: 10 }}>
+            已沉淀 Skills（{skills.length}）
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(360px, 1fr))", gap: 12 }}>
+            {skills.map(s => (
+              <div key={s.id} style={{
+                background: theme.surface, border: `1px solid ${theme.border}`,
+                borderRadius: 12, padding: 14, opacity: s.enabled ? 1 : 0.55,
+              }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+                  <SkillKindBadge kind={s.kind} />
+                  <span style={{ fontFamily: "monospace", fontSize: 12, color: theme.text, fontWeight: 700 }}>{s.name}</span>
+                </div>
+                <div style={{ color: theme.textMuted, fontSize: 12, marginBottom: 10 }}>{s.description || "—"}</div>
+                <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                  <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11, color: theme.textDim, cursor: "pointer" }}>
+                    <input
+                      type="checkbox" checked={!!s.enabled}
+                      onChange={e => onToggleSkill(s.id, e.target.checked)}
+                      style={{ cursor: "pointer" }}
+                    />
+                    {s.enabled ? "已启用（claude/codex 加载中）" : "已停用（symlink 已摘除）"}
+                  </label>
+                  <button
+                    onClick={() => onDeleteSkill(s.id)}
+                    style={{
+                      marginLeft: "auto", padding: "4px 10px", borderRadius: 6,
+                      border: `1px solid ${theme.border}`, background: "transparent",
+                      color: theme.red, cursor: "pointer", fontSize: 11, fontWeight: 700,
+                    }}
+                  >删除</button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <div style={{ color: theme.text, fontSize: 13, fontWeight: 700, marginBottom: 10 }}>检测到的模式</div>
+      {patterns.length === 0 ? (
+        <div style={{
+          border: `1px dashed ${theme.border}`, borderRadius: 12,
+          padding: 32, textAlign: "center", color: theme.textDim, fontSize: 12,
+        }}>
+          还没有检测到模式 — 点「扫一遍」让 agent 分析最近完成的任务
+        </div>
+      ) : (
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(360px, 1fr))", gap: 14 }}>
+          {patterns.map(p => (
+            <SkillPatternCard
+              key={p.id}
+              p={p}
+              onDraft={onDraft}
+              onApprove={onApprove}
+              onDismiss={onDismiss}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function App() {
   const [tasks, setTasks] = useState([]);
   const [heartbeats, setHeartbeats] = useState([]);
   const [heartbeatTicks, setHeartbeatTicks] = useState([]);
+  const [skillData, setSkillData] = useState({ patterns: [], sweep: { running: false, last: null } });
+  const [skills, setSkills] = useState([]);
   const [activeView, setActiveView] = useState("tasks");
   const [showNew, setShowNew] = useState(false);
   const [showNewHeartbeat, setShowNewHeartbeat] = useState(false);
@@ -3058,9 +3395,13 @@ export default function App() {
 
   const poll = useCallback(async () => {
     try {
-      const [taskData, heartbeatData] = await Promise.all([fetchTasks(), fetchHeartbeats()]);
+      const [taskData, heartbeatData, skillRes, skillsRes] = await Promise.all([
+        fetchTasks(), fetchHeartbeats(), fetchSkillPatterns(), fetchSkills(),
+      ]);
       setTasks(taskData);
       setHeartbeats(heartbeatData);
+      setSkillData(skillRes);
+      setSkills(skillsRes.skills || []);
       setConnected(true);
       setApiError(null);
     } catch (err) {
@@ -3138,6 +3479,62 @@ export default function App() {
       }
     } catch (e) {
       setApiError(`Heartbeat ${action} failed: ${e.message}`);
+    }
+  };
+
+  const handleSweep = async () => {
+    try {
+      await triggerSkillSweep();
+      // Optimistically reflect the running state; poll picks up the real status.
+      setSkillData(prev => ({ ...prev, sweep: { ...prev.sweep, running: true } }));
+      setTimeout(poll, 1500);
+    } catch (e) {
+      setApiError(`Sweep failed: ${e.message}`);
+    }
+  };
+
+  const handleSkillDraft = async (id) => {
+    try {
+      await triggerSkillDraft(id);
+      setTimeout(poll, 1500);
+    } catch (e) {
+      setApiError(`Distill failed: ${e.message}`);
+    }
+  };
+
+  const handleSkillApprove = async (id, data) => {
+    try {
+      await approveSkill(id, data);
+      poll();
+    } catch (e) {
+      setApiError(`Approve failed: ${e.message}`);
+    }
+  };
+
+  const handleSkillDismiss = async (id) => {
+    try {
+      await dismissSkillPattern(id);
+      poll();
+    } catch (e) {
+      setApiError(`Dismiss failed: ${e.message}`);
+    }
+  };
+
+  const handleSkillToggle = async (id, enabled) => {
+    try {
+      await setSkillEnabledApi(id, enabled);
+      poll();
+    } catch (e) {
+      setApiError(`Toggle skill failed: ${e.message}`);
+    }
+  };
+
+  const handleSkillDelete = async (id) => {
+    try {
+      await deleteSkillApi(id);
+      poll();
+    } catch (e) {
+      setApiError(`Delete skill failed: ${e.message}`);
     }
   };
 
@@ -3334,6 +3731,7 @@ export default function App() {
             {[
               { key: "tasks", label: "Tasks" },
               { key: "heartbeats", label: "Heartbeats" },
+              { key: "skills", label: "Skills" },
             ].map(tab => (
               <button
                 key={tab.key}
@@ -3390,16 +3788,18 @@ export default function App() {
             ⚙
           </button>
           </Tooltip>
-          <button onClick={() => activeView === "tasks" ? setShowNew(true) : setShowNewHeartbeat(true)} style={{
-            padding: "8px 18px", borderRadius: 8, border: "none",
-            background: theme.accent, color: "#fff", cursor: "pointer",
-            fontSize: 12, fontWeight: 700, letterSpacing: 0.3,
-            display: "flex", alignItems: "center", gap: 6,
-            boxShadow: `0 0 24px ${theme.accentGlow}`,
-            transition: "transform 0.15s",
-          }}>
-            {activeView === "tasks" ? "+ New Task" : "+ New Heartbeat"}
-          </button>
+          {activeView !== "skills" && (
+            <button onClick={() => activeView === "tasks" ? setShowNew(true) : setShowNewHeartbeat(true)} style={{
+              padding: "8px 18px", borderRadius: 8, border: "none",
+              background: theme.accent, color: "#fff", cursor: "pointer",
+              fontSize: 12, fontWeight: 700, letterSpacing: 0.3,
+              display: "flex", alignItems: "center", gap: 6,
+              boxShadow: `0 0 24px ${theme.accentGlow}`,
+              transition: "transform 0.15s",
+            }}>
+              {activeView === "tasks" ? "+ New Task" : "+ New Heartbeat"}
+            </button>
+          )}
         </div>
       </div>
 
@@ -3418,7 +3818,7 @@ export default function App() {
             />
           ))}
         </div>
-      ) : (
+      ) : activeView === "heartbeats" ? (
         <div style={{ padding: 28, minHeight: "calc(100vh - 72px)" }}>
           <div style={{
             display: "grid",
@@ -3450,6 +3850,17 @@ export default function App() {
             )}
           </div>
         </div>
+      ) : (
+        <SkillsView
+          skillData={skillData}
+          skills={skills}
+          onSweep={handleSweep}
+          onDraft={handleSkillDraft}
+          onApprove={handleSkillApprove}
+          onDismiss={handleSkillDismiss}
+          onToggleSkill={handleSkillToggle}
+          onDeleteSkill={handleSkillDelete}
+        />
       )}
 
       {/* Modals */}
