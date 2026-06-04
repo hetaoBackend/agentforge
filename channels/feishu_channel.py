@@ -1047,13 +1047,15 @@ class FeishuChannel(Channel):
         summary = self._truncate_text(clean_body.splitlines()[0], 120) if clean_body else ""
         elements = self._build_result_elements(body_text=clean_body, image_keys=image_keys)
         if streaming_history and streaming_history.strip():
-            panel_text = (
-                self._strip_final_result_from_history(streaming_history, clean_body)
-                if is_completed
-                else streaming_history
-            )
-            if panel_text.strip():
-                elements = [self._build_streaming_history_panel(panel_text)] + elements
+            panel_text = streaming_history
+            if is_completed:
+                # Drop the final answer from the folded "执行过程" panel to avoid
+                # showing it twice — but only when something is left. Otherwise keep
+                # the full history so the execution-process panel never vanishes.
+                stripped = self._strip_final_result_from_history(streaming_history, clean_body)
+                if stripped.strip():
+                    panel_text = stripped
+            elements = [self._build_streaming_history_panel(panel_text)] + elements
 
         if not is_completed:
             elements.append(

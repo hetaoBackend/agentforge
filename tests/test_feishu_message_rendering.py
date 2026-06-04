@@ -442,9 +442,12 @@ class TestFeishuNotificationCards:
         assert _panel_texts(panel) == ["working..."]
         assert result == {"tag": "markdown", "content": "final result"}
 
-    def test_build_completed_card_omits_panel_when_history_is_only_final_answer(
+    def test_build_completed_card_keeps_panel_when_history_is_only_final_answer(
         self, mock_feishu_channel
     ):
+        # When the streamed history is only the final answer (no separate trace
+        # events, e.g. a simple/codex run), still keep the folded 执行过程 panel
+        # rather than dropping it — the process should always be foldable.
         task = {
             "id": 10,
             "title": "Streaming final",
@@ -461,7 +464,11 @@ class TestFeishuNotificationCards:
             streaming_history="final result",
         )
 
-        assert card["body"]["elements"] == [{"tag": "markdown", "content": "final result"}]
+        panel = card["body"]["elements"][0]
+        result = card["body"]["elements"][1]
+        assert panel["tag"] == "collapsible_panel"
+        assert _panel_texts(panel) == ["final result"]
+        assert result == {"tag": "markdown", "content": "final result"}
 
 
 class TestFeishuStreaming:
