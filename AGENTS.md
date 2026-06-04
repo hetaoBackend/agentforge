@@ -45,7 +45,7 @@ uv run pytest -q  # run the Python suite directly
 cd taskboard-electron
 npm run lint          # ESLint (flat config, eslint.config.mjs)
 npm run format:check  # Prettier --check (npm run format to apply)
-npm test              # node --test src/renderer/*.test.mjs
+npm test              # node --test (pins TZ=Asia/Shanghai — date tests assert local wall time)
 npm run build:check   # vite renderer build — catches compile/import errors
 ```
 CI (`.github/workflows/ci.yml`) runs two jobs: **backend-quality** (`make check`)

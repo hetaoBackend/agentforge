@@ -12,7 +12,7 @@
     "package": "electron-forge package",
     "make": "electron-forge make",
     "publish": "electron-forge publish",
-    "test": "node --test src/renderer/*.test.mjs",
+    "test": "TZ=Asia/Shanghai node --test src/renderer/*.test.mjs",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "format": "prettier --write \"src/**/*.{js,jsx,mjs}\" \"scripts/**/*.mjs\" \"*.config.js\" \"vite.*.config.mjs\" \"eslint.config.mjs\"",
