@@ -400,6 +400,8 @@ class FeishuChannel(Channel):
                 lark.EventDispatcherHandler.builder("", "")
                 .register_p2_im_message_receive_v1(self._on_message_sync)
                 .register_p2_im_chat_member_bot_added_v1(self._on_bot_added)
+                .register_p2_im_message_reaction_created_v1(self._on_reaction)
+                .register_p2_im_message_reaction_deleted_v1(self._on_reaction)
                 .build()
             )
             print("[Feishu] Event handler registered")
@@ -1045,13 +1047,15 @@ class FeishuChannel(Channel):
         summary = self._truncate_text(clean_body.splitlines()[0], 120) if clean_body else ""
         elements = self._build_result_elements(body_text=clean_body, image_keys=image_keys)
         if streaming_history and streaming_history.strip():
-            panel_text = (
-                self._strip_final_result_from_history(streaming_history, clean_body)
-                if is_completed
-                else streaming_history
-            )
-            if panel_text.strip():
-                elements = [self._build_streaming_history_panel(panel_text)] + elements
+            panel_text = streaming_history
+            if is_completed:
+                # Drop the final answer from the folded "执行过程" panel to avoid
+                # showing it twice — but only when something is left. Otherwise keep
+                # the full history so the execution-process panel never vanishes.
+                stripped = self._strip_final_result_from_history(streaming_history, clean_body)
+                if stripped.strip():
+                    panel_text = stripped
+            elements = [self._build_streaming_history_panel(panel_text)] + elements
 
         if not is_completed:
             elements.append(
@@ -1413,6 +1417,16 @@ class FeishuChannel(Channel):
             return None
 
     # ── inbound: receive messages via WebSocket ───────────────────
+
+    def _on_reaction(self, data) -> None:
+        """No-op handler for message reaction events.
+
+        The bot adds emoji reactions to acknowledge tasks, which echoes an
+        `im.message.reaction.created_v1` event back over the WebSocket. We don't
+        act on reactions, but registering a handler stops the lark SDK from
+        logging `processor not found` errors for every reaction.
+        """
+        return
 
     def _on_bot_added(self, data) -> None:
         """Called when the bot is added to a chat (including P2P when a user follows the bot)."""
