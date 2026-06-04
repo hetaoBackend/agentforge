@@ -12,9 +12,9 @@ def make_db(tmp_path):
 def register(sched, db, name="my-skill"):
     # Use the real approval path so files + symlinks exist on disk.
     db.upsert_skill_pattern(name, "recipe", "summary", 1)
-    pid = db.conn.execute(
-        "SELECT id FROM skill_patterns WHERE pattern_key=?", (name,)
-    ).fetchone()["id"]
+    pid = db.conn.execute("SELECT id FROM skill_patterns WHERE pattern_key=?", (name,)).fetchone()[
+        "id"
+    ]
     body = f"---\nname: {name}\ndescription: d\n---\n\nbody"
     skill = sched.approve_skill(pid, name, "d", body)
     return skill["id"]

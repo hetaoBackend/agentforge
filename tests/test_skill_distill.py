@@ -25,9 +25,9 @@ def make_pattern(db, key="k", recurrence=3, tasks=(1, 2, 3), kind="recipe"):
         (recurrence, json.dumps(list(tasks)), key),
     )
     db.conn.commit()
-    return db.conn.execute(
-        "SELECT id FROM skill_patterns WHERE pattern_key=?", (key,)
-    ).fetchone()["id"]
+    return db.conn.execute("SELECT id FROM skill_patterns WHERE pattern_key=?", (key,)).fetchone()[
+        "id"
+    ]
 
 
 # ── helpers ────────────────────────────────────────────────────────────────

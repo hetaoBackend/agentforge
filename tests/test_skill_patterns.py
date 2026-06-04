@@ -105,8 +105,18 @@ def test_run_skill_sweep_upserts_and_advances_watermark(tmp_path, monkeypatch):
 
     payload = json.dumps(
         [
-            {"pattern_key": "run-test-suite", "kind": "recipe", "summary": "run pytest", "task_id": t1},
-            {"pattern_key": "run-test-suite", "kind": "recipe", "summary": "run pytest", "task_id": t2},
+            {
+                "pattern_key": "run-test-suite",
+                "kind": "recipe",
+                "summary": "run pytest",
+                "task_id": t1,
+            },
+            {
+                "pattern_key": "run-test-suite",
+                "kind": "recipe",
+                "summary": "run pytest",
+                "task_id": t2,
+            },
         ]
     )
 

@@ -1364,9 +1364,7 @@ class TaskDB:
 
     def get_skills(self) -> list[dict]:
         with self.lock:
-            rows = self.conn.execute(
-                "SELECT * FROM skills ORDER BY created_at DESC"
-            ).fetchall()
+            rows = self.conn.execute("SELECT * FROM skills ORDER BY created_at DESC").fetchall()
             return [dict(r) for r in rows]
 
     def get_skill(self, skill_id: int) -> Optional[dict]:
@@ -2013,8 +2011,12 @@ class TaskScheduler(BusAwareSchedulerMixin):
         body_md = str(obj.get("body_markdown") or obj.get("body") or "").strip()
         skill_md = _compose_skill_md(name, description, body_md)
         self.db.upsert_skill_draft(
-            pattern_id, "ready", name=name, description=description,
-            kind=pattern["kind"], body=skill_md,
+            pattern_id,
+            "ready",
+            name=name,
+            description=description,
+            kind=pattern["kind"],
+            body=skill_md,
         )
         return {
             "pattern_id": pattern_id,
@@ -2036,9 +2038,7 @@ class TaskScheduler(BusAwareSchedulerMixin):
                 self.distill_skill_draft(pattern_id, agent)
             except Exception as e:  # noqa: BLE001 - surface to draft row, never crash
                 logger.error(f"Skill distill failed: {e}")
-                self.db.upsert_skill_draft(
-                    pattern_id, "error", kind=pattern["kind"], error=str(e)
-                )
+                self.db.upsert_skill_draft(pattern_id, "error", kind=pattern["kind"], error=str(e))
 
         threading.Thread(target=_worker, daemon=True).start()
         return True
@@ -3857,7 +3857,8 @@ class TaskAPIHandler(BaseHTTPRequestHandler):
                 {
                     "default_agent": self.db.get_setting("default_agent", "claude"),
                     "timeout": int(self.db.get_setting("timeout", "600")),
-                    "skill_library_enabled": self.db.get_setting("skill_library_enabled", "0") == "1",
+                    "skill_library_enabled": self.db.get_setting("skill_library_enabled", "0")
+                    == "1",
                     "skill_sweep_agent": self.db.get_setting("skill_sweep_agent", "claude"),
                     "skill_sweep_cron": self.db.get_setting("skill_sweep_cron", "0 3 * * *"),
                 }
