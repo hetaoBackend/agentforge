@@ -12,7 +12,12 @@
     "package": "electron-forge package",
     "make": "electron-forge make",
     "publish": "electron-forge publish",
-    "lint": "echo \"No linting configured\""
+    "test": "node --test src/renderer/*.test.mjs",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "format": "prettier --write \"src/**/*.{js,jsx,mjs}\" \"scripts/**/*.mjs\" \"*.config.js\" \"vite.*.config.mjs\" \"eslint.config.mjs\"",
+    "format:check": "prettier --check \"src/**/*.{js,jsx,mjs}\" \"scripts/**/*.mjs\" \"*.config.js\" \"vite.*.config.mjs\" \"eslint.config.mjs\"",
+    "build:check": "SKIP_BACKEND_BUILD=1 vite build --config vite.renderer.config.mjs --outDir .vite/build-check --emptyOutDir"
   },
   "keywords": [],
   "author": "danielwalnut",
@@ -28,8 +33,15 @@
     "@electron-forge/plugin-fuses": "^7.11.1",
     "@electron-forge/plugin-vite": "^7.11.1",
     "@electron/fuses": "^1.8.0",
+    "@eslint/js": "^9.39.4",
     "@vitejs/plugin-react": "^5.1.4",
     "electron": "40.2.1",
+    "eslint": "^9.39.4",
+    "eslint-config-prettier": "^10.1.8",
+    "eslint-plugin-react": "^7.37.5",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "globals": "^17.6.0",
+    "prettier": "^3.8.3",
     "vite": "^7.3.1"
   },
   "dependencies": {

@@ -36,7 +36,7 @@ export function buildTraceRows(eventType, payload, rawContent = "") {
   if (eventType === "tool_call") {
     const name = payload.server
       ? `${payload.server}.${payload.name || payload.tool || "unknown"}`
-      : (payload.name || payload.tool || "unknown");
+      : payload.name || payload.tool || "unknown";
     return compact([
       row("Tool", name),
       row("Input", payload.input || payload.arguments),
@@ -64,17 +64,16 @@ export function buildTraceRows(eventType, payload, rawContent = "") {
 
   if (eventType === "file_change") {
     const changes = Array.isArray(payload.changes)
-      ? payload.changes.map(change => {
-        if (!change || typeof change !== "object") return formatTraceValue(change);
-        const kind = change.kind || change.type || "changed";
-        const path = change.path || change.file || "";
-        return path ? `${kind}: ${path}` : kind;
-      }).join("\n")
+      ? payload.changes
+          .map((change) => {
+            if (!change || typeof change !== "object") return formatTraceValue(change);
+            const kind = change.kind || change.type || "changed";
+            const path = change.path || change.file || "";
+            return path ? `${kind}: ${path}` : kind;
+          })
+          .join("\n")
       : payload.changes;
-    return compact([
-      row("Changes", changes),
-      row("Status", payload.status),
-    ]);
+    return compact([row("Changes", changes), row("Status", payload.status)]);
   }
 
   if (eventType === "web_search") {
@@ -183,9 +182,7 @@ function eventToStep(event) {
       ...base,
       type: "image_content",
       title: "Image output",
-      rows: compact([
-        row("Media", mediaType),
-      ]),
+      rows: compact([row("Media", mediaType)]),
       detail: "[image]",
       imageSrc,
     };
@@ -198,10 +195,7 @@ function eventToStep(event) {
       ...base,
       type: "generated_image",
       title: imagePath ? `Generated image: ${basename(imagePath)}` : "Generated image",
-      rows: compact([
-        row("Path", imagePath),
-        row("Media", payload.media_type),
-      ]),
+      rows: compact([row("Path", imagePath), row("Media", payload.media_type)]),
       detail: imagePath,
     };
   }
@@ -221,7 +215,7 @@ function eventToStep(event) {
     type: eventType,
     title: titleForTraceEvent(eventType, payload),
     rows,
-    detail: rows.map(item => `${item.label}: ${item.value}`).join("\n"),
+    detail: rows.map((item) => `${item.label}: ${item.value}`).join("\n"),
   };
 }
 
@@ -229,7 +223,7 @@ function titleForTraceEvent(eventType, payload) {
   if (eventType === "tool_call") {
     const name = payload.server
       ? `${payload.server}.${payload.name || payload.tool || "unknown"}`
-      : (payload.name || payload.tool || "unknown");
+      : payload.name || payload.tool || "unknown";
     return `Call tool: ${name}`;
   }
 
@@ -248,7 +242,9 @@ function titleForTraceEvent(eventType, payload) {
 
   if (eventType === "file_change") {
     const changes = Array.isArray(payload.changes) ? payload.changes : [];
-    const firstPath = changes.find(change => change && typeof change === "object" && (change.path || change.file));
+    const firstPath = changes.find(
+      (change) => change && typeof change === "object" && (change.path || change.file),
+    );
     return firstPath ? `Change file: ${firstPath.path || firstPath.file}` : "Change files";
   }
 
@@ -256,20 +252,22 @@ function titleForTraceEvent(eventType, payload) {
 }
 
 function canMergeSteps(previous, next) {
-  return previous
-    && previous.type === next.type
-    && (next.type === "thinking" || next.type === "assistant")
-    && previous.rawEventType === next.rawEventType;
+  return (
+    previous &&
+    previous.type === next.type &&
+    (next.type === "thinking" || next.type === "assistant") &&
+    previous.rawEventType === next.rawEventType
+  );
 }
 
 function appendDetail(previous, next) {
   if (!previous) return next || "";
   if (!next) return previous;
   if (
-    previous.endsWith("\n")
-    || previous.endsWith(" ")
-    || next.startsWith("\n")
-    || next.startsWith(" ")
+    previous.endsWith("\n") ||
+    previous.endsWith(" ") ||
+    next.startsWith("\n") ||
+    next.startsWith(" ")
   ) {
     return previous + next;
   }
@@ -277,13 +275,17 @@ function appendDetail(previous, next) {
 }
 
 function summarizeTitle(text, prefix = "") {
-  const normalized = String(text || "").replace(/\s+/g, " ").trim();
+  const normalized = String(text || "")
+    .replace(/\s+/g, " ")
+    .trim();
   if (!normalized) return prefix;
   const title = normalized.length > 120 ? `${normalized.slice(0, 117).trim()}...` : normalized;
   return prefix ? `${prefix}: ${title}` : title;
 }
 
 function basename(value) {
-  const parts = String(value || "").split(/[\\/]/).filter(Boolean);
+  const parts = String(value || "")
+    .split(/[\\/]/)
+    .filter(Boolean);
   return parts[parts.length - 1] || String(value || "");
 }
