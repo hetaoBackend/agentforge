@@ -3407,11 +3407,29 @@ function SkillsView({ skillData, skills, tasks, onSweep, onDraft, onApprove, onD
         ? `上次扫描：没有已完成的任务可分析（agent ${last.agent}）`
         : `上次扫描：分析 ${last.scanned} 个任务、新增 ${last.new ?? 0} 次复发、候选 ${last.candidates ?? 0}（agent ${last.agent}）`;
   }
+  const [showRegistry, setShowRegistry] = useState(true);
+  const [showPatterns, setShowPatterns] = useState(true);
+
+  const sectionHeader = (label, count, open, toggle) => (
+    <button
+      onClick={toggle}
+      style={{
+        display: "flex", alignItems: "center", gap: 8, width: "100%",
+        background: "transparent", border: "none", cursor: "pointer",
+        color: theme.text, fontSize: 13, fontWeight: 700, padding: 0, marginBottom: 10,
+      }}
+    >
+      <span style={{ color: theme.textDim, fontSize: 11 }}>{open ? "▼" : "▶"}</span>
+      {label}
+      <span style={{ color: theme.textDim, fontWeight: 600 }}>（{count}）</span>
+    </button>
+  );
+
   return (
     <div style={{ padding: 28, minHeight: "calc(100vh - 72px)" }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16, gap: 12 }}>
         <div style={{ color: theme.textMuted, fontSize: 12 }}>
-          跨任务复发模式账本 · 复发 ≥3 且跨 ≥2 任务即可沉淀为 Skill
+          跨任务复发模式账本 · 复发 ≥2 即可手动蒸馏为 Skill（达 ≥3 且跨 ≥2 任务自动标记候选）
           {lastNote && <span style={{ marginLeft: 10, color: theme.textDim }}>· {lastNote}</span>}
         </div>
         <button
@@ -3431,19 +3449,19 @@ function SkillsView({ skillData, skills, tasks, onSweep, onDraft, onApprove, onD
 
       {(skills || []).length > 0 && (
         <div style={{ marginBottom: 26 }}>
-          <div style={{ color: theme.text, fontSize: 13, fontWeight: 700, marginBottom: 10 }}>
-            已沉淀 Skills（{skills.length}）
-          </div>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(360px, 1fr))", gap: 12 }}>
-            {skills.map(s => (
-              <SkillRegistryCard key={s.id} s={s} tasks={tasks} onToggle={onToggleSkill} onDelete={onDeleteSkill} />
-            ))}
-          </div>
+          {sectionHeader("已沉淀 Skills", skills.length, showRegistry, () => setShowRegistry(v => !v))}
+          {showRegistry && (
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(360px, 1fr))", gap: 12 }}>
+              {skills.map(s => (
+                <SkillRegistryCard key={s.id} s={s} tasks={tasks} onToggle={onToggleSkill} onDelete={onDeleteSkill} />
+              ))}
+            </div>
+          )}
         </div>
       )}
 
-      <div style={{ color: theme.text, fontSize: 13, fontWeight: 700, marginBottom: 10 }}>检测到的模式</div>
-      {patterns.length === 0 ? (
+      {sectionHeader("检测到的模式", patterns.length, showPatterns, () => setShowPatterns(v => !v))}
+      {showPatterns && (patterns.length === 0 ? (
         <div style={{
           border: `1px dashed ${theme.border}`, borderRadius: 12,
           padding: 32, textAlign: "center", color: theme.textDim, fontSize: 12,
@@ -3463,7 +3481,7 @@ function SkillsView({ skillData, skills, tasks, onSweep, onDraft, onApprove, onD
             />
           ))}
         </div>
-      )}
+      ))}
     </div>
   );
 }
