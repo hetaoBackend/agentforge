@@ -509,13 +509,14 @@ class TestFeishuStreaming:
         assert panel["header"]["title"]["content"] == "执行过程"
         assert _panel_texts(panel) == ["start", "A" * 1600, "end"]
 
-    def test_streaming_card_uses_code_block_fallback_for_many_lines(self, mock_feishu_channel):
+    def test_streaming_card_uses_plain_markdown_fallback_for_many_lines(self, mock_feishu_channel):
         long_text = "\n".join(f"line {i}" for i in range(220))
 
         card = mock_feishu_channel._build_streaming_card(12, "Streaming task", long_text)
 
         panel = card["body"]["elements"][0]
-        assert panel["elements"] == [{"tag": "markdown", "content": f"```\n{long_text}\n```"}]
+        assert panel["elements"] == [{"tag": "markdown", "content": long_text}]
+        assert "```" not in panel["elements"][0]["content"]
         assert _count_card_elements(card) <= 200
 
     def test_notification_card_keeps_history_and_image_under_feishu_element_limit(
@@ -546,6 +547,7 @@ class TestFeishuStreaming:
         panel = card["body"]["elements"][0]
         assert len(panel["elements"]) > 1
         assert all(element["tag"] == "markdown" for element in panel["elements"])
+        assert all("```" not in element["content"] for element in panel["elements"])
         assert _count_card_elements(card) <= 200
 
     def test_stream_writer_appends_thinking_events_without_resplitting(self, mock_feishu_channel):
@@ -599,15 +601,76 @@ class TestFeishuStreaming:
         )
 
         assert writer.snapshot_text() == (
-            "调用工具: Bash\n"
-            '参数: {"command": "pytest -q"}\n'
-            "工具返回: toolu_1\n"
-            "42 passed\n"
-            "执行命令: pytest -q\n"
-            "输出: 42 passed\n"
-            "退出码: 0\n"
+            "▣ 调用工具 Bash · pytest -q\n"
+            "↵ 工具返回 toolu_1 · 42 passed\n"
+            "$ 执行命令 pytest -q · 42 passed · 退出码 0\n"
         )
         assert writer._schedule.call_count == 3
+
+    def test_stream_writer_formats_trace_events_as_icon_summaries(self, mock_feishu_channel):
+        from channels.feishu_channel import _FeishuStreamWriter
+
+        writer = _FeishuStreamWriter(12, "om_msg", mock_feishu_channel, "Streaming task")
+        writer._schedule = Mock()
+
+        writer.on_event(
+            12,
+            34,
+            "web_search",
+            json.dumps(
+                {
+                    "query": "site:github.com agent memory",
+                    "action": {"type": "search", "query": "agent memory"},
+                    "status": "completed",
+                }
+            ),
+        )
+        writer.on_event(
+            12,
+            34,
+            "tool_call",
+            json.dumps(
+                {
+                    "server": "github",
+                    "name": "search_issues",
+                    "input": {"query": "is:open label:bug", "token": "[redacted]"},
+                    "status": "completed",
+                }
+            ),
+        )
+
+        text = writer.snapshot_text()
+        assert text == (
+            "⌕ 网页搜索 site:github.com agent memory · completed\n"
+            "▣ 调用工具 github.search_issues · is:open label:bug · completed\n"
+        )
+        assert "{" not in text
+        assert "动作:" not in text
+        assert "参数:" not in text
+
+    def test_stream_writer_keeps_long_command_output_as_one_summary_line(self, mock_feishu_channel):
+        from channels.feishu_channel import _FeishuStreamWriter
+
+        writer = _FeishuStreamWriter(12, "om_msg", mock_feishu_channel, "Streaming task")
+        writer._schedule = Mock()
+        long_output = "\n".join(f"line {i}: {'x' * 40}" for i in range(120))
+
+        writer.on_event(
+            12,
+            34,
+            "command_execution",
+            json.dumps({"command": "/bin/zsh -lc npm test", "output": long_output, "exit_code": 0}),
+        )
+
+        text = writer.snapshot_text()
+        assert text.count("\n") == 1
+        assert text.startswith("$ 执行命令 /bin/zsh -lc npm test · line 0:")
+        assert "line 1:" not in text
+        assert "输出:" not in text
+
+        elements = mock_feishu_channel._build_streaming_history_elements(text)
+        assert len(elements) == 1
+        assert elements[0]["tag"] == "div"
 
     def test_stream_writer_keeps_full_text_for_folded_history(self, mock_feishu_channel):
         from channels.feishu_channel import _FeishuStreamWriter

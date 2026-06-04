@@ -7,6 +7,7 @@ newline-delimited JSON over stdio.
 
 from __future__ import annotations
 
+import base64
 import json
 import os
 import re
@@ -15,11 +16,17 @@ import threading
 import uuid
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
+from urllib.parse import unquote, urlparse
 
 from taskboard_bus import Channel, MessageBus, OutboundMessage, OutboundMessageType
 
 if TYPE_CHECKING:
     from taskboard import TaskDB, TaskScheduler
+
+
+WEIXIN_UPLOADABLE_IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".gif", ".webp"}
+WEIXIN_MARKDOWN_IMAGE_RE = re.compile(r"!\[[^\]]*]\(([^)]+)\)")
+WEIXIN_NEW_SESSION_RE = re.compile(r"^/new(?:\s+(.*))?$", re.IGNORECASE | re.DOTALL)
 
 
 class WeixinChannel(Channel):
@@ -41,6 +48,11 @@ class WeixinChannel(Channel):
         # task_id -> origin metadata used for notifications and resume
         self._task_origin: dict[int, dict[str, str]] = {}
         self._origin_lock = threading.Lock()
+
+        # account_id:peer_id -> current task_id. Weixin has no thread, so this
+        # gives each peer a current AgentForge session until /new starts another.
+        self._peer_current_task: dict[str, int] = {}
+        self._peer_lock = threading.Lock()
 
         # notification message_id -> task_id for resume-by-reply
         self._notification_map: dict[str, int] = {}
@@ -124,27 +136,33 @@ class WeixinChannel(Channel):
             return
 
         title = msg.payload.get("title") or f"Task #{task_id}"
+        task = self.db.get_task(task_id) or {}
         if msg.type == OutboundMessageType.TASK_COMPLETED:
             body = (msg.payload.get("result") or "").strip() or "Done."
+            image_paths = self._collect_generated_image_paths(task_id, body, task)
+            if image_paths:
+                body = self._hide_generated_image_paths(body, len(image_paths), image_paths)
             text = f"✅ Task #{task_id} · {title}\n{body}"
         else:
             body = (msg.payload.get("error") or "Unknown error").strip()
+            image_paths = []
             text = f"❌ Task #{task_id} · {title}\n{body}"
 
         request_id = uuid.uuid4().hex
         with self._pending_lock:
             self._pending_notifications[request_id] = task_id
-        self._send_command(
-            {
-                "type": "send_message",
-                "request_id": request_id,
-                "account_id": origin.get("account_id", ""),
-                "peer_id": origin["peer_id"],
-                "context_token": origin.get("context_token", ""),
-                "reply_to_message_id": origin.get("message_id", ""),
-                "text": text,
-            }
-        )
+        command = {
+            "type": "send_message",
+            "request_id": request_id,
+            "account_id": origin.get("account_id", ""),
+            "peer_id": origin["peer_id"],
+            "context_token": origin.get("context_token", ""),
+            "reply_to_message_id": origin.get("message_id", ""),
+            "text": text,
+        }
+        if image_paths:
+            command["image_paths"] = image_paths
+        self._send_command(command)
 
         with self._origin_lock:
             self._task_origin.pop(task_id, None)
@@ -235,7 +253,8 @@ class WeixinChannel(Channel):
 
     def _handle_message_event(self, event: dict[str, Any]) -> None:
         text = (event.get("text") or "").strip()
-        if not text:
+        image_paths = self._extract_image_paths(event)
+        if not text and not image_paths:
             return
 
         from channels.agent_utils import handle_agent_command, resolve_agent
@@ -249,6 +268,16 @@ class WeixinChannel(Channel):
         account_id = event.get("account_id") or ""
         context_token = event.get("context_token") or ""
         message_id = event.get("message_id") or ""
+        peer_key = self._peer_key(account_id, peer_id)
+
+        new_match = WEIXIN_NEW_SESSION_RE.match(text) if text else None
+        force_new_session = bool(new_match)
+        if force_new_session:
+            text = (new_match.group(1) or "").strip()
+            self._clear_peer_current_task(peer_key)
+            if not text and not image_paths:
+                self._reply_to_event(event, "🆕 已开启新的 Weixin session，请发送新的任务内容。")
+                return
 
         dir_reply = handle_dir_command(text, "weixin", self.db)
         if dir_reply is not None:
@@ -271,17 +300,14 @@ class WeixinChannel(Channel):
                 reply_to_message_text,
             )
 
-        if task_id is not None:
+        if task_id is None and not force_new_session:
+            task_id = self._get_peer_current_task(peer_key)
+
+        if task_id is not None and not force_new_session:
             task = self.db.get_task(task_id)
             if task and task.get("session_id"):
-                self.db.update_task(
-                    task_id,
-                    status="pending",
-                    prompt=text,
-                    result=None,
-                    error=None,
-                    question=None,
-                )
+                updates = self._build_resume_updates(text, image_paths)
+                self.db.update_task(task_id, **updates)
                 with self._origin_lock:
                     self._task_origin[task_id] = {
                         "account_id": account_id,
@@ -289,17 +315,23 @@ class WeixinChannel(Channel):
                         "context_token": context_token,
                         "message_id": message_id,
                     }
+                self._set_peer_current_task(peer_key, task_id)
                 self._reply_to_event(event, f"▶️ 收到！正在唤醒 Task #{task_id}，请稍候～")
                 return
-            self._reply_to_event(event, f"❌ Task #{task_id} has no saved session to resume.")
-            return
+            if reply_to_message_id or reply_to_message_title or reply_to_message_text:
+                self._reply_to_event(event, f"❌ Task #{task_id} has no saved session to resume.")
+                return
 
+        prompt = text or self._default_image_prompt(image_paths)
+        prompt_images = self._build_prompt_images(image_paths)
         task = Task(
-            title=f"[Weixin] {text[:60]}{'…' if len(text) > 60 else ''}",
-            prompt=text,
-            working_dir=resolve_working_dir(text, "weixin", self.db),
+            title=f"[Weixin] {prompt[:60]}{'…' if len(prompt) > 60 else ''}",
+            prompt=prompt,
+            working_dir=resolve_working_dir(prompt, "weixin", self.db),
             schedule_type=ScheduleType.IMMEDIATE,
             tags="weixin",
+            image_paths=image_paths,
+            prompt_images=prompt_images,
             agent=resolve_agent("weixin", self.db),
         )
         task_id = self.scheduler.submit_task(task)
@@ -310,7 +342,272 @@ class WeixinChannel(Channel):
                 "context_token": context_token,
                 "message_id": message_id,
             }
+        self._set_peer_current_task(peer_key, task_id)
         self._reply_to_event(event, f"Task #{task_id} is running…")
+
+    def _peer_key(self, account_id: str, peer_id: str) -> str:
+        return f"{account_id}:{peer_id}"
+
+    def _get_peer_current_task(self, peer_key: str) -> Optional[int]:
+        with self._peer_lock:
+            return self._peer_current_task.get(peer_key)
+
+    def _set_peer_current_task(self, peer_key: str, task_id: int) -> None:
+        if not peer_key:
+            return
+        with self._peer_lock:
+            self._peer_current_task[peer_key] = task_id
+
+    def _clear_peer_current_task(self, peer_key: str) -> None:
+        with self._peer_lock:
+            self._peer_current_task.pop(peer_key, None)
+
+    def _default_image_prompt(self, image_paths: list[str]) -> str:
+        if len(image_paths) == 1:
+            return "请分析这张图片。"
+        return f"请分析这 {len(image_paths)} 张图片。"
+
+    def _extract_image_paths(self, event: dict[str, Any]) -> list[str]:
+        paths: list[str] = []
+        raw_paths = event.get("image_paths")
+        if isinstance(raw_paths, list):
+            paths.extend(str(path) for path in raw_paths if path)
+        raw_images = event.get("images")
+        if isinstance(raw_images, list):
+            for image in raw_images:
+                if not isinstance(image, dict):
+                    continue
+                path = image.get("path") or image.get("local_path")
+                if path:
+                    paths.append(str(path))
+        return self._dedupe_image_paths(paths)
+
+    def _build_resume_updates(self, prompt: str, image_paths: list[str]) -> dict[str, Any]:
+        resume_prompt = prompt or self._default_image_prompt(image_paths)
+        updates: dict[str, Any] = {
+            "status": "pending",
+            "prompt": resume_prompt,
+            "result": None,
+            "error": None,
+            "question": None,
+        }
+        if image_paths:
+            updates["image_paths"] = json.dumps(image_paths, ensure_ascii=False)
+            updates["prompt_images"] = json.dumps(
+                self._build_prompt_images(image_paths),
+                ensure_ascii=False,
+            )
+        return updates
+
+    def _build_prompt_images(self, image_paths: list[str]) -> list[dict[str, str]]:
+        prompt_images = []
+        for image_path in image_paths:
+            try:
+                with open(image_path, "rb") as image_file:
+                    data = base64.b64encode(image_file.read()).decode("utf-8")
+            except OSError as exc:
+                print(f"[Weixin] Failed to read inbound image {image_path}: {exc}")
+                continue
+            prompt_images.append(
+                {
+                    "name": Path(image_path).name,
+                    "media_type": self._image_media_type(image_path),
+                    "data": data,
+                }
+            )
+        return prompt_images
+
+    def _image_media_type(self, image_path: str) -> str:
+        suffix = Path(image_path).suffix.lower()
+        if suffix == ".png":
+            return "image/png"
+        if suffix in {".jpg", ".jpeg"}:
+            return "image/jpeg"
+        if suffix == ".gif":
+            return "image/gif"
+        if suffix == ".webp":
+            return "image/webp"
+        try:
+            with open(image_path, "rb") as image_file:
+                header = image_file.read(12)
+        except OSError:
+            return "image/jpeg"
+        if header.startswith(b"\x89PNG\r\n\x1a\n"):
+            return "image/png"
+        if header.startswith(b"\xff\xd8\xff"):
+            return "image/jpeg"
+        if header.startswith((b"GIF87a", b"GIF89a")):
+            return "image/gif"
+        if header.startswith(b"RIFF") and b"WEBP" in header:
+            return "image/webp"
+        return "image/jpeg"
+
+    def _collect_generated_image_paths(
+        self,
+        task_id: int,
+        content: str,
+        task: Optional[dict[str, Any]] = None,
+    ) -> list[str]:
+        paths = self._generated_image_paths_for_task(task_id)
+        paths.extend(
+            self._generated_image_paths_from_markdown(
+                content,
+                working_dir=(task or {}).get("working_dir"),
+            )
+        )
+        return self._dedupe_image_paths(paths)
+
+    def _generated_image_paths_for_task(self, task_id: int) -> list[str]:
+        try:
+            runs = self.db.get_task_runs(task_id, limit=1)
+        except Exception as exc:
+            print(f"[Weixin] Failed to load runs for generated images: {exc}")
+            return []
+        if not isinstance(runs, list) or not runs:
+            return []
+
+        run_id = runs[0].get("id") if isinstance(runs[0], dict) else None
+        if not run_id:
+            return []
+        try:
+            events = self.db.get_run_output_events(run_id, limit=1000)
+        except Exception as exc:
+            print(f"[Weixin] Failed to load output events for generated images: {exc}")
+            return []
+        if not isinstance(events, list):
+            return []
+
+        paths = []
+        for event in events:
+            if not isinstance(event, dict) or event.get("event_type") != "generated_image":
+                continue
+            try:
+                payload = json.loads(event.get("content") or "{}")
+            except json.JSONDecodeError:
+                continue
+            path = payload.get("path") if isinstance(payload, dict) else None
+            if path:
+                paths.append(path)
+        return paths
+
+    def _generated_image_paths_from_markdown(
+        self,
+        content: str,
+        working_dir: Optional[str] = None,
+    ) -> list[str]:
+        paths = []
+        for match in WEIXIN_MARKDOWN_IMAGE_RE.finditer(content or ""):
+            image_path = self._local_image_path_from_reference(match.group(1), working_dir)
+            if image_path:
+                paths.append(image_path)
+        return paths
+
+    def _local_image_path_from_reference(
+        self,
+        reference: str,
+        working_dir: Optional[str] = None,
+    ) -> Optional[str]:
+        target = self._markdown_image_reference_target(reference)
+        if not target or target.startswith(("http://", "https://", "data:")):
+            return None
+        if target.startswith("file://"):
+            parsed = urlparse(target)
+            target = parsed.path
+        elif target.startswith("sandbox:"):
+            target = target[len("sandbox:") :]
+        target = unquote(target).strip()
+        if not target:
+            return None
+
+        path = Path(target).expanduser()
+        if not path.is_absolute() and working_dir:
+            path = Path(working_dir).expanduser() / path
+        return self._canonical_image_path(str(path))
+
+    def _markdown_image_reference_target(self, reference: str) -> str:
+        raw = (reference or "").strip()
+        if not raw:
+            return ""
+        if raw.startswith("<"):
+            end = raw.find(">")
+            if end >= 0:
+                return raw[1:end].strip()
+        if raw[0] in ("'", '"'):
+            end = raw.find(raw[0], 1)
+            if end > 0:
+                return raw[1:end].strip()
+        titled = re.match(r"(.+?)\s+['\"][^'\"]*['\"]\s*$", raw)
+        return (titled.group(1) if titled else raw).strip()
+
+    def _dedupe_image_paths(self, image_paths: list[str]) -> list[str]:
+        deduped = []
+        seen = set()
+        for image_path in image_paths:
+            canonical = self._canonical_image_path(image_path)
+            if not canonical or canonical in seen:
+                continue
+            seen.add(canonical)
+            deduped.append(canonical)
+        return deduped
+
+    def _canonical_image_path(self, image_path: str) -> Optional[str]:
+        try:
+            path = Path(image_path).expanduser()
+            if path.suffix.lower() not in WEIXIN_UPLOADABLE_IMAGE_SUFFIXES:
+                return None
+            if not path.is_file():
+                return None
+            return str(path.resolve())
+        except OSError:
+            return None
+
+    def _hide_generated_image_paths(
+        self,
+        content: str,
+        image_count: int,
+        uploaded_paths: Optional[list[str]] = None,
+    ) -> str:
+        uploaded = {
+            canonical
+            for path in (uploaded_paths or [])
+            if (canonical := self._canonical_image_path(path))
+        }
+        lines = []
+        for line in (content or "").splitlines():
+            stripped = line.strip()
+            if not stripped:
+                lines.append("")
+                continue
+            if self._line_is_uploaded_image_path(stripped, uploaded):
+                continue
+            cleaned_line = self._remove_uploaded_markdown_image_refs(line, uploaded)
+            visible = cleaned_line.strip()
+            if visible and visible not in {"-", "*", "+"}:
+                lines.append(cleaned_line.rstrip())
+        cleaned = "\n".join(lines).strip()
+        if not cleaned or cleaned.startswith("已生成"):
+            return f"已生成 {image_count} 张图片。"
+        return cleaned
+
+    def _line_is_uploaded_image_path(self, stripped_line: str, uploaded_paths: set[str]) -> bool:
+        if not stripped_line.startswith("- "):
+            return False
+        candidate = stripped_line[2:].strip()
+        canonical = self._canonical_image_path(candidate)
+        if canonical and canonical in uploaded_paths:
+            return True
+        return "/.codex/generated_images/" in stripped_line
+
+    def _remove_uploaded_markdown_image_refs(self, line: str, uploaded_paths: set[str]) -> str:
+        if not uploaded_paths:
+            return line
+
+        def replace(match: re.Match) -> str:
+            image_path = self._local_image_path_from_reference(match.group(1))
+            canonical = self._canonical_image_path(image_path) if image_path else None
+            return "" if canonical in uploaded_paths else match.group(0)
+
+        return WEIXIN_MARKDOWN_IMAGE_RE.sub(replace, line)
 
     def _reply_to_event(self, event: dict[str, Any], text: str) -> None:
         peer_id = event.get("peer_id") or event.get("from_user_id")

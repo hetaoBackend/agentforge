@@ -13,6 +13,9 @@ import {
   isWeixinQrImageSource,
   mergeChannelsStatus,
 } from "./channelsSettings.mjs";
+import {
+  buildExecutionSteps,
+} from "./traceSteps.mjs";
 
 const API = "http://127.0.0.1:9712/api";
 
@@ -89,14 +92,6 @@ const AGENTS = {
   claude: { label: "Claude Code", icon: "⌘", color: "#7c6aff" },
   codex: { label: "Codex CLI", icon: "◈", color: "#10a37f" },
 };
-
-const TRACE_EVENT_TYPES = new Set([
-  "tool_call",
-  "tool_result",
-  "command_execution",
-  "file_change",
-  "web_search",
-]);
 
 // ─── Formatted Output Component ───
 function FormattedOutput({ content, theme }) {
@@ -332,159 +327,220 @@ function FormattedOutput({ content, theme }) {
   );
 }
 
-// Renders event content. For image_content events renders an <img> directly;
-// for text events renders plain text with backward-compat for legacy __image__ markers.
-function EventContent({ content, eventType }) {
-  if (!content) return null;
+function ExecutionTimeline({ events }) {
+  const [expanded, setExpanded] = useState(true);
+  const steps = buildExecutionSteps(events);
 
-  // New format: image_content events store {"media_type": ..., "data": ...}
-  if (eventType === 'image_content') {
-    try {
-      const obj = JSON.parse(content);
-      const src = obj.data ? `data:${obj.media_type || 'image/jpeg'};base64,${obj.data}` : null;
-      if (src) return <img src={src} alt="image" style={{ maxWidth: '100%', borderRadius: 4, display: 'block', margin: '4px 0' }} />;
-    } catch {
-      // fall through to text rendering
-    }
-    return <span>[image]</span>;
+  if (steps.length === 0) {
+    return (
+      <div style={{ fontSize: 12, color: theme.textDim, padding: "12px 0", textAlign: "center" }}>
+        No output events recorded — events are recorded for new task runs.
+      </div>
+    );
   }
-
-  if (TRACE_EVENT_TYPES.has(eventType)) {
-    return <TraceEventContent content={content} eventType={eventType} />;
-  }
-
-  // Backward compat: legacy text events may contain embedded __image__ JSON markers
-  const imgRe = /\{"__image__":true[^}]*,"source":\{[^}]*\}[^}]*\}/g;
-  if (!imgRe.test(content)) {
-    return <span>{content}</span>;
-  }
-  const parts = [];
-  let lastIdx = 0;
-  let match;
-  imgRe.lastIndex = 0;
-  while ((match = imgRe.exec(content)) !== null) {
-    if (match.index > lastIdx) {
-      parts.push({ type: 'text', text: content.slice(lastIdx, match.index) });
-    }
-    try {
-      const obj = JSON.parse(match[0]);
-      const src = obj.source && obj.source.type === 'base64'
-        ? `data:${obj.source.media_type || 'image/jpeg'};base64,${obj.source.data}`
-        : null;
-      if (src) parts.push({ type: 'image', src });
-      else parts.push({ type: 'text', text: '[image]' });
-    } catch {
-      parts.push({ type: 'text', text: match[0] });
-    }
-    lastIdx = match.index + match[0].length;
-  }
-  if (lastIdx < content.length) {
-    parts.push({ type: 'text', text: content.slice(lastIdx) });
-  }
-  return (
-    <>
-      {parts.map((p, i) =>
-        p.type === 'image'
-          ? <img key={i} src={p.src} alt="image" style={{ maxWidth: '100%', borderRadius: 4, display: 'block', margin: '4px 0' }} />
-          : <span key={i}>{p.text}</span>
-      )}
-    </>
-  );
-}
-
-function TraceEventContent({ content, eventType }) {
-  const payload = parseTracePayload(content);
-  if (!payload) return <span>{content}</span>;
-  const rows = buildTraceRows(eventType, payload, content);
-  if (rows.length === 0) return <span>{content}</span>;
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-      {rows.map((row, i) => (
-        <div key={i}>
-          <span style={{ color: theme.textMuted, fontWeight: 700 }}>{row.label}: </span>
-          <span>{row.value}</span>
+    <div style={{
+      border: `1px solid ${theme.border}`,
+      borderRadius: 8,
+      overflow: "hidden",
+      background: theme.bg,
+    }}>
+      <button
+        onClick={() => setExpanded(!expanded)}
+        style={{
+          width: "100%",
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+          gap: 12,
+          padding: "10px 12px",
+          background: theme.surface,
+          border: "none",
+          borderBottom: expanded ? `1px solid ${theme.border}` : "none",
+          color: theme.text,
+          cursor: "pointer",
+          fontFamily: "'JetBrains Mono', monospace",
+          fontSize: 12,
+          textAlign: "left",
+        }}
+      >
+        <span style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
+          <span style={{ color: theme.textMuted }}>{expanded ? "⌄" : "›"}</span>
+          <span>Show {steps.length} {steps.length === 1 ? "step" : "steps"}</span>
+        </span>
+        <span style={{ color: theme.textDim, fontSize: 10, whiteSpace: "nowrap" }}>
+          {events.length} events
+        </span>
+      </button>
+
+      {expanded && (
+        <div style={{ padding: "12px 12px 14px" }}>
+          {steps.map((step, index) => (
+            <ExecutionTimelineStep
+              key={`${step.id}-${step.number}`}
+              step={step}
+              isLast={index === steps.length - 1}
+            />
+          ))}
         </div>
-      ))}
+      )}
     </div>
   );
 }
 
-function parseTracePayload(content) {
-  try {
-    const payload = JSON.parse(content);
-    return payload && typeof payload === "object" && !Array.isArray(payload) ? payload : null;
-  } catch {
-    return null;
-  }
+function ExecutionTimelineStep({ step, isLast }) {
+  const config = getExecutionStepConfig(step.type);
+  const detail = (step.detail || "").trim();
+  const hasRows = step.rows && step.rows.length > 0;
+  const hasImage = Boolean(step.imageSrc);
+  const showDetail = detail && detail !== step.title && !hasRows && !hasImage;
+
+  return (
+    <div style={{ display: "grid", gridTemplateColumns: "28px 1fr", columnGap: 10 }}>
+      <div style={{ display: "flex", flexDirection: "column", alignItems: "center" }}>
+        <div style={{
+          width: 20,
+          height: 20,
+          borderRadius: 6,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          background: config.bg,
+          border: `1px solid ${config.color}55`,
+          color: config.color,
+          fontSize: 10,
+          fontWeight: 800,
+          lineHeight: 1,
+        }}>
+          {config.icon}
+        </div>
+        {!isLast && (
+          <div style={{ width: 1, flex: 1, minHeight: 16, background: theme.border, marginTop: 4 }} />
+        )}
+      </div>
+
+      <div style={{ paddingBottom: isLast ? 0 : 14, minWidth: 0 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "baseline" }}>
+          <div style={{
+            color: theme.text,
+            fontSize: 12,
+            lineHeight: 1.55,
+            wordBreak: "break-word",
+            minWidth: 0,
+          }}>
+            {step.title}
+          </div>
+          <div style={{
+            color: theme.textDim,
+            fontSize: 9,
+            whiteSpace: "nowrap",
+            flexShrink: 0,
+            fontFamily: "'JetBrains Mono', monospace",
+          }}>
+            {formatTaskTime(step.timestamp)}
+          </div>
+        </div>
+
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 3, marginBottom: hasRows || showDetail ? 7 : 0 }}>
+          <span style={{ color: config.color, fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0 }}>
+            {config.label}
+          </span>
+          {step.count > 1 && (
+            <span style={{ color: theme.textDim, fontSize: 10 }}>
+              {step.count} chunks
+            </span>
+          )}
+        </div>
+
+        {hasImage && (
+          <img
+            src={step.imageSrc}
+            alt="image output"
+            style={{
+              maxWidth: "100%",
+              borderRadius: 6,
+              display: "block",
+              marginTop: 7,
+              border: `1px solid ${theme.border}`,
+            }}
+          />
+        )}
+
+        {hasRows && (
+          <div style={{
+            display: "flex",
+            flexDirection: "column",
+            gap: 5,
+            background: theme.surface,
+            border: `1px solid ${theme.border}`,
+            borderRadius: 6,
+            padding: "8px 10px",
+            maxHeight: 220,
+            overflow: "auto",
+          }}>
+            {step.rows.map((row, i) => (
+              <div key={i} style={{ display: "grid", gridTemplateColumns: "72px 1fr", gap: 8, minWidth: 0 }}>
+                <span style={{ color: theme.textMuted, fontWeight: 700 }}>{row.label}</span>
+                <span style={{ whiteSpace: "pre-wrap", wordBreak: "break-word", color: theme.text }}>{row.value}</span>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {showDetail && (
+          <pre style={{
+            margin: 0,
+            background: theme.surface,
+            border: `1px solid ${theme.border}`,
+            borderRadius: 6,
+            padding: "8px 10px",
+            color: theme.textMuted,
+            whiteSpace: "pre-wrap",
+            wordBreak: "break-word",
+            fontFamily: "'JetBrains Mono', monospace",
+            fontSize: 11,
+            lineHeight: 1.5,
+            maxHeight: 220,
+            overflow: "auto",
+          }}>
+            {detail}
+          </pre>
+        )}
+      </div>
+    </div>
+  );
 }
 
-function formatTraceValue(value) {
-  if (value === undefined || value === null) return "";
-  if (typeof value === "string") return value;
-  return JSON.stringify(value, null, 2);
-}
-
-function buildTraceRows(eventType, payload, rawContent) {
-  const row = (label, value) => {
-    const formatted = formatTraceValue(value);
-    return formatted === "" ? null : { label, value: formatted };
-  };
-  const compact = rows => rows.filter(Boolean);
-
-  if (eventType === "tool_call") {
-    const name = payload.server
-      ? `${payload.server}.${payload.name || payload.tool || "unknown"}`
-      : (payload.name || payload.tool || "unknown");
-    return compact([
-      row("Tool", name),
-      row("Input", payload.input || payload.arguments),
-      row("Result", payload.result),
-      row("Status", payload.status),
-      row("Error", payload.error),
-    ]);
+function getExecutionStepConfig(type) {
+  switch (type) {
+    case "thinking":
+      return { label: "Thinking", icon: "⌁", color: theme.textMuted, bg: "rgba(107,107,138,0.08)" };
+    case "tool_call":
+      return { label: "Tool Call", icon: "▣", color: theme.cyan, bg: theme.cyanBg };
+    case "tool_result":
+      return { label: "Tool Result", icon: "↵", color: theme.blue, bg: theme.blueBg };
+    case "command_execution":
+      return { label: "Command", icon: "$", color: theme.orange, bg: theme.orangeBg };
+    case "file_change":
+      return { label: "File", icon: "◇", color: theme.accent, bg: theme.accentGlow };
+    case "generated_image":
+      return { label: "Image", icon: "□", color: theme.accent, bg: theme.accentGlow };
+    case "image_content":
+      return { label: "Image", icon: "□", color: theme.accent, bg: theme.accentGlow };
+    case "web_search":
+      return { label: "Search", icon: "⌕", color: theme.cyan, bg: theme.cyanBg };
+    case "result":
+      return { label: "Result", icon: "✓", color: theme.green, bg: theme.greenBg };
+    case "error":
+      return { label: "Error", icon: "!", color: theme.red, bg: theme.redBg };
+    case "user":
+      return { label: "User", icon: "U", color: theme.accent, bg: theme.accentGlow };
+    case "assistant":
+      return { label: "Assistant", icon: "AI", color: theme.green, bg: theme.greenBg };
+    default:
+      return { label: "Event", icon: "•", color: theme.textMuted, bg: "rgba(107,107,138,0.08)" };
   }
-
-  if (eventType === "tool_result") {
-    return compact([
-      row(payload.is_error ? "Tool Error" : "Tool Result", payload.tool_use_id || "result"),
-      row("Content", payload.content),
-    ]);
-  }
-
-  if (eventType === "command_execution") {
-    return compact([
-      row("Command", payload.command),
-      row("Output", payload.output),
-      row("Exit", payload.exit_code),
-      row("Status", payload.status),
-    ]);
-  }
-
-  if (eventType === "file_change") {
-    const changes = Array.isArray(payload.changes)
-      ? payload.changes.map(change => {
-        if (!change || typeof change !== "object") return formatTraceValue(change);
-        const kind = change.kind || change.type || "changed";
-        const path = change.path || change.file || "";
-        return path ? `${kind}: ${path}` : kind;
-      }).join("\n")
-      : payload.changes;
-    return compact([
-      row("Changes", changes),
-      row("Status", payload.status),
-    ]);
-  }
-
-  if (eventType === "web_search") {
-    return compact([
-      row("Query", payload.query),
-      row("Action", payload.action),
-      row("Status", payload.status),
-    ]);
-  }
-
-  return [{ label: eventType, value: rawContent }];
 }
 
 // ─── CSRF token ───
@@ -1788,12 +1844,6 @@ function DetailPanel({ task, onClose, onRespond, onResume }) {
     }
   }, [messages]);
 
-  useEffect(() => {
-    if (eventsRef.current) {
-      eventsRef.current.scrollTop = eventsRef.current.scrollHeight;
-    }
-  }, [events]);
-
   const handleResume = async () => {
     if (!resumeText.trim()) return;
     setResumeError("");
@@ -2104,51 +2154,8 @@ function DetailPanel({ task, onClose, onRespond, onResume }) {
 
         {/* Execution Events History */}
         {showEvents && (
-          <div
-            ref={eventsRef}
-            style={{
-              maxHeight: 400, overflow: "auto",
-              display: "flex", flexDirection: "column", gap: 6,
-            }}
-          >
-            {events.length === 0 ? (
-              <div style={{ fontSize: 12, color: theme.textDim, padding: "12px 0", textAlign: "center" }}>
-                No output events recorded — events are recorded for new task runs.
-              </div>
-            ) : events.map((event, i) => (
-              <div key={i} style={{
-                background: theme.bg,
-                border: `1px solid ${theme.border}`,
-                borderRadius: 6, padding: "8px 12px",
-                fontSize: 11,
-                fontFamily: "'JetBrains Mono', monospace",
-              }}>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
-                  <span style={{
-                    color: getEventTypeColor(event.event_type),
-                    fontWeight: 600,
-                    fontSize: 10,
-                    textTransform: "uppercase",
-                    letterSpacing: 0.5,
-                  }}>
-                    {event.event_type}
-                  </span>
-                  <span style={{ color: theme.textDim, fontSize: 9 }}>
-                    {formatTaskTime(event.timestamp)}
-                  </span>
-                </div>
-                <div style={{
-                  color: theme.text,
-                  whiteSpace: "pre-wrap",
-                  wordBreak: "break-word",
-                  lineHeight: 1.4,
-                  maxHeight: 200,
-                  overflow: "auto",
-                }}>
-                  <EventContent content={event.content} eventType={event.event_type} />
-                </div>
-              </div>
-            ))}
+          <div ref={eventsRef} style={{ maxHeight: 520, overflow: "auto" }}>
+            <ExecutionTimeline events={events} />
           </div>
         )}
       </div>
@@ -2221,23 +2228,6 @@ function InfoRow({ label, value }) {
       <span style={{ color: theme.text, fontFamily: "monospace" }}>{value}</span>
     </div>
   );
-}
-
-function getEventTypeColor(eventType) {
-  switch (eventType) {
-    case "user": return theme.accent;
-    case "assistant": return theme.green;
-    case "result": return theme.green;
-    case "error": return theme.red;
-    case "text": return theme.blue;
-    case "image_content": return theme.accent;
-    case "tool_call": return theme.cyan;
-    case "tool_result": return theme.blue;
-    case "command_execution": return theme.orange;
-    case "file_change": return theme.accent;
-    case "web_search": return theme.cyan;
-    default: return theme.textMuted;
-  }
 }
 
 function SettingsModal({ onClose, timeout: initialTimeout, defaultAgent: initialDefaultAgent, onSave, feishu: initialFeishu, onFeishuSave, channelsStatus: initialChannelsStatus, onChannelsSave }) {

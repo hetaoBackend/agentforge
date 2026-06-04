@@ -2,6 +2,34 @@
 
 ## In Progress
 
+- [x] **创建 GitHub draft PR** — 推送当前分支并基于 `main` 创建 draft pull request
+  - ✅ PR：https://github.com/hetaoBackend/agentforge/pull/24
+
+- [x] **整理当前改动并本地提交，删除大文件** — 审核本地改动范围，排除不该提交的产物，验证后创建本地提交
+  - ✅ 已删除：排除两个未跟踪的大型 `openclaw-backup.tar.gz` 临时备份包
+  - ✅ 验证：`git diff --check` 通过；`make check` 通过，`117 passed`；`node --check channels/weixin_bridge/index.mjs` 通过；`node --test taskboard-electron/src/renderer/traceSteps.test.mjs` 通过，`5 passed`；`cd taskboard-electron && npx vite build --config vite.renderer.config.mjs` 通过
+
+- [x] **增强 Weixin channel 会话与图片能力** — 微信默认同一会话连续续聊，支持 `/new` 开启新 session，并打通微信图片上行到任务与生成图片下行到微信
+  - ✅ 已实现：Weixin 按 `account_id:peer_id` 维护当前 task/session，普通消息默认续聊已有 session，`/new` 或 `/new <prompt>` 可清空并开启新 session
+  - ✅ 已实现：微信图片上行由 bridge 下载/解密到本地，Python channel 写入任务 `image_paths` / `prompt_images`
+  - ✅ 已实现：任务生成图片下行时收集 `generated_image` 事件和 markdown 本地图片引用，隐藏本地路径并让 bridge 上传/发送图片
+  - ✅ 验证：`uv run pytest -q tests/test_weixin_channel.py` 通过，`11 passed`；`node --check channels/weixin_bridge/index.mjs` 通过；`make check` 通过，`116 passed`
+
+- [x] **移除 Feishu 执行过程过长时退化为代码块的展示** — 保留飞书元素数量保护，但长执行历史使用普通 markdown 分块，不再渲染为带行号的代码块
+  - ✅ 已确认：代码块 fallback 不是必须，只是此前用于规避飞书卡片元素数量上限的粗糙方案
+  - ✅ 已修复：超过逐行元素上限时改为普通 markdown 分块，不再包裹三反引号代码块
+  - ✅ 验证：`make check` 通过，`112 passed`；renderer node tests 通过，`11 passed`；`cd taskboard-electron && npx vite build --config vite.renderer.config.mjs` 通过
+
+- [x] **将 Feishu 执行过程改为图标化步骤摘要并隐藏 JSON 细节** — 避免折叠面板把工具参数、搜索动作和命令输出渲染成 JSON/代码块墙，改为 Agentara 风格的可扫读步骤摘要
+  - ✅ 已实现：Feishu trace 事件改为单行图标摘要，如 `⌕ 网页搜索 ...`、`▣ 调用工具 ...`、`$ 执行命令 ...`
+  - ✅ 已实现：工具参数、搜索 action 和长命令输出只抽取可读摘要，不再直出 JSON/dict 或整段多行输出
+  - ✅ 验证：`make check` 通过，`112 passed`；renderer node tests 通过，`11 passed`；`cd taskboard-electron && npx vite build --config vite.renderer.config.mjs` 通过
+
+- [x] **将桌面端 Execution Events 升级为 Agentara 风格步骤时间线** — 把任务详情中的结构化执行事件聚合为可折叠步骤列表，展示 thinking、工具调用、命令执行、搜索、文件变更与最终结果摘要
+  - ✅ 已实现：新增 `traceSteps.mjs` 聚合器，将 raw events 按时间排序、合并连续 thinking/assistant chunk，并格式化工具、命令、搜索、文件变更和生成图片事件
+  - ✅ 已实现：桌面端任务详情的 `Execution Events` 改为 `Show N steps` 折叠时间线，保留工具参数、返回、命令输出等详情
+  - ✅ 验证：renderer node tests 通过，`11 passed`；`cd taskboard-electron && npx vite build --config vite.renderer.config.mjs` 通过；本地 Chrome 视觉检查通过
+
 - [x] **修复图片生成 Feishu 实际展示** — 继续排查图片生成任务只发本地路径、缺少折叠执行过程的问题，确保 Feishu 最终消息可直接看到图片和执行过程
   - ✅ 已确认：`#320` 结构化卡片实际带了 `img_key`，但因执行过程面板拆成 334 个元素触发飞书 `element exceeds the limit`，随后 fallback 成 legacy markdown，只剩本地路径
   - ✅ 已修复：执行过程超过 80 行时改为折叠面板内 markdown/code block 分块，真实 `#320` 数据重建后卡片元素数降为 8

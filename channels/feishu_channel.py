@@ -159,70 +159,126 @@ class _FeishuStreamWriter:
         return payload if isinstance(payload, dict) else {"content": payload}
 
     def _format_trace_value(self, value: Any) -> str:
-        if isinstance(value, (dict, list)):
-            return json.dumps(value, ensure_ascii=False)
-        return str(value)
+        return self._compact_trace_summary(value)
+
+    def _compact_trace_summary(self, value: Any, limit: int = 140) -> str:
+        if value in (None, "", {}, []):
+            return ""
+        if isinstance(value, dict):
+            for key in ("command", "query", "path", "file", "message", "content", "text"):
+                if value.get(key):
+                    return self._compact_trace_summary(value[key], limit)
+            safe_parts = []
+            for key, item in value.items():
+                if item in (None, "", {}, []):
+                    continue
+                if any(
+                    secret in str(key).lower() for secret in ("token", "secret", "password", "key")
+                ):
+                    continue
+                safe_parts.append(f"{key}={self._compact_trace_summary(item, 48)}")
+                if len(safe_parts) >= 2:
+                    break
+            return self._truncate_trace_text(", ".join(safe_parts), limit)
+        if isinstance(value, list):
+            if not value:
+                return ""
+            first = self._compact_trace_summary(value[0], max(24, limit - 20))
+            suffix = f" 等 {len(value)} 项" if len(value) > 1 else ""
+            return self._truncate_trace_text(f"{first}{suffix}", limit)
+        return self._truncate_trace_text(str(value), limit)
+
+    def _truncate_trace_text(self, value: str, limit: int = 140) -> str:
+        lines = [
+            line.strip()
+            for line in str(value).replace("\r\n", "\n").replace("\r", "\n").split("\n")
+            if line.strip()
+        ]
+        normalized = " ".join((lines[0] if lines else "").split())
+        if len(normalized) <= limit:
+            return normalized
+        return normalized[: limit - 1].rstrip() + "…"
+
+    def _trace_line(self, icon: str, label: str, *parts: Any) -> str:
+        compact_parts = [
+            self._compact_trace_summary(part)
+            if not isinstance(part, str)
+            else self._truncate_trace_text(part)
+            for part in parts
+        ]
+        suffix = " · ".join(part for part in compact_parts if part)
+        return f"{icon} {label}{(' ' + suffix) if suffix else ''}"
 
     def _format_trace_event(self, event_type: str, content: str) -> str:
         payload = self._load_trace_payload(content)
-        lines: list[str] = []
+        line = ""
 
         if event_type == "tool_call":
             name = payload.get("name") or payload.get("tool") or "unknown"
             if payload.get("server"):
                 name = f"{payload['server']}.{name}"
-            lines.append(f"调用工具: {name}")
             tool_input = payload.get("input") or payload.get("arguments")
-            if tool_input not in (None, "", {}, []):
-                lines.append(f"参数: {self._format_trace_value(tool_input)}")
-            if payload.get("result") not in (None, "", {}, []):
-                lines.append(f"返回: {self._format_trace_value(payload['result'])}")
-            if payload.get("status"):
-                lines.append(f"状态: {payload['status']}")
-            if payload.get("error"):
-                lines.append(f"错误: {self._format_trace_value(payload['error'])}")
+            result = payload.get("result")
+            error = payload.get("error")
+            line = self._trace_line(
+                "▣",
+                "调用工具",
+                name,
+                tool_input,
+                result,
+                payload.get("status"),
+                f"错误 {self._format_trace_value(error)}" if error else "",
+            )
         elif event_type == "tool_result":
             label = "工具错误" if payload.get("is_error") else "工具返回"
-            if payload.get("tool_use_id"):
-                label = f"{label}: {payload['tool_use_id']}"
-            lines.append(label)
-            if payload.get("content"):
-                lines.append(self._format_trace_value(payload["content"]))
+            line = self._trace_line(
+                "↵",
+                label,
+                payload.get("tool_use_id"),
+                payload.get("content"),
+            )
         elif event_type == "command_execution":
             command = payload.get("command") or payload.get("content") or ""
-            lines.append(f"执行命令: {command}".rstrip())
-            if payload.get("output"):
-                lines.append(f"输出: {self._format_trace_value(payload['output'])}")
-            if payload.get("exit_code") is not None:
-                lines.append(f"退出码: {payload['exit_code']}")
-            if payload.get("status"):
-                lines.append(f"状态: {payload['status']}")
+            exit_code = (
+                f"退出码 {payload['exit_code']}" if payload.get("exit_code") is not None else ""
+            )
+            line = self._trace_line(
+                "$",
+                "执行命令",
+                command,
+                payload.get("output"),
+                exit_code,
+                payload.get("status"),
+            )
         elif event_type == "file_change":
-            lines.append("文件变更")
             changes = payload.get("changes")
+            summary = ""
             if isinstance(changes, list):
+                summaries = []
                 for change in changes:
                     if isinstance(change, dict):
                         path = change.get("path") or change.get("file") or ""
                         kind = change.get("kind") or change.get("type") or "changed"
-                        lines.append(f"{kind}: {path}".strip())
+                        summaries.append(f"{kind}: {path}".strip())
+                summary = "；".join(summaries[:3])
+                if len(summaries) > 3:
+                    summary += f" 等 {len(summaries)} 项"
             elif changes:
-                lines.append(self._format_trace_value(changes))
-            if payload.get("status"):
-                lines.append(f"状态: {payload['status']}")
+                summary = self._format_trace_value(changes)
+            line = self._trace_line("◇", "文件变更", summary, payload.get("status"))
         elif event_type == "web_search":
             query = payload.get("query") or payload.get("content") or ""
-            lines.append(f"网页搜索: {query}".rstrip())
-            if payload.get("action"):
-                lines.append(f"动作: {payload['action']}")
-            if payload.get("status"):
-                lines.append(f"状态: {payload['status']}")
+            line = self._trace_line("⌕", "网页搜索", query, payload.get("status"))
         elif event_type == "error":
-            lines.append(f"错误: {payload.get('message') or payload.get('content') or content}")
+            line = self._trace_line(
+                "!",
+                "错误",
+                payload.get("message") or payload.get("content") or content,
+            )
         else:
-            lines.append(f"[{event_type}] {content}")
+            line = self._trace_line("•", f"[{event_type}]", content)
 
-        return "\n".join(line for line in lines if line) + "\n"
+        return f"{line}\n" if line else ""
 
     def _schedule(self) -> None:
         with self._state_lock:
@@ -926,9 +982,7 @@ class FeishuChannel(Channel):
 
     def _build_streaming_history_markdown_elements(self, text: str) -> list[dict[str, Any]]:
         chunks = self._chunk_text(text, FEISHU_CARD_MARKDOWN_CHUNK - 16)
-        return [
-            {"tag": "markdown", "content": self._wrap_feishu_code_block(chunk)} for chunk in chunks
-        ]
+        return [{"tag": "markdown", "content": chunk} for chunk in chunks]
 
     def _build_streaming_history_line_elements(self, text: str) -> list[dict[str, Any]]:
         elements: list[dict[str, Any]] = []
@@ -948,11 +1002,6 @@ class FeishuChannel(Channel):
                 "content": content,
             },
         }
-
-    def _wrap_feishu_code_block(self, text: str) -> str:
-        longest_backtick_run = max((len(run) for run in re.findall(r"`+", text)), default=0)
-        fence = "`" * max(3, longest_backtick_run + 1)
-        return f"{fence}\n{text}\n{fence}"
 
     def _preserve_feishu_markdown_linebreaks(self, text: str) -> str:
         return text.replace("\r\n", "\n").replace("\r", "\n")
