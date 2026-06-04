@@ -1759,6 +1759,37 @@ class TaskScheduler(BusAwareSchedulerMixin):
             if hid in self._active_heartbeats and self._active_heartbeats[hid].is_alive():
                 continue
             self._spawn_heartbeat(heartbeat)
+        self._maybe_run_scheduled_sweep()
+
+    def _maybe_run_scheduled_sweep(self):
+        """Built-in "skill-distiller": cron-driven auto sweep, gated by the toggle.
+
+        Gated by skill_library_enabled (default OFF). Agent + cadence come from
+        skill_sweep_agent / skill_sweep_cron. The manual button bypasses this
+        entirely. When disabled, returns immediately — never calls an agent.
+        """
+        if self.db.get_setting("skill_library_enabled", "0") not in ("1", "true", "True"):
+            return
+        cron = self.db.get_setting("skill_sweep_cron", "0 3 * * *")
+        if not cron or not croniter.is_valid(cron):
+            return
+        now = datetime.now()
+        next_run_raw = self.db.get_setting("skill_sweep_next_run", "")
+        if not next_run_raw:
+            # First tick after enabling: schedule forward, don't run immediately.
+            self.db.set_setting(
+                "skill_sweep_next_run", croniter(cron, now).get_next(datetime).isoformat()
+            )
+            return
+        try:
+            next_run = _parse_comparable_datetime(next_run_raw)
+        except (ValueError, TypeError):
+            next_run = None
+        if next_run is None or next_run <= now:
+            self.trigger_skill_sweep(self.db.get_setting("skill_sweep_agent", None))
+            self.db.set_setting(
+                "skill_sweep_next_run", croniter(cron, now).get_next(datetime).isoformat()
+            )
 
     def _schedule_delayed(self, task: dict):
         delay = task.get("delay_seconds", 0) or 0
@@ -3795,6 +3826,9 @@ class TaskAPIHandler(BaseHTTPRequestHandler):
                 {
                     "default_agent": self.db.get_setting("default_agent", "claude"),
                     "timeout": int(self.db.get_setting("timeout", "600")),
+                    "skill_library_enabled": self.db.get_setting("skill_library_enabled", "0") == "1",
+                    "skill_sweep_agent": self.db.get_setting("skill_sweep_agent", "claude"),
+                    "skill_sweep_cron": self.db.get_setting("skill_sweep_cron", "0 3 * * *"),
                 }
             )
 

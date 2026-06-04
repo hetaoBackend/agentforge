@@ -2289,6 +2289,9 @@ function SettingsModal({ onClose, timeout: initialTimeout, defaultAgent: initial
   const [tab, setTab] = useState("general");
   const [timeout, setTimeout] = useState(initialTimeout ?? 600);
   const [defaultAgent, setDefaultAgent] = useState(initialDefaultAgent ?? "claude");
+  const [skillEnabled, setSkillEnabled] = useState(false);
+  const [skillSweepAgent, setSkillSweepAgent] = useState("claude");
+  const [skillSweepCron, setSkillSweepCron] = useState("0 3 * * *");
   const [feishu, setFeishu] = useState({
     feishu_app_id: "",
     feishu_app_secret: "",
@@ -2323,6 +2326,13 @@ function SettingsModal({ onClose, timeout: initialTimeout, defaultAgent: initial
     const intervalId = setInterval(refreshChannels, 2000);
     fetchFeishuSettings().then(s => {
       if (s && Object.keys(s).length) setFeishu(f => ({ ...f, ...s }));
+    });
+    fetchSettings().then(s => {
+      if (s && typeof s === "object") {
+        if (typeof s.skill_library_enabled === "boolean") setSkillEnabled(s.skill_library_enabled);
+        if (s.skill_sweep_agent) setSkillSweepAgent(s.skill_sweep_agent);
+        if (s.skill_sweep_cron) setSkillSweepCron(s.skill_sweep_cron);
+      }
     });
     return () => {
       cancelled = true;
@@ -2385,7 +2395,13 @@ function SettingsModal({ onClose, timeout: initialTimeout, defaultAgent: initial
   };
 
   const handleSaveGeneral = async () => {
-    await updateSettings({ timeout: parseInt(timeout) || 600, default_agent: defaultAgent });
+    await updateSettings({
+      timeout: parseInt(timeout) || 600,
+      default_agent: defaultAgent,
+      skill_library_enabled: skillEnabled ? "1" : "0",
+      skill_sweep_agent: skillSweepAgent,
+      skill_sweep_cron: skillSweepCron,
+    });
     onSave(parseInt(timeout) || 600, defaultAgent);
     onClose();
   };
@@ -2496,6 +2512,48 @@ function SettingsModal({ onClose, timeout: initialTimeout, defaultAgent: initial
               </select>
               <div style={hintStyle}>Agent used for new tasks unless overridden per-task.</div>
             </div>
+
+            {/* ── Skill Library ── */}
+            <div style={{
+              marginBottom: 20, paddingTop: 16, borderTop: `1px solid ${theme.border}`,
+            }}>
+              <label style={{ ...labelStyle, display: "flex", alignItems: "center", gap: 10, cursor: "pointer" }}>
+                <input
+                  type="checkbox"
+                  checked={skillEnabled}
+                  onChange={e => setSkillEnabled(e.target.checked)}
+                  style={{ width: 16, height: 16, cursor: "pointer" }}
+                />
+                Skill Library 自动扫描
+              </label>
+              <div style={hintStyle}>
+                定时让 agent 扫描已完成任务、检测复发模式（消耗 token，默认关闭）。
+                手动「扫一遍」按钮不受此开关影响。
+              </div>
+            </div>
+            {skillEnabled && (
+              <>
+                <div style={{ marginBottom: 20 }}>
+                  <label style={labelStyle}>扫描 Agent</label>
+                  <select value={skillSweepAgent} onChange={e => setSkillSweepAgent(e.target.value)} style={fieldStyle}>
+                    <option value="claude">Claude Code (claude CLI)</option>
+                    <option value="codex">Codex CLI (openai/codex)</option>
+                  </select>
+                  <div style={hintStyle}>运行 sweep 的 agent。</div>
+                </div>
+                <div style={{ marginBottom: 20 }}>
+                  <label style={labelStyle}>扫描节奏 (cron)</label>
+                  <input
+                    value={skillSweepCron}
+                    onChange={e => setSkillSweepCron(e.target.value)}
+                    placeholder="0 3 * * *"
+                    style={{ ...fieldStyle, fontFamily: "monospace" }}
+                  />
+                  <div style={hintStyle}>默认每日凌晨 3 点。增量扫描，只看上次以来的新任务。</div>
+                </div>
+              </>
+            )}
+
             <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
               <button onClick={onClose} style={{
                 padding: "10px 20px", borderRadius: 8, border: `1px solid ${theme.border}`,
