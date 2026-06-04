@@ -2125,12 +2125,18 @@ class TaskScheduler(BusAwareSchedulerMixin):
             f"{existing_block}\n\n"
             "Recently completed task runs to analyze:\n"
             f"{runs_block}\n\n"
-            "For each run that represents a meaningful, repeatable capability, emit one entry. Kinds:\n"
+            "Emit ONE entry PER RUN that represents a meaningful, repeatable capability. Kinds:\n"
             '- "recipe": a successful repeatable approach/workflow worth reusing.\n'
             '- "pitfall": a failure that was diagnosed and fixed, worth avoiding next time.\n'
-            "Skip trivial or one-off runs. A run may map to an existing pattern_key to bump its count.\n\n"
-            "Respond with ONLY a JSON array, no prose, no code fence:\n"
-            '[{"pattern_key":"run-pytest-suite","kind":"recipe","summary":"one concise line","task_id":12}]\n'
+            "CRITICAL: when several runs share the same capability, they MUST reuse the SAME "
+            "pattern_key (so occurrences aggregate), but each run still gets its OWN entry with "
+            "its own task_id. Do NOT collapse multiple matching runs into a single entry — one "
+            "entry per run is how recurrence is counted. Reuse an existing tracked pattern_key "
+            "verbatim when it matches. Skip trivial or truly one-off runs.\n\n"
+            "Respond with ONLY a JSON array, no prose, no code fence (example shows two runs of "
+            "the same pattern):\n"
+            '[{"pattern_key":"run-pytest-suite","kind":"recipe","summary":"one concise line","task_id":12},'
+            '{"pattern_key":"run-pytest-suite","kind":"recipe","summary":"one concise line","task_id":15}]\n'
             "If nothing is worth tracking, respond with []."
         )
 
