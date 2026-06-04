@@ -16,6 +16,7 @@
 ## 目录
 
 - [功能特性](#功能特性)
+- [技能库（Skill Library）](#技能库skill-library)
 - [环境要求](#环境要求)
 - [安装](#安装)
 - [常见问题](#常见问题)
@@ -32,6 +33,7 @@
 
 ## 功能特性
 
+- **🧬 自复利技能库（Skill Library）** —— AgentForge 自动发现你反复跑的任务模式，借助 Anthropic [skill-creator](https://github.com/anthropics/skills/tree/main/skills/skill-creator) 蒸馏成可复用的 Claude Code Skill。审核、批准后自动 symlink 进 Claude Code 与 Codex —— 用得越多，agent 越懂你的活。[了解更多 →](#技能库skill-library)
 - **智能体生成智能体** —— 任何运行中的任务都可通过内置的 Claude Code Skill 创建子任务、构建 DAG 流水线并汇总结果
 - **看板任务视图** —— 可视化的「待执行 / 运行中 / 已完成」三列布局，支持实时输出流
 - **DAG 流水线** —— 定义任务依赖关系，支持自动级联执行和失败传播
@@ -39,6 +41,22 @@
 - **消息频道控制** —— 通过 Telegram、Slack 或飞书/Lark 创建任务并接收完成通知
 - **持久化存储** —— SQLite 存储任务历史、运行记录和流式输出
 - **原生 macOS 应用** —— Electron 封装，一键 DMG 安装
+
+---
+
+## 技能库（Skill Library）
+
+**把你反复做的活，自动沉淀成 agent 可复用的技能。** 用得越多，AgentForge 越懂你的工作流。
+
+1. **检测** —— 后台定时扫描（或手动点「扫一遍」）分析你已完成的任务，把跨任务复发的模式记进账本：既包括*成功配方*（你反复跑的工作流），也包括*避坑*（你诊断并修好的失败）。按 run 幂等计数，重复扫描不会灌水。
+2. **蒸馏** —— 对值得固化的模式，AgentForge 用 Anthropic 的 **[skill-creator](https://github.com/anthropics/skills/tree/main/skills/skill-creator)** 技能起草规范的 `SKILL.md` —— 而且会**先判断到底值不值得**做成 skill，免得噪声泛滥。
+3. **审批** —— 审阅草稿：价值判定、贡献的任务、以及完全可编辑的 `SKILL.md`，批准或驳回，决定权在你。
+4. **投递** —— 批准后写一份 canonical 文件，并 symlink 进 **Claude Code**（`~/.claude/skills`）和 **Codex**（`~/.agents/skills`）两个原生目录，两个 agent 都按渐进式披露原生加载 —— 零 prompt 注入。
+5. **管理** —— 在 **Skills** 标签里逐个启用/停用（增删 symlink，保留文件）、查看 `SKILL.md`、或删除。
+
+> 自动每日扫描**默认关闭**（会消耗 token）。在 **设置 → Skill Library** 里打开、选 agent 和节奏，或随时点手动「扫一遍」—— 手动按钮不受阈值限制，永远可用。
+
+蒸馏出的都是标准 Claude Code `SKILL.md` 文件（canonical 存于 `~/.agentforge/skills`，symlink 到各 agent 原生目录）—— 可移植、可检视、零锁定。
 
 ---
 

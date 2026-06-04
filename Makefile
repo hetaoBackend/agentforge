@@ -31,6 +31,7 @@ build-backend:
 	uv run pyinstaller --onefile --name taskboard \
 		--distpath $(ELECTRON_DIR)/resources \
 		--hidden-import croniter --hidden-import dateutil --hidden-import pytz \
+		--add-data vendor/skill-creator:vendor/skill-creator \
 		$(BACKEND_SRC)
 	@echo "后端二进制文件位置: $(BACKEND_BINARY)"
 	@ls -lh $(BACKEND_BINARY)
