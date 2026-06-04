@@ -29,6 +29,9 @@
   - ✅ 已实现：新增 `traceSteps.mjs` 聚合器，将 raw events 按时间排序、合并连续 thinking/assistant chunk，并格式化工具、命令、搜索、文件变更和生成图片事件
   - ✅ 已实现：桌面端任务详情的 `Execution Events` 改为 `Show N steps` 折叠时间线，保留工具参数、返回、命令输出等详情
   - ✅ 验证：renderer node tests 通过，`11 passed`；`cd taskboard-electron && npx vite build --config vite.renderer.config.mjs` 通过；本地 Chrome 视觉检查通过
+- [x] **构建 DMG 分发包** ✅ — backend 经 PyInstaller 重建（29M），electron-forge 打包出 `.app`；因 `appdmg` 原生依赖在 Node 26 下编译失败，改用 `hdiutil` 从 `.app` 生成 DMG（含 /Applications 拖拽链接）
+  - 产物：`taskboard-electron/out/make/dmg/AgentForge-1.0.0-arm64.dmg`（149M）
+  - 验证：`hdiutil verify` 校验通过
 
 - [x] **修复图片生成 Feishu 实际展示** — 继续排查图片生成任务只发本地路径、缺少折叠执行过程的问题，确保 Feishu 最终消息可直接看到图片和执行过程
   - ✅ 已确认：`#320` 结构化卡片实际带了 `img_key`，但因执行过程面板拆成 334 个元素触发飞书 `element exceeds the limit`，随后 fallback 成 legacy markdown，只剩本地路径
