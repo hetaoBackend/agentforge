@@ -400,6 +400,8 @@ class FeishuChannel(Channel):
                 lark.EventDispatcherHandler.builder("", "")
                 .register_p2_im_message_receive_v1(self._on_message_sync)
                 .register_p2_im_chat_member_bot_added_v1(self._on_bot_added)
+                .register_p2_im_message_reaction_created_v1(self._on_reaction)
+                .register_p2_im_message_reaction_deleted_v1(self._on_reaction)
                 .build()
             )
             print("[Feishu] Event handler registered")
@@ -1413,6 +1415,16 @@ class FeishuChannel(Channel):
             return None
 
     # ── inbound: receive messages via WebSocket ───────────────────
+
+    def _on_reaction(self, data) -> None:
+        """No-op handler for message reaction events.
+
+        The bot adds emoji reactions to acknowledge tasks, which echoes an
+        `im.message.reaction.created_v1` event back over the WebSocket. We don't
+        act on reactions, but registering a handler stops the lark SDK from
+        logging `processor not found` errors for every reaction.
+        """
+        return
 
     def _on_bot_added(self, data) -> None:
         """Called when the bot is added to a chat (including P2P when a user follows the bot)."""
