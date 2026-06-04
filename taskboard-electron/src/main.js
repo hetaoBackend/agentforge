@@ -10,6 +10,7 @@ if (started) {
 }
 
 let pythonProcess = null;
+let pythonWatcher = null;
 
 function getPythonCommand() {
   if (app.isPackaged) {
@@ -220,7 +221,6 @@ app.whenReady().then(() => {
   createWindow();
 
   // 设置Python后端热重载
-  let pythonWatcher = null;
   if (!app.isPackaged) {
     pythonWatcher = setupPythonHotReload();
   }
@@ -228,12 +228,12 @@ app.whenReady().then(() => {
   startPythonBackend()
     .then(() => console.log('[Python] Backend is ready on port 9712'))
     .catch((err) => console.error('[Python] Backend failed:', err));
+});
 
-  app.activate(() => {
-    if (BrowserWindow.getAllWindows().length === 0) {
-      createWindow();
-    }
-  });
+app.on('activate', () => {
+  if (BrowserWindow.getAllWindows().length === 0) {
+    createWindow();
+  }
 });
 
 app.on('window-all-closed', () => {
