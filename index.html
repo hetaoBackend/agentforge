@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>AgentForge — Orchestrate AI Agents Like Infrastructure</title>
-<meta name="description" content="A macOS desktop app for managing, scheduling, and monitoring Claude Code agents through a kanban-style task board.">
+<meta name="description" content="A macOS desktop app for managing, scheduling, and monitoring Claude Code and Codex agents through a kanban-style task board.">
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 :root{
@@ -114,8 +114,8 @@ nav .nav-inner{display:flex;align-items:center;justify-content:space-between;wid
 .orch-hline-branch{display:flex;flex-direction:column;align-items:center}
 
 /* INTEGRATIONS */
-.integrations-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:20px}
-.integration-card{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:28px;text-align:center;transition:transform .25s,border-color .25s}
+.integrations-grid{display:flex;flex-wrap:wrap;gap:20px;justify-content:center}
+.integration-card{flex:1 1 190px;max-width:225px;background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:24px 20px;text-align:center;transition:transform .25s,border-color .25s}
 .integration-card:hover{transform:translateY(-4px);border-color:var(--border-active)}
 .integration-card svg{margin:0 auto 16px;color:var(--accent)}
 .integration-card h3{font-size:1.05rem;margin-bottom:8px}
@@ -225,7 +225,7 @@ AgentForge
 <section class="hero">
 <div class="container">
 <h1 class="fade-in-up">Orchestrate AI agents<br>like <span>infrastructure</span></h1>
-<p class="subtitle fade-in-up">A macOS desktop app for managing, scheduling, and monitoring Claude Code agents through a kanban-style task board &mdash; with recursive agent spawning, DAG pipelines, and chat integrations.</p>
+<p class="subtitle fade-in-up">A macOS desktop app for managing, scheduling, and monitoring <strong>Claude Code &amp; Codex</strong> agents through a kanban-style task board &mdash; with a compounding skill library, recursive agent spawning, DAG pipelines, and chat integrations.</p>
 <div class="hero-btns fade-in-up">
 <a href="#quickstart" class="btn btn-primary">
 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="display:inline"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
@@ -286,7 +286,7 @@ View on GitHub
 <div class="feature-card fade-in-up">
 <svg width="36" height="36" viewBox="0 0 36 36" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="5" width="30" height="24" rx="3"/><line x1="3" y1="11" x2="33" y2="11"/><circle cx="7" cy="8" r="1" fill="currentColor"/><circle cx="11" cy="8" r="1" fill="currentColor"/><circle cx="15" cy="8" r="1" fill="currentColor"/><line x1="7" y1="16" x2="12" y2="16"/><line x1="14" y1="16" x2="26" y2="16"/><line x1="7" y1="20" x2="20" y2="20"/><line x1="7" y1="24" x2="16" y2="24"/></svg>
 <h3>Live Output Streaming</h3>
-<p>Real-time colorized output from Claude Code CLI, streaming NDJSON events as your agents work.</p>
+<p>Real-time colorized output from the Claude Code or Codex CLI, streaming NDJSON events as your agents work.</p>
 </div>
 </div>
 </div>
@@ -415,6 +415,15 @@ Collect all results and produce a final comparison report.</pre>
 <pre>Send any message to the bot to create a task</pre>
 </div>
 </div>
+<div class="integration-card fade-in-up">
+<svg width="36" height="36" viewBox="0 0 36 36" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M14 7C8 7 3 11 3 16c0 2.7 1.6 5.1 4.1 6.7L6 27l4.6-2.3c1.1.3 2.2.4 3.4.4"/><circle cx="10.5" cy="14.5" r="1.1" fill="currentColor"/><circle cx="17.5" cy="14.5" r="1.1" fill="currentColor"/><path d="M23 14c4.4 0 8 3 8 6.8 0 2.2-1.3 4.1-3.3 5.4l.9 3.3-3.6-1.8c-.6.1-1.3.2-2 .2-4.4 0-8-3-8-6.8S18.6 14 23 14z"/><circle cx="21" cy="20.5" r=".9" fill="currentColor"/><circle cx="26" cy="20.5" r=".9" fill="currentColor"/></svg>
+<h3>WeChat</h3>
+<p>Experimental local bridge. Scan a QR to log in, then message the bot to create and track tasks &mdash; no public IP needed.</p>
+<div class="code-block" style="margin:0;max-width:100%">
+<div class="code-header"><span>wechat</span></div>
+<pre>Message the bot to create a task</pre>
+</div>
+</div>
 </div>
 </div>
 </section>
@@ -475,7 +484,7 @@ Collect all results and produce a final comparison report.</pre>
 <div class="step-card fade-in-up">
 <div class="step-num">3</div>
 <h3>Launch</h3>
-<p>Open AgentForge, point it at your project directory, and start creating tasks for Claude Code agents.</p>
+<p>Open AgentForge, point it at your project directory, and start creating tasks for Claude Code or Codex agents.</p>
 </div>
 </div>
 <div class="code-block fade-in-up">
