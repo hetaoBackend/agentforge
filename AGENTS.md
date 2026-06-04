@@ -35,7 +35,7 @@ cd taskboard-electron && npm run make
 ### Tests & Quality
 ```bash
 # Backend (⭐ backend-quality CI job runs `make check`)
-make check        # ruff lint + ruff format --check + pytest (coverage, fail_under=80)
+make check        # ruff lint + ruff format --check + pytest (coverage, fail_under=90)
 make test         # pytest only
 make lint         # ruff check ONLY (no format-check, no tests — NOT the CI gate)
 make format       # apply ruff formatting
@@ -50,8 +50,8 @@ npm run build:check   # vite renderer build — catches compile/import errors
 ```
 CI (`.github/workflows/ci.yml`) runs two jobs: **backend-quality** (`make check`)
 and **frontend-quality** (lint + format check + tests + build). The workflow uses
-`concurrency` to cancel superseded runs on the same ref. There are 30 pytest files
-under `tests/` (backend coverage gate is 80%) plus `.test.mjs` files beside the renderer.
+`concurrency` to cancel superseded runs on the same ref. There are 34 pytest files
+under `tests/` (backend coverage gate is 90%) plus `.test.mjs` files beside the renderer.
 
 ## Architecture
 
