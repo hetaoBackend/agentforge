@@ -3307,6 +3307,91 @@ function SkillPatternCard({ p, tasks, onDraft, onApprove, onDismiss }) {
   );
 }
 
+function SkillRegistryCard({ s, tasks, onToggle, onDelete }) {
+  const [expanded, setExpanded] = useState(false);
+  const [content, setContent] = useState(null);
+  const [loading, setLoading] = useState(false);
+
+  let sourceTaskIds = [];
+  try { sourceTaskIds = JSON.parse(s.source_task_ids || "[]"); } catch { /* ignore */ }
+
+  const toggleDetail = async () => {
+    const next = !expanded;
+    setExpanded(next);
+    if (next && content === null) {
+      setLoading(true);
+      try {
+        const res = await fetch(`${API}/skills/${s.id}/content`);
+        const d = await res.json();
+        setContent(d.content ?? "");
+      } catch (e) {
+        setContent(`(加载失败：${e.message})`);
+      } finally {
+        setLoading(false);
+      }
+    }
+  };
+
+  return (
+    <div style={{
+      background: theme.surface, border: `1px solid ${theme.border}`,
+      borderRadius: 12, padding: 14, opacity: s.enabled ? 1 : 0.55,
+    }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+        <SkillKindBadge kind={s.kind} />
+        <span style={{ fontFamily: "monospace", fontSize: 12, color: theme.text, fontWeight: 700 }}>{s.name}</span>
+        <button
+          onClick={toggleDetail}
+          style={{ marginLeft: "auto", background: "transparent", border: "none",
+            color: theme.accent, cursor: "pointer", fontSize: 11, fontWeight: 700 }}
+        >{expanded ? "收起 ▲" : "查看 SKILL.md ▼"}</button>
+      </div>
+      <div style={{ color: theme.textMuted, fontSize: 12, marginBottom: 10, lineHeight: 1.5 }}>{s.description || "—"}</div>
+
+      {expanded && (
+        <div style={{ marginBottom: 10 }}>
+          <div style={{ fontSize: 11, color: theme.textDim, marginBottom: 6 }}>
+            <span style={{ fontFamily: "monospace" }}>{s.path}</span>
+            {s.source_pattern_key && <span>　来源 pattern：{s.source_pattern_key}</span>}
+            {sourceTaskIds.length > 0 && (
+              <span>　来源任务：{sourceTaskIds.map(tid => {
+                const t = (tasks || []).find(x => x.id === tid);
+                return `#${tid}${t ? "（" + t.title + "）" : ""}`;
+              }).join("、")}</span>
+            )}
+          </div>
+          <pre style={{
+            margin: 0, padding: "12px 14px", borderRadius: 10,
+            border: `1px solid ${theme.border}`, background: theme.bg, color: theme.text,
+            fontSize: 12, fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+            lineHeight: 1.6, whiteSpace: "pre-wrap", wordBreak: "break-word",
+            maxHeight: 360, overflow: "auto",
+          }}>{loading ? "加载中…" : content}</pre>
+        </div>
+      )}
+
+      <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+        <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11, color: theme.textDim, cursor: "pointer" }}>
+          <input
+            type="checkbox" checked={!!s.enabled}
+            onChange={e => onToggle(s.id, e.target.checked)}
+            style={{ cursor: "pointer" }}
+          />
+          {s.enabled ? "已启用（claude/codex 加载中）" : "已停用（symlink 已摘除）"}
+        </label>
+        <button
+          onClick={() => onDelete(s.id)}
+          style={{
+            marginLeft: "auto", padding: "4px 10px", borderRadius: 6,
+            border: `1px solid ${theme.border}`, background: "transparent",
+            color: theme.red, cursor: "pointer", fontSize: 11, fontWeight: 700,
+          }}
+        >删除</button>
+      </div>
+    </div>
+  );
+}
+
 function SkillsView({ skillData, skills, tasks, onSweep, onDraft, onApprove, onDismiss, onToggleSkill, onDeleteSkill }) {
   // Only recurrence >= 2 is worth surfacing; single-occurrence rows are noise.
   // (The backend still tracks them so the count can accumulate across sweeps.)
@@ -3351,34 +3436,7 @@ function SkillsView({ skillData, skills, tasks, onSweep, onDraft, onApprove, onD
           </div>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(360px, 1fr))", gap: 12 }}>
             {skills.map(s => (
-              <div key={s.id} style={{
-                background: theme.surface, border: `1px solid ${theme.border}`,
-                borderRadius: 12, padding: 14, opacity: s.enabled ? 1 : 0.55,
-              }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
-                  <SkillKindBadge kind={s.kind} />
-                  <span style={{ fontFamily: "monospace", fontSize: 12, color: theme.text, fontWeight: 700 }}>{s.name}</span>
-                </div>
-                <div style={{ color: theme.textMuted, fontSize: 12, marginBottom: 10 }}>{s.description || "—"}</div>
-                <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                  <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11, color: theme.textDim, cursor: "pointer" }}>
-                    <input
-                      type="checkbox" checked={!!s.enabled}
-                      onChange={e => onToggleSkill(s.id, e.target.checked)}
-                      style={{ cursor: "pointer" }}
-                    />
-                    {s.enabled ? "已启用（claude/codex 加载中）" : "已停用（symlink 已摘除）"}
-                  </label>
-                  <button
-                    onClick={() => onDeleteSkill(s.id)}
-                    style={{
-                      marginLeft: "auto", padding: "4px 10px", borderRadius: 6,
-                      border: `1px solid ${theme.border}`, background: "transparent",
-                      color: theme.red, cursor: "pointer", fontSize: 11, fontWeight: 700,
-                    }}
-                  >删除</button>
-                </div>
-              </div>
+              <SkillRegistryCard key={s.id} s={s} tasks={tasks} onToggle={onToggleSkill} onDelete={onDeleteSkill} />
             ))}
           </div>
         </div>

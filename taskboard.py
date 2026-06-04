@@ -4077,6 +4077,19 @@ class TaskAPIHandler(BaseHTTPRequestHandler):
         elif path == "/api/skills":
             self._json_response({"skills": self.db.get_skills()})
 
+        elif path.startswith("/api/skills/") and path.endswith("/content"):
+            sid = int(path.split("/")[3])
+            skill = self.db.get_skill(sid)
+            if not skill:
+                self._json_response({"error": "not found"}, 404)
+                return
+            try:
+                with open(skill["path"], encoding="utf-8") as f:
+                    content = f.read()
+            except OSError as e:
+                content = f"(无法读取 SKILL.md：{e})"
+            self._json_response({"content": content, "path": skill["path"], "skill": skill})
+
         elif path == "/api/csrf-token":
             self._json_response({"csrf_token": _CSRF_TOKEN})
 
