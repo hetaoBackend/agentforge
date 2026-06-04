@@ -3230,7 +3230,9 @@ function SkillPatternCard({ p, onDraft, onApprove, onDismiss }) {
 }
 
 function SkillsView({ skillData, skills, onSweep, onDraft, onApprove, onDismiss, onToggleSkill, onDeleteSkill }) {
-  const patterns = skillData.patterns || [];
+  // Only recurrence >= 2 is worth surfacing; single-occurrence rows are noise.
+  // (The backend still tracks them so the count can accumulate across sweeps.)
+  const patterns = (skillData.patterns || []).filter(p => p.recurrence_count >= 2);
   const sweep = skillData.sweep || {};
   const running = sweep.running;
   const last = sweep.last;
@@ -3308,7 +3310,7 @@ function SkillsView({ skillData, skills, onSweep, onDraft, onApprove, onDismiss,
           border: `1px dashed ${theme.border}`, borderRadius: 12,
           padding: 32, textAlign: "center", color: theme.textDim, fontSize: 12,
         }}>
-          还没有检测到模式 — 点「扫一遍」让 agent 分析最近完成的任务
+          还没有复发 ≥2 的模式 — 点「扫一遍」让 agent 分析最近完成的任务（复发 1 次的暂不展示）
         </div>
       ) : (
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(360px, 1fr))", gap: 14 }}>
