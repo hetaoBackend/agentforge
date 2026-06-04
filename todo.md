@@ -1,3 +1,11 @@
+- [completed] 创建 GitHub draft PR：https://github.com/hetaoBackend/agentforge/pull/24
+- [completed] 整理当前改动并本地提交，删除大文件
+- [completed] 移除 Feishu 执行过程过长时退化为代码块的展示
+- [completed] 将 Feishu 执行过程改为图标化步骤摘要并隐藏 JSON 细节
+- [completed] 将桌面端 Execution Events 升级为 Agentara 风格步骤时间线
+- [completed] 提交并推送 Feishu 多图展示修复
+- [completed] 修复 Feishu 多张生成图以 Markdown 形式发送后不可见
+- [completed] 分析 Feishu 图片展示与连续 chunk 观感优化方案
 - [completed] 提交并推送当前全部工作树改动
 - [completed] 对照 agentara 修复飞书折叠思考换行展示
 - [completed] 确认并修复飞书思考过程折叠面板换行展示

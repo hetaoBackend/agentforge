@@ -20,6 +20,7 @@ import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
+from urllib.parse import unquote, urlparse
 
 from taskboard_bus import Channel, MessageBus, OutboundMessage, OutboundMessageType
 
@@ -77,6 +78,8 @@ FEISHU_CARD_MAX_ELEMENTS = 200
 FEISHU_PANEL_MAX_LINE_ELEMENTS = 80
 FEISHU_PANEL_PLAIN_TEXT_CHUNK = 1800
 FEISHU_THINKING_PREFIX = "[thinking] "
+FEISHU_MARKDOWN_IMAGE_RE = re.compile(r"!\[[^\]]*]\(([^)\n]+)\)")
+FEISHU_UPLOADABLE_IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".gif", ".webp"}
 FEISHU_STREAM_EVENT_TYPES = {
     "assistant",
     "tool_call",
@@ -156,70 +159,126 @@ class _FeishuStreamWriter:
         return payload if isinstance(payload, dict) else {"content": payload}
 
     def _format_trace_value(self, value: Any) -> str:
-        if isinstance(value, (dict, list)):
-            return json.dumps(value, ensure_ascii=False)
-        return str(value)
+        return self._compact_trace_summary(value)
+
+    def _compact_trace_summary(self, value: Any, limit: int = 140) -> str:
+        if value in (None, "", {}, []):
+            return ""
+        if isinstance(value, dict):
+            for key in ("command", "query", "path", "file", "message", "content", "text"):
+                if value.get(key):
+                    return self._compact_trace_summary(value[key], limit)
+            safe_parts = []
+            for key, item in value.items():
+                if item in (None, "", {}, []):
+                    continue
+                if any(
+                    secret in str(key).lower() for secret in ("token", "secret", "password", "key")
+                ):
+                    continue
+                safe_parts.append(f"{key}={self._compact_trace_summary(item, 48)}")
+                if len(safe_parts) >= 2:
+                    break
+            return self._truncate_trace_text(", ".join(safe_parts), limit)
+        if isinstance(value, list):
+            if not value:
+                return ""
+            first = self._compact_trace_summary(value[0], max(24, limit - 20))
+            suffix = f" 等 {len(value)} 项" if len(value) > 1 else ""
+            return self._truncate_trace_text(f"{first}{suffix}", limit)
+        return self._truncate_trace_text(str(value), limit)
+
+    def _truncate_trace_text(self, value: str, limit: int = 140) -> str:
+        lines = [
+            line.strip()
+            for line in str(value).replace("\r\n", "\n").replace("\r", "\n").split("\n")
+            if line.strip()
+        ]
+        normalized = " ".join((lines[0] if lines else "").split())
+        if len(normalized) <= limit:
+            return normalized
+        return normalized[: limit - 1].rstrip() + "…"
+
+    def _trace_line(self, icon: str, label: str, *parts: Any) -> str:
+        compact_parts = [
+            self._compact_trace_summary(part)
+            if not isinstance(part, str)
+            else self._truncate_trace_text(part)
+            for part in parts
+        ]
+        suffix = " · ".join(part for part in compact_parts if part)
+        return f"{icon} {label}{(' ' + suffix) if suffix else ''}"
 
     def _format_trace_event(self, event_type: str, content: str) -> str:
         payload = self._load_trace_payload(content)
-        lines: list[str] = []
+        line = ""
 
         if event_type == "tool_call":
             name = payload.get("name") or payload.get("tool") or "unknown"
             if payload.get("server"):
                 name = f"{payload['server']}.{name}"
-            lines.append(f"调用工具: {name}")
             tool_input = payload.get("input") or payload.get("arguments")
-            if tool_input not in (None, "", {}, []):
-                lines.append(f"参数: {self._format_trace_value(tool_input)}")
-            if payload.get("result") not in (None, "", {}, []):
-                lines.append(f"返回: {self._format_trace_value(payload['result'])}")
-            if payload.get("status"):
-                lines.append(f"状态: {payload['status']}")
-            if payload.get("error"):
-                lines.append(f"错误: {self._format_trace_value(payload['error'])}")
+            result = payload.get("result")
+            error = payload.get("error")
+            line = self._trace_line(
+                "▣",
+                "调用工具",
+                name,
+                tool_input,
+                result,
+                payload.get("status"),
+                f"错误 {self._format_trace_value(error)}" if error else "",
+            )
         elif event_type == "tool_result":
             label = "工具错误" if payload.get("is_error") else "工具返回"
-            if payload.get("tool_use_id"):
-                label = f"{label}: {payload['tool_use_id']}"
-            lines.append(label)
-            if payload.get("content"):
-                lines.append(self._format_trace_value(payload["content"]))
+            line = self._trace_line(
+                "↵",
+                label,
+                payload.get("tool_use_id"),
+                payload.get("content"),
+            )
         elif event_type == "command_execution":
             command = payload.get("command") or payload.get("content") or ""
-            lines.append(f"执行命令: {command}".rstrip())
-            if payload.get("output"):
-                lines.append(f"输出: {self._format_trace_value(payload['output'])}")
-            if payload.get("exit_code") is not None:
-                lines.append(f"退出码: {payload['exit_code']}")
-            if payload.get("status"):
-                lines.append(f"状态: {payload['status']}")
+            exit_code = (
+                f"退出码 {payload['exit_code']}" if payload.get("exit_code") is not None else ""
+            )
+            line = self._trace_line(
+                "$",
+                "执行命令",
+                command,
+                payload.get("output"),
+                exit_code,
+                payload.get("status"),
+            )
         elif event_type == "file_change":
-            lines.append("文件变更")
             changes = payload.get("changes")
+            summary = ""
             if isinstance(changes, list):
+                summaries = []
                 for change in changes:
                     if isinstance(change, dict):
                         path = change.get("path") or change.get("file") or ""
                         kind = change.get("kind") or change.get("type") or "changed"
-                        lines.append(f"{kind}: {path}".strip())
+                        summaries.append(f"{kind}: {path}".strip())
+                summary = "；".join(summaries[:3])
+                if len(summaries) > 3:
+                    summary += f" 等 {len(summaries)} 项"
             elif changes:
-                lines.append(self._format_trace_value(changes))
-            if payload.get("status"):
-                lines.append(f"状态: {payload['status']}")
+                summary = self._format_trace_value(changes)
+            line = self._trace_line("◇", "文件变更", summary, payload.get("status"))
         elif event_type == "web_search":
             query = payload.get("query") or payload.get("content") or ""
-            lines.append(f"网页搜索: {query}".rstrip())
-            if payload.get("action"):
-                lines.append(f"动作: {payload['action']}")
-            if payload.get("status"):
-                lines.append(f"状态: {payload['status']}")
+            line = self._trace_line("⌕", "网页搜索", query, payload.get("status"))
         elif event_type == "error":
-            lines.append(f"错误: {payload.get('message') or payload.get('content') or content}")
+            line = self._trace_line(
+                "!",
+                "错误",
+                payload.get("message") or payload.get("content") or content,
+            )
         else:
-            lines.append(f"[{event_type}] {content}")
+            line = self._trace_line("•", f"[{event_type}]", content)
 
-        return "\n".join(line for line in lines if line) + "\n"
+        return f"{line}\n" if line else ""
 
     def _schedule(self) -> None:
         with self._state_lock:
@@ -436,10 +495,15 @@ class FeishuChannel(Channel):
         streaming_history = self._stop_streaming(task_id)
         image_keys = []
         if is_completed:
-            image_paths = self._generated_image_paths_for_task(task_id)
-            image_keys = self._upload_images(image_paths)
+            image_paths = self._collect_generated_image_paths(task_id, content, task)
+            uploaded_images = self._upload_image_entries(image_paths)
+            image_keys = [image_key for _, image_key in uploaded_images]
             if image_keys:
-                content = self._hide_generated_image_paths(content, len(image_keys))
+                content = self._hide_generated_image_paths(
+                    content,
+                    len(image_keys),
+                    uploaded_paths=[image_path for image_path, _ in uploaded_images],
+                )
 
         card = self._build_notification_card(
             task_id=task_id,
@@ -528,13 +592,100 @@ class FeishuChannel(Channel):
             paths.append(path)
         return paths
 
+    def _collect_generated_image_paths(
+        self, task_id: int, content: str, task: Optional[dict[str, Any]] = None
+    ) -> list[str]:
+        paths = self._generated_image_paths_for_task(task_id)
+        paths.extend(
+            self._generated_image_paths_from_markdown(
+                content,
+                working_dir=(task or {}).get("working_dir"),
+            )
+        )
+        return self._dedupe_image_paths(paths)
+
+    def _generated_image_paths_from_markdown(
+        self, content: str, working_dir: Optional[str] = None
+    ) -> list[str]:
+        paths = []
+        for match in FEISHU_MARKDOWN_IMAGE_RE.finditer(content or ""):
+            image_path = self._local_image_path_from_reference(match.group(1), working_dir)
+            if image_path:
+                paths.append(image_path)
+        return paths
+
+    def _local_image_path_from_reference(
+        self, reference: str, working_dir: Optional[str] = None
+    ) -> Optional[str]:
+        target = self._markdown_image_reference_target(reference)
+        if not target or target.startswith(("http://", "https://", "data:")):
+            return None
+        if target.startswith("file://"):
+            parsed = urlparse(target)
+            target = parsed.path
+        elif target.startswith("sandbox:"):
+            target = target[len("sandbox:") :]
+        target = unquote(target).strip()
+        if not target:
+            return None
+
+        path = Path(target).expanduser()
+        if not path.is_absolute() and working_dir:
+            path = Path(working_dir).expanduser() / path
+        if path.suffix.lower() not in FEISHU_UPLOADABLE_IMAGE_SUFFIXES:
+            return None
+        try:
+            if not path.is_file():
+                return None
+            return str(path.resolve())
+        except OSError:
+            return None
+
+    def _markdown_image_reference_target(self, reference: str) -> str:
+        raw = (reference or "").strip()
+        if not raw:
+            return ""
+        if raw.startswith("<"):
+            end = raw.find(">")
+            if end >= 0:
+                return raw[1:end].strip()
+        if raw[0] in ("'", '"'):
+            end = raw.find(raw[0], 1)
+            if end > 0:
+                return raw[1:end].strip()
+        titled = re.match(r"(.+?)\s+['\"][^'\"]*['\"]\s*$", raw)
+        return (titled.group(1) if titled else raw).strip()
+
+    def _dedupe_image_paths(self, image_paths: list[str]) -> list[str]:
+        deduped = []
+        seen = set()
+        for image_path in image_paths:
+            canonical = self._canonical_image_path(image_path)
+            if not canonical or canonical in seen:
+                continue
+            seen.add(canonical)
+            deduped.append(canonical)
+        return deduped
+
+    def _canonical_image_path(self, image_path: str) -> Optional[str]:
+        try:
+            path = Path(image_path).expanduser()
+            if not path.is_file():
+                return None
+            return str(path.resolve())
+        except OSError:
+            return None
+
     def _upload_images(self, image_paths: list[str]) -> list[str]:
-        image_keys = []
+        return [image_key for _, image_key in self._upload_image_entries(image_paths)]
+
+    def _upload_image_entries(self, image_paths: list[str]) -> list[tuple[str, str]]:
+        entries = []
         for image_path in image_paths:
             image_key = self._upload_image(image_path)
             if image_key:
-                image_keys.append(image_key)
-        return image_keys
+                entries.append((image_path, image_key))
+        return entries
 
     def _upload_image(self, image_path: str) -> Optional[str]:
         if not self._client:
@@ -563,17 +714,50 @@ class FeishuChannel(Channel):
         print(f"[Feishu] Image upload failed: {response.code} {response.msg}")
         return None
 
-    def _hide_generated_image_paths(self, content: str, image_count: int) -> str:
+    def _hide_generated_image_paths(
+        self, content: str, image_count: int, uploaded_paths: Optional[list[str]] = None
+    ) -> str:
+        uploaded = {
+            canonical
+            for path in (uploaded_paths or [])
+            if (canonical := self._canonical_image_path(path))
+        }
         lines = []
         for line in (content or "").splitlines():
             stripped = line.strip()
-            if stripped.startswith("- ") and "/.codex/generated_images/" in stripped:
+            if not stripped:
+                lines.append("")
                 continue
-            lines.append(line)
+            if self._line_is_uploaded_image_path(stripped, uploaded):
+                continue
+            cleaned_line = self._remove_uploaded_markdown_image_refs(line, uploaded)
+            visible = cleaned_line.strip()
+            if visible and visible not in {"-", "*", "+"}:
+                lines.append(cleaned_line.rstrip())
         cleaned = "\n".join(lines).strip()
         if not cleaned or cleaned.startswith("已生成"):
             return f"已生成 {image_count} 张图片。"
         return cleaned
+
+    def _line_is_uploaded_image_path(self, stripped_line: str, uploaded_paths: set[str]) -> bool:
+        if not stripped_line.startswith("- "):
+            return False
+        candidate = stripped_line[2:].strip()
+        canonical = self._canonical_image_path(candidate)
+        if canonical and canonical in uploaded_paths:
+            return True
+        return "/.codex/generated_images/" in stripped_line
+
+    def _remove_uploaded_markdown_image_refs(self, line: str, uploaded_paths: set[str]) -> str:
+        if not uploaded_paths:
+            return line
+
+        def replace(match: re.Match) -> str:
+            image_path = self._local_image_path_from_reference(match.group(1))
+            canonical = self._canonical_image_path(image_path) if image_path else None
+            return "" if canonical in uploaded_paths else match.group(0)
+
+        return FEISHU_MARKDOWN_IMAGE_RE.sub(replace, line)
 
     # ── outbound: low-level send ──────────────────────────────────
 
@@ -798,9 +982,7 @@ class FeishuChannel(Channel):
 
     def _build_streaming_history_markdown_elements(self, text: str) -> list[dict[str, Any]]:
         chunks = self._chunk_text(text, FEISHU_CARD_MARKDOWN_CHUNK - 16)
-        return [
-            {"tag": "markdown", "content": self._wrap_feishu_code_block(chunk)} for chunk in chunks
-        ]
+        return [{"tag": "markdown", "content": chunk} for chunk in chunks]
 
     def _build_streaming_history_line_elements(self, text: str) -> list[dict[str, Any]]:
         elements: list[dict[str, Any]] = []
@@ -820,11 +1002,6 @@ class FeishuChannel(Channel):
                 "content": content,
             },
         }
-
-    def _wrap_feishu_code_block(self, text: str) -> str:
-        longest_backtick_run = max((len(run) for run in re.findall(r"`+", text)), default=0)
-        fence = "`" * max(3, longest_backtick_run + 1)
-        return f"{fence}\n{text}\n{fence}"
 
     def _preserve_feishu_markdown_linebreaks(self, text: str) -> str:
         return text.replace("\r\n", "\n").replace("\r", "\n")

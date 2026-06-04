@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Weixin Session And Image Support</title>
+</head>
+<body>
+  <h1>Weixin Session And Image Support</h1>
+  <p>This change makes Weixin behave like a single current session per peer, with <code>/new</code> to start over, and adds image upload/download support through the Weixin bridge.</p>
+  <h2>What Changed</h2>
+  <ul>
+    <li>Python channel tracks the current task by <code>account_id:peer_id</code> and resumes it by default when it has a saved agent session.</li>
+    <li><code>/new</code> clears the current peer session; <code>/new &lt;prompt&gt;</code> immediately creates a fresh task.</li>
+    <li>Inbound Weixin images are downloaded by the bridge and attached to AgentForge tasks as <code>image_paths</code> and <code>prompt_images</code>.</li>
+    <li>Generated local images are collected from task run events or markdown references, hidden from the text body, uploaded by the bridge, and sent back to Weixin.</li>
+  </ul>
+  <h2>Validation</h2>
+  <ul>
+    <li><code>uv run pytest -q tests/test_weixin_channel.py</code>: 11 passed</li>
+    <li><code>node --check channels/weixin_bridge/index.mjs</code>: passed</li>
+    <li><code>git diff --check</code>: passed</li>
+    <li><code>make check</code>: 116 passed</li>
+  </ul>
+  <h2>Residual Risk</h2>
+  <p>Live Weixin CDN image transfer still needs account-backed manual verification.</p>
+</body>
+</html>
