@@ -3229,14 +3229,17 @@ function SkillPatternCard({ p, tasks, onDraft, onApprove, onDismiss }) {
         <div style={{ fontSize: 12, color: theme.green, fontWeight: 700 }}>✓ 已沉淀为 Skill</div>
       )}
 
-      {p.status === "candidate" && draftStatus !== "ready" && draftStatus !== "drafting" && (
-        <div style={{ display: "flex", gap: 8 }}>
+      {(p.status === "candidate" || p.status === "tracking") && draftStatus !== "ready" && draftStatus !== "drafting" && (
+        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
           <button onClick={() => onDraft(p.id)} style={btn(theme.accent, "#fff")}>
             {draftStatus === "error" ? "重试蒸馏" : "蒸馏成 Skill"}
           </button>
           <button onClick={() => onDismiss(p.id)} style={btn("transparent", theme.textMuted)}>驳回</button>
+          {p.status === "tracking" && (
+            <span style={{ color: theme.textDim, fontSize: 11 }}>未达自动阈值，可手动蒸馏（agent 会判断是否值得）</span>
+          )}
           {draftStatus === "error" && (
-            <span style={{ color: theme.red, fontSize: 11, alignSelf: "center" }}>蒸馏失败：{p.draft_error}</span>
+            <span style={{ color: theme.red, fontSize: 11 }}>蒸馏失败：{p.draft_error}</span>
           )}
         </div>
       )}
