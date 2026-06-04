@@ -508,6 +508,7 @@ class TaskDB:
                 first_seen TEXT DEFAULT (datetime('now')),
                 last_seen TEXT DEFAULT (datetime('now')),
                 contributing_task_ids TEXT NOT NULL DEFAULT '[]',
+                contributing_run_ids TEXT NOT NULL DEFAULT '[]',
                 status TEXT NOT NULL DEFAULT 'tracking',
                 promoted_skill_id INTEGER,
                 created_at TEXT DEFAULT (datetime('now')),
@@ -518,6 +519,44 @@ class TaskDB:
             CREATE INDEX IF NOT EXISTS idx_skill_patterns_status
             ON skill_patterns(status, recurrence_count DESC)
         """)
+        # Migration: per-run idempotency ledger so a run is only ever counted
+        # once (lets the manual sweep re-scan recent runs without inflating counts).
+        try:
+            self.conn.execute(
+                "ALTER TABLE skill_patterns ADD COLUMN contributing_run_ids TEXT NOT NULL DEFAULT '[]'"
+            )
+            self.conn.commit()
+        except sqlite3.OperationalError:
+            pass  # Column already exists
+        # Backfill run-id sets for pre-existing patterns from their tasks' completed
+        # runs, so a re-scan dedups against real run ids instead of re-counting them.
+        try:
+            legacy = self.conn.execute(
+                "SELECT id, contributing_task_ids FROM skill_patterns "
+                "WHERE contributing_run_ids IN ('[]', '') OR contributing_run_ids IS NULL"
+            ).fetchall()
+            for row in legacy:
+                try:
+                    tids = json.loads(row["contributing_task_ids"]) or []
+                except (ValueError, TypeError):
+                    tids = []
+                if not tids:
+                    continue
+                placeholders = ",".join("?" for _ in tids)
+                run_rows = self.conn.execute(
+                    f"SELECT id FROM task_runs WHERE status = 'completed' "
+                    f"AND task_id IN ({placeholders})",
+                    tuple(tids),
+                ).fetchall()
+                run_ids = [r["id"] for r in run_rows]
+                if run_ids:
+                    self.conn.execute(
+                        "UPDATE skill_patterns SET contributing_run_ids = ? WHERE id = ?",
+                        (json.dumps(run_ids), row["id"]),
+                    )
+            self.conn.commit()
+        except sqlite3.OperationalError:
+            pass
 
         # Skill Library: registry of distilled, approved skills. The canonical
         # SKILL.md lives at `path` (~/.claude/skills/<name>/SKILL.md) and is
@@ -1140,14 +1179,39 @@ class TaskDB:
             ).fetchall()
             return [dict(r) for r in rows]
 
+    def get_recent_completed_runs(self, limit: int = 100) -> list[dict]:
+        """The most recent completed runs regardless of watermark (manual re-scan)."""
+        with self.lock:
+            rows = self.conn.execute(
+                """
+                SELECT r.id AS run_id, r.task_id, r.finished_at, r.result,
+                       t.title, t.prompt, t.working_dir, t.agent
+                FROM task_runs r
+                JOIN tasks t ON t.id = r.task_id
+                WHERE r.status = 'completed' AND r.finished_at IS NOT NULL
+                ORDER BY r.finished_at DESC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+            # Return oldest-first so watermark math stays consistent.
+            return [dict(r) for r in reversed(rows)]
+
     def upsert_skill_pattern(
-        self, pattern_key: str, kind: str, summary: str, task_id: Optional[int]
+        self,
+        pattern_key: str,
+        kind: str,
+        summary: str,
+        task_id: Optional[int],
+        run_id: Optional[int] = None,
     ) -> Optional[int]:
         """Record one observation of a pattern. Dedup by exact pattern_key.
 
-        Semantic matching is done by the sweep agent (it reuses an existing key);
-        here we only do exact-key upsert: bump recurrence_count, merge the task id
-        into the distinct contributing set, refresh summary/last_seen.
+        Semantic matching is done by the sweep agent (it reuses an existing key).
+        Counting is idempotent per run: if `run_id` was already counted for this
+        pattern, only the summary/last_seen refresh — recurrence does NOT bump.
+        This lets the manual sweep re-scan recent runs without inflating counts.
+        When run_id is None (legacy / unknown), fall back to bumping per call.
         """
         pattern_key = (pattern_key or "").strip()
         if not pattern_key:
@@ -1156,7 +1220,8 @@ class TaskDB:
         now = datetime.now().isoformat()
         with self.lock:
             row = self.conn.execute(
-                "SELECT id, contributing_task_ids FROM skill_patterns WHERE pattern_key = ?",
+                "SELECT id, contributing_task_ids, contributing_run_ids "
+                "FROM skill_patterns WHERE pattern_key = ?",
                 (pattern_key,),
             ).fetchone()
             if row:
@@ -1164,38 +1229,59 @@ class TaskDB:
                     tids = list(json.loads(row["contributing_task_ids"]) or [])
                 except (ValueError, TypeError):
                     tids = []
+                try:
+                    rids = list(json.loads(row["contributing_run_ids"] or "[]") or [])
+                except (ValueError, TypeError):
+                    rids = []
+                already_counted = run_id is not None and run_id in rids
                 if task_id is not None and task_id not in tids:
                     tids.append(task_id)
+                if run_id is not None and run_id not in rids:
+                    rids.append(run_id)
+                # Bump only for a genuinely new observation.
+                bump = 0 if already_counted else 1
                 self.conn.execute(
                     """
                     UPDATE skill_patterns
-                    SET recurrence_count = recurrence_count + 1,
+                    SET recurrence_count = recurrence_count + ?,
                         last_seen = ?,
                         updated_at = ?,
                         summary = CASE WHEN ? != '' THEN ? ELSE summary END,
-                        contributing_task_ids = ?
+                        contributing_task_ids = ?,
+                        contributing_run_ids = ?
                     WHERE id = ?
                     """,
                     (
+                        bump,
                         now,
                         now,
                         summary or "",
                         summary or "",
                         json.dumps(tids, ensure_ascii=False),
+                        json.dumps(rids, ensure_ascii=False),
                         row["id"],
                     ),
                 )
                 self.conn.commit()
                 return row["id"]
             tids = [task_id] if task_id is not None else []
+            rids = [run_id] if run_id is not None else []
             cur = self.conn.execute(
                 """
                 INSERT INTO skill_patterns
                     (pattern_key, kind, summary, recurrence_count,
-                     first_seen, last_seen, contributing_task_ids, status)
-                VALUES (?, ?, ?, 1, ?, ?, ?, 'tracking')
+                     first_seen, last_seen, contributing_task_ids, contributing_run_ids, status)
+                VALUES (?, ?, ?, 1, ?, ?, ?, ?, 'tracking')
                 """,
-                (pattern_key, kind, summary or "", now, now, json.dumps(tids, ensure_ascii=False)),
+                (
+                    pattern_key,
+                    kind,
+                    summary or "",
+                    now,
+                    now,
+                    json.dumps(tids, ensure_ascii=False),
+                    json.dumps(rids, ensure_ascii=False),
+                ),
             )
             self.conn.commit()
             return cur.lastrowid
@@ -1223,6 +1309,18 @@ class TaskDB:
                 "SELECT * FROM skill_patterns WHERE id = ?", (pattern_id,)
             ).fetchone()
             return dict(row) if row else None
+
+    def get_skill_pattern_recurrence(self, pattern_key: str) -> int:
+        """Current recurrence_count for a pattern_key (0 if it doesn't exist yet)."""
+        pattern_key = (pattern_key or "").strip()
+        if not pattern_key:
+            return 0
+        with self.lock:
+            row = self.conn.execute(
+                "SELECT recurrence_count FROM skill_patterns WHERE pattern_key = ?",
+                (pattern_key,),
+            ).fetchone()
+            return row["recurrence_count"] if row else 0
 
     @staticmethod
     def _within_window(first_seen: str, last_seen: str, window_days: int) -> bool:
@@ -1890,12 +1988,13 @@ class TaskScheduler(BusAwareSchedulerMixin):
     # ── Skill Library: cross-run sweep ─────────────────────────────────────
     SKILL_SWEEP_RUN_LIMIT = 50
 
-    def run_skill_sweep(self, agent: Optional[str] = None) -> dict:
+    def run_skill_sweep(self, agent: Optional[str] = None, full: bool = False) -> dict:
         """Synchronous sweep core (tested directly).
 
-        Reads completed runs since the watermark, asks an agent to tally recurring
-        patterns (reusing existing pattern_keys), upserts them, advances the
-        watermark. Never re-scans already-processed history.
+        full=False (scheduled): only runs since the watermark — incremental, cheap.
+        full=True (manual button): re-scans the most recent completed runs ignoring
+        the watermark, so the button always analyzes something. Counting is
+        idempotent per run_id, so re-scanning never inflates recurrence counts.
         """
         agent = (
             agent
@@ -1903,9 +2002,20 @@ class TaskScheduler(BusAwareSchedulerMixin):
             or self.db.get_setting("default_agent", "claude")
         )
         watermark = self.db.get_setting("skill_sweep_watermark", "") or ""
-        runs = self.db.get_completed_runs_since(watermark, limit=self.SKILL_SWEEP_RUN_LIMIT)
+        if full:
+            runs = self.db.get_recent_completed_runs(limit=self.SKILL_SWEEP_RUN_LIMIT)
+        else:
+            runs = self.db.get_completed_runs_since(watermark, limit=self.SKILL_SWEEP_RUN_LIMIT)
         if not runs:
-            result = {"scanned": 0, "detected": 0, "watermark": watermark, "agent": agent}
+            result = {
+                "scanned": 0,
+                "detected": 0,
+                "new": 0,
+                "candidates": 0,
+                "watermark": watermark,
+                "agent": agent,
+                "full": full,
+            }
             self._last_skill_sweep = result
             return result
 
@@ -1916,40 +2026,52 @@ class TaskScheduler(BusAwareSchedulerMixin):
             raise RuntimeError(raw or "skill sweep agent failed")
 
         detected = 0
+        new_occurrences = 0
         for item in self._parse_sweep_output(raw):
             if not isinstance(item, dict):
                 continue
-            raw_tid = item.get("task_id")
-            try:
-                tid = int(raw_tid) if raw_tid is not None else None
-            except (ValueError, TypeError):
-                tid = None
+
+            def _int(v):
+                try:
+                    return int(v) if v is not None else None
+                except (ValueError, TypeError):
+                    return None
+
+            tid = _int(item.get("task_id"))
+            rid = _int(item.get("run_id"))
+            before = self.db.get_skill_pattern_recurrence(item.get("pattern_key", ""))
             pid = self.db.upsert_skill_pattern(
                 item.get("pattern_key", ""),
                 item.get("kind", "recipe"),
                 str(item.get("summary", "")),
                 tid,
+                run_id=rid,
             )
             if pid is not None:
                 detected += 1
+                after = self.db.get_skill_pattern_recurrence(item.get("pattern_key", ""))
+                if after > before:
+                    new_occurrences += 1
 
         new_watermark = max(
             (r["finished_at"] for r in runs if r.get("finished_at")), default=watermark
         )
-        if new_watermark and new_watermark != watermark:
+        if new_watermark and new_watermark > watermark:
             self.db.set_setting("skill_sweep_watermark", new_watermark)
         candidates = self.db.refresh_skill_candidates()
         result = {
             "scanned": len(runs),
             "detected": detected,
+            "new": new_occurrences,
             "candidates": candidates,
             "watermark": new_watermark,
             "agent": agent,
+            "full": full,
         }
         self._last_skill_sweep = result
         return result
 
-    def trigger_skill_sweep(self, agent: Optional[str] = None) -> bool:
+    def trigger_skill_sweep(self, agent: Optional[str] = None, full: bool = False) -> bool:
         """Start a sweep in the background. Returns False if one is already running.
 
         The HTTP server is single-threaded, so a sweep (which can take minutes)
@@ -1962,7 +2084,7 @@ class TaskScheduler(BusAwareSchedulerMixin):
 
         def _worker():
             try:
-                self.run_skill_sweep(agent)
+                self.run_skill_sweep(agent, full=full)
             except Exception as e:  # noqa: BLE001 - surface to status, never crash thread
                 logger.error(f"Skill sweep failed: {e}")
                 self._last_skill_sweep = {"error": str(e)}
@@ -2195,7 +2317,7 @@ class TaskScheduler(BusAwareSchedulerMixin):
             p = (r.get("prompt") or "").strip().replace("\n", " ")[:400]
             res = (r.get("result") or "").strip().replace("\n", " ")[:300]
             run_lines.append(
-                f"[task #{r['task_id']}] {r.get('title') or 'Untitled'}\n"
+                f"[run #{r['run_id']} · task #{r['task_id']}] {r.get('title') or 'Untitled'}\n"
                 f"  prompt: {p}\n"
                 f"  result: {res}"
             )
@@ -2206,20 +2328,20 @@ class TaskScheduler(BusAwareSchedulerMixin):
             "Existing tracked patterns — REUSE an existing pattern_key verbatim when a run "
             "matches one semantically; otherwise mint a new short kebab-case key:\n"
             f"{existing_block}\n\n"
-            "Recently completed task runs to analyze:\n"
+            "Recently completed task runs to analyze (each line is ONE run):\n"
             f"{runs_block}\n\n"
             "Emit ONE entry PER RUN that represents a meaningful, repeatable capability. Kinds:\n"
             '- "recipe": a successful repeatable approach/workflow worth reusing.\n'
             '- "pitfall": a failure that was diagnosed and fixed, worth avoiding next time.\n'
             "CRITICAL: when several runs share the same capability, they MUST reuse the SAME "
             "pattern_key (so occurrences aggregate), but each run still gets its OWN entry with "
-            "its own task_id. Do NOT collapse multiple matching runs into a single entry — one "
-            "entry per run is how recurrence is counted. Reuse an existing tracked pattern_key "
-            "verbatim when it matches. Skip trivial or truly one-off runs.\n\n"
+            "its own run_id and task_id. Do NOT collapse multiple matching runs into a single "
+            "entry — one entry per run is how recurrence is counted. Reuse an existing tracked "
+            "pattern_key verbatim when it matches. Skip trivial or truly one-off runs.\n\n"
             "Respond with ONLY a JSON array, no prose, no code fence (example shows two runs of "
             "the same pattern):\n"
-            '[{"pattern_key":"run-pytest-suite","kind":"recipe","summary":"one concise line","task_id":12},'
-            '{"pattern_key":"run-pytest-suite","kind":"recipe","summary":"one concise line","task_id":15}]\n'
+            '[{"pattern_key":"run-pytest-suite","kind":"recipe","summary":"one concise line","run_id":12,"task_id":3},'
+            '{"pattern_key":"run-pytest-suite","kind":"recipe","summary":"one concise line","run_id":15,"task_id":4}]\n'
             "If nothing is worth tracking, respond with []."
         )
 
@@ -4061,7 +4183,9 @@ class TaskAPIHandler(BaseHTTPRequestHandler):
         elif path == "/api/skills/sweep":
             # Manual "扫一遍" — runs in the background (single-threaded server).
             # Always available, independent of the skill_library_enabled toggle.
-            started = self.scheduler.trigger_skill_sweep(body.get("agent"))
+            started = self.scheduler.trigger_skill_sweep(
+                body.get("agent"), full=bool(body.get("full", True))
+            )
             if not started:
                 self._json_response({"error": "sweep already running"}, 409)
                 return

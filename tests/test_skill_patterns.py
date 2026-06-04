@@ -146,7 +146,64 @@ def test_run_skill_sweep_empty_history(tmp_path):
     db = make_db(tmp_path)
     sched = TaskScheduler(db)
     result = sched.run_skill_sweep(agent="claude")
-    assert result == {"scanned": 0, "detected": 0, "watermark": "", "agent": "claude"}
+    assert result["scanned"] == 0
+    assert result["detected"] == 0
+    assert result["agent"] == "claude"
+    assert result["watermark"] == ""
+
+
+def test_upsert_run_id_idempotent(tmp_path):
+    db = make_db(tmp_path)
+    # same run_id seen twice → counted once
+    db.upsert_skill_pattern("k", "recipe", "s", task_id=1, run_id=100)
+    db.upsert_skill_pattern("k", "recipe", "s", task_id=1, run_id=100)
+    p = db.get_skill_patterns()[0]
+    assert p["recurrence_count"] == 1
+    assert json.loads(p["contributing_run_ids"]) == [100]
+    # a different run of the same task → new occurrence
+    db.upsert_skill_pattern("k", "recipe", "s", task_id=1, run_id=101)
+    p = db.get_skill_patterns()[0]
+    assert p["recurrence_count"] == 2
+    assert set(json.loads(p["contributing_run_ids"])) == {100, 101}
+    assert json.loads(p["contributing_task_ids"]) == [1]  # still one distinct task
+
+
+def test_full_sweep_rescan_does_not_inflate(tmp_path, monkeypatch):
+    db = make_db(tmp_path)
+    sched = TaskScheduler(db)
+    t1 = add_completed_task(db, title="ETL", prompt="run weekly etl")
+    t2 = add_completed_task(db, title="ETL", prompt="run weekly etl again")
+    run1 = db.get_task_runs(t1)[0]["id"]
+    run2 = db.get_task_runs(t2)[0]["id"]
+
+    payload = json.dumps(
+        [
+            {
+                "pattern_key": "weekly-etl",
+                "kind": "recipe",
+                "summary": "etl",
+                "run_id": run1,
+                "task_id": t1,
+            },
+            {
+                "pattern_key": "weekly-etl",
+                "kind": "recipe",
+                "summary": "etl",
+                "run_id": run2,
+                "task_id": t2,
+            },
+        ]
+    )
+    monkeypatch.setattr(sched, "_run_agent_command", lambda *a, **k: (True, payload))
+
+    r1 = sched.run_skill_sweep(agent="claude", full=True)
+    assert r1["scanned"] == 2 and r1["new"] == 2
+    assert db.get_skill_patterns()[0]["recurrence_count"] == 2
+
+    # Re-scan the SAME runs → idempotent: recurrence unchanged, no new occurrences
+    r2 = sched.run_skill_sweep(agent="claude", full=True)
+    assert r2["scanned"] == 2 and r2["new"] == 0
+    assert db.get_skill_patterns()[0]["recurrence_count"] == 2
 
 
 def test_run_skill_sweep_agent_failure_raises(tmp_path, monkeypatch):

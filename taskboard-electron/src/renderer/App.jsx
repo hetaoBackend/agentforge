@@ -3285,7 +3285,9 @@ function SkillsView({ skillData, skills, tasks, onSweep, onDraft, onApprove, onD
   if (last) {
     lastNote = last.error
       ? `上次扫描失败：${last.error}`
-      : `上次扫描：扫描 ${last.scanned}、检出 ${last.detected}、候选 ${last.candidates ?? 0}（agent ${last.agent}）`;
+      : last.scanned === 0
+        ? `上次扫描：没有已完成的任务可分析（agent ${last.agent}）`
+        : `上次扫描：分析 ${last.scanned} 个任务、新增 ${last.new ?? 0} 次复发、候选 ${last.candidates ?? 0}（agent ${last.agent}）`;
   }
   return (
     <div style={{ padding: 28, minHeight: "calc(100vh - 72px)" }}>
