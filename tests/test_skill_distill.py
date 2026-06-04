@@ -108,6 +108,44 @@ def test_distill_skill_draft(tmp_path, monkeypatch):
     assert saved["name"] == "run-pytest-suite"
 
 
+def test_distill_captures_worthiness(tmp_path, monkeypatch):
+    db = make_db(tmp_path)
+    sched = TaskScheduler(db)
+    tid = db.add_task(Task(title="x", prompt="p", working_dir="."))
+    rid = db.add_run(tid)
+    db.finish_run(rid, status="completed", result="ok")
+    pid = make_pattern(db, recurrence=3, tasks=(tid, tid + 1, tid + 2))
+
+    obj = {
+        "worthy": False,
+        "worthiness_reason": "one-off, no reusable procedure",
+        "name": "meh",
+        "description": "d",
+        "body_markdown": "b",
+    }
+    monkeypatch.setattr(sched, "_run_agent_command", lambda *a, **k: (True, json.dumps(obj)))
+
+    draft = sched.distill_skill_draft(pid, agent="claude")
+    assert draft["worthy"] is False
+    assert "one-off" in draft["worthiness_reason"]
+
+    # surfaced through get_skill_patterns for the UI
+    row = [x for x in db.get_skill_patterns() if x["id"] == pid][0]
+    assert row["draft_worthy"] == 0
+    assert "one-off" in row["draft_worthiness_reason"]
+
+
+def test_distill_worthiness_absent_is_none(tmp_path, monkeypatch):
+    db = make_db(tmp_path)
+    sched = TaskScheduler(db)
+    pid = make_pattern(db)
+    obj = {"name": "x", "description": "d", "body_markdown": "b"}  # no "worthy" key
+    monkeypatch.setattr(sched, "_run_agent_command", lambda *a, **k: (True, json.dumps(obj)))
+    draft = sched.distill_skill_draft(pid, agent="claude")
+    assert draft["worthy"] is None
+    assert db.get_skill_draft(pid)["worthy"] is None
+
+
 def test_distill_agent_failure_marks_error(tmp_path, monkeypatch):
     db = make_db(tmp_path)
     sched = TaskScheduler(db)

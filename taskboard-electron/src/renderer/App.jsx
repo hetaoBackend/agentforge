@@ -3133,11 +3133,13 @@ function SkillKindBadge({ kind }) {
   );
 }
 
-function SkillPatternCard({ p, onDraft, onApprove, onDismiss }) {
-  let taskCount = 0;
-  try { taskCount = (JSON.parse(p.contributing_task_ids || "[]")).length; } catch { /* ignore */ }
+function SkillPatternCard({ p, tasks, onDraft, onApprove, onDismiss }) {
+  let taskIds = [];
+  try { taskIds = JSON.parse(p.contributing_task_ids || "[]"); } catch { /* ignore */ }
+  const taskCount = taskIds.length;
   const ready = p.recurrence_count >= 3 && taskCount >= 2;
   const draftStatus = p.draft_status;
+  const [expanded, setExpanded] = useState(false);
   const [name, setName] = useState(p.draft_name || "");
   const [desc, setDesc] = useState(p.draft_description || "");
   const [body, setBody] = useState(p.draft_body || "");
@@ -3173,12 +3175,55 @@ function SkillPatternCard({ p, onDraft, onApprove, onDismiss }) {
         </span>
       </div>
       <div style={{ color: theme.textMuted, fontSize: 13, marginBottom: 10 }}>{p.summary || "—"}</div>
-      <div style={{ display: "flex", gap: 12, fontSize: 11, color: theme.textDim, marginBottom: 10 }}>
+      <div style={{ display: "flex", gap: 12, fontSize: 11, color: theme.textDim, marginBottom: 10, alignItems: "center" }}>
         <span>复发 {p.recurrence_count}×</span>
         <span>{taskCount} 个任务</span>
         <span>{p.status}</span>
         {ready && p.status !== "promoted" && <span style={{ color: theme.accent, fontWeight: 700 }}>✓ 达标</span>}
+        <button
+          onClick={() => setExpanded(v => !v)}
+          style={{ marginLeft: "auto", background: "transparent", border: "none",
+            color: theme.accent, cursor: "pointer", fontSize: 11, fontWeight: 700 }}
+        >
+          {expanded ? "收起 ▲" : "详情 ▼"}
+        </button>
       </div>
+
+      {expanded && (
+        <div style={{
+          background: theme.bg, border: `1px solid ${theme.border}`, borderRadius: 8,
+          padding: 10, marginBottom: 10, fontSize: 11, color: theme.textMuted,
+        }}>
+          <div style={{ marginBottom: 6 }}>
+            <span style={{ color: theme.textDim }}>首次 </span>{(p.first_seen || "").replace("T", " ").slice(0, 19) || "—"}
+            <span style={{ color: theme.textDim }}>　最近 </span>{(p.last_seen || "").replace("T", " ").slice(0, 19) || "—"}
+          </div>
+          <div style={{ color: theme.textDim, marginBottom: 4 }}>贡献的任务（{taskCount}）：</div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+            {taskIds.length === 0 && <span style={{ color: theme.textDim }}>—</span>}
+            {taskIds.map(tid => {
+              const t = (tasks || []).find(x => x.id === tid);
+              return (
+                <span key={tid} style={{ fontFamily: "monospace" }}>
+                  #{tid} {t ? t.title : <span style={{ color: theme.textDim }}>(已删除)</span>}
+                </span>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {draftStatus === "ready" && p.draft_worthy !== null && p.draft_worthy !== undefined && (
+        <div style={{
+          fontSize: 11, padding: "7px 10px", borderRadius: 7, marginBottom: 8,
+          background: p.draft_worthy ? "rgba(34,197,94,0.12)" : "rgba(245,158,11,0.14)",
+          color: p.draft_worthy ? theme.green : "#f59e0b",
+          border: `1px solid ${p.draft_worthy ? "rgba(34,197,94,0.3)" : "rgba(245,158,11,0.35)"}`,
+        }}>
+          {p.draft_worthy ? "✓ agent 建议沉淀" : "⚠ agent 认为价值有限（可仍批准或驳回）"}
+          {p.draft_worthiness_reason ? `：${p.draft_worthiness_reason}` : ""}
+        </div>
+      )}
 
       {p.status === "promoted" && (
         <div style={{ fontSize: 12, color: theme.green, fontWeight: 700 }}>✓ 已沉淀为 Skill</div>
@@ -3229,7 +3274,7 @@ function SkillPatternCard({ p, onDraft, onApprove, onDismiss }) {
   );
 }
 
-function SkillsView({ skillData, skills, onSweep, onDraft, onApprove, onDismiss, onToggleSkill, onDeleteSkill }) {
+function SkillsView({ skillData, skills, tasks, onSweep, onDraft, onApprove, onDismiss, onToggleSkill, onDeleteSkill }) {
   // Only recurrence >= 2 is worth surfacing; single-occurrence rows are noise.
   // (The backend still tracks them so the count can accumulate across sweeps.)
   const patterns = (skillData.patterns || []).filter(p => p.recurrence_count >= 2);
@@ -3318,6 +3363,7 @@ function SkillsView({ skillData, skills, onSweep, onDraft, onApprove, onDismiss,
             <SkillPatternCard
               key={p.id}
               p={p}
+              tasks={tasks}
               onDraft={onDraft}
               onApprove={onApprove}
               onDismiss={onDismiss}
@@ -3856,6 +3902,7 @@ export default function App() {
         <SkillsView
           skillData={skillData}
           skills={skills}
+          tasks={tasks}
           onSweep={handleSweep}
           onDraft={handleSkillDraft}
           onApprove={handleSkillApprove}

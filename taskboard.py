@@ -547,10 +547,19 @@ class TaskDB:
                 body TEXT DEFAULT '',
                 status TEXT NOT NULL DEFAULT 'drafting',
                 error TEXT,
+                worthy INTEGER,
+                worthiness_reason TEXT DEFAULT '',
                 updated_at TEXT DEFAULT (datetime('now')),
                 FOREIGN KEY (pattern_id) REFERENCES skill_patterns(id)
             )
         """)
+        # Migration: add skill-creator worthiness judgment to existing draft tables
+        for _col, _decl in (("worthy", "INTEGER"), ("worthiness_reason", "TEXT DEFAULT ''")):
+            try:
+                self.conn.execute(f"ALTER TABLE skill_drafts ADD COLUMN {_col} {_decl}")
+                self.conn.commit()
+            except sqlite3.OperationalError:
+                pass  # Column already exists
 
         # Migration: add dag_id column to tasks
         try:
@@ -1197,7 +1206,8 @@ class TaskDB:
                 """
                 SELECT p.*, d.status AS draft_status, d.name AS draft_name,
                        d.description AS draft_description, d.kind AS draft_kind,
-                       d.body AS draft_body, d.error AS draft_error
+                       d.body AS draft_body, d.error AS draft_error,
+                       d.worthy AS draft_worthy, d.worthiness_reason AS draft_worthiness_reason
                 FROM skill_patterns p
                 LEFT JOIN skill_drafts d ON d.pattern_id = p.id
                 ORDER BY p.recurrence_count DESC, p.last_seen DESC
@@ -1291,12 +1301,16 @@ class TaskDB:
         kind: str = "recipe",
         body: str = "",
         error: Optional[str] = None,
+        worthy: Optional[bool] = None,
+        worthiness_reason: str = "",
     ):
         with self.lock:
             self.conn.execute(
                 """
-                INSERT INTO skill_drafts (pattern_id, name, description, kind, body, status, error, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO skill_drafts
+                    (pattern_id, name, description, kind, body, status, error,
+                     worthy, worthiness_reason, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(pattern_id) DO UPDATE SET
                     name = excluded.name,
                     description = excluded.description,
@@ -1304,6 +1318,8 @@ class TaskDB:
                     body = excluded.body,
                     status = excluded.status,
                     error = excluded.error,
+                    worthy = excluded.worthy,
+                    worthiness_reason = excluded.worthiness_reason,
                     updated_at = excluded.updated_at
                 """,
                 (
@@ -1314,6 +1330,8 @@ class TaskDB:
                     body,
                     status,
                     error,
+                    None if worthy is None else (1 if worthy else 0),
+                    worthiness_reason,
                     datetime.now().isoformat(),
                 ),
             )
@@ -1973,18 +1991,38 @@ class TaskScheduler(BusAwareSchedulerMixin):
     def _build_distill_prompt(self, pattern: dict, context: str) -> str:
         kind = pattern.get("kind", "recipe")
         return (
-            f"You are distilling a recurring {kind} into a reusable Claude Code skill (SKILL.md).\n\n"
+            "You evaluate whether a recurring task pattern is worth turning into a reusable "
+            "Claude Code skill, and if so, author it following Anthropic's skill-creator "
+            "conventions.\n\n"
             f"Pattern key: {pattern['pattern_key']}\n"
+            f"Kind: {kind}\n"
             f"Summary: {pattern.get('summary', '')}\n"
             f"Observed {pattern.get('recurrence_count', 0)} times across these task runs:\n\n"
             f"{context}\n\n"
-            "Write a self-contained skill that captures this capability for reuse in fresh contexts.\n"
-            'For a "recipe": describe the repeatable approach/steps and when to apply it.\n'
-            'For a "pitfall": describe the trap and the verified fix to avoid it next time.\n\n'
+            "STEP 1 — Decide if a skill is genuinely warranted. A skill IS warranted when the "
+            "pattern is one of:\n"
+            "  - a repeatable, multi-step workflow run many times across different inputs;\n"
+            "  - produces an objectively verifiable output (file transform, data extraction, "
+            "code generation, fixed procedure);\n"
+            "  - encodes specialized/domain knowledge or best practices worth codifying.\n"
+            "A skill is NOT warranted for one-off, trivial, or purely subjective work (taste, "
+            "writing style) with no reusable procedure. Be honest — most patterns are not "
+            "skill-worthy.\n\n"
+            "STEP 2 — If worthy, author the skill following these conventions:\n"
+            "  - name: short kebab-case, descriptive.\n"
+            "  - description: this is the PRIMARY trigger. State BOTH what it does AND when to "
+            "use it, in the third person, with concrete trigger phrasing (e.g. 'Use this "
+            "whenever the user wants to X or mentions Y/Z'). Be specific, not abstract.\n"
+            "  - body_markdown: imperative voice ('Do X'); explain WHY each step matters; stay "
+            "general across inputs (do NOT hard-code these specific runs); include the concrete "
+            "steps and an output format where relevant. Keep it concise (well under 500 lines). "
+            "Avoid all-caps MUSTs. No YAML frontmatter.\n\n"
             "Respond with ONLY a JSON object, no prose, no code fence:\n"
-            '{"name":"short-kebab-name",'
-            '"description":"one-sentence trigger description (when to use this skill)",'
-            '"body_markdown":"the skill body in markdown — do NOT include YAML frontmatter"}\n'
+            '{"worthy": true, "worthiness_reason": "one sentence on why it is / is not '
+            'skill-worthy", "name": "short-kebab-name", "description": "what AND when, with '
+            'concrete triggers", "body_markdown": "the skill body, no frontmatter"}\n'
+            "If NOT worthy, set worthy=false and give the reason, but still fill name/"
+            "description/body_markdown with your best attempt — the human makes the final call."
         )
 
     def distill_skill_draft(self, pattern_id: int, agent: Optional[str] = None) -> dict:
@@ -2009,6 +2047,9 @@ class TaskScheduler(BusAwareSchedulerMixin):
         name = _sanitize_skill_name(obj.get("name") or pattern["pattern_key"])
         description = str(obj.get("description", "")).strip()
         body_md = str(obj.get("body_markdown") or obj.get("body") or "").strip()
+        worthy = obj.get("worthy")
+        worthy = bool(worthy) if isinstance(worthy, bool) else None
+        worthiness_reason = str(obj.get("worthiness_reason", "")).strip()
         skill_md = _compose_skill_md(name, description, body_md)
         self.db.upsert_skill_draft(
             pattern_id,
@@ -2017,6 +2058,8 @@ class TaskScheduler(BusAwareSchedulerMixin):
             description=description,
             kind=pattern["kind"],
             body=skill_md,
+            worthy=worthy,
+            worthiness_reason=worthiness_reason,
         )
         return {
             "pattern_id": pattern_id,
@@ -2024,6 +2067,8 @@ class TaskScheduler(BusAwareSchedulerMixin):
             "description": description,
             "kind": pattern["kind"],
             "body": skill_md,
+            "worthy": worthy,
+            "worthiness_reason": worthiness_reason,
         }
 
     def trigger_skill_draft(self, pattern_id: int, agent: Optional[str] = None) -> bool:
