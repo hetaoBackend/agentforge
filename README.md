@@ -16,6 +16,7 @@
 ## Table of Contents
 
 - [Features](#features)
+- [Skill Library](#skill-library)
 - [Requirements](#requirements)
 - [Installation](#installation)
 - [Troubleshooting](#troubleshooting)
@@ -32,6 +33,7 @@
 
 ## Features
 
+- **🧬 Compounding Skill Library** — AgentForge detects recurring patterns across your completed tasks and distills them — using Anthropic's [skill-creator](https://github.com/anthropics/skills/tree/main/skills/skill-creator) — into reusable Claude Code skills. Review, approve, and they're symlinked into both Claude Code and Codex. Your agents get better at *your* work over time. [Learn more →](#skill-library)
 - **Agents that spawn agents** — Any running task can create sub-tasks, build DAG pipelines, and collect results via the bundled Claude Code skill
 - **Kanban Task Board** — Visual Queue / Running / Done columns with live output streaming
 - **DAG Pipelines** — Define task dependencies with automatic cascade execution and failure propagation
@@ -40,6 +42,22 @@
 - **Chat Control** — Create tasks and receive notifications from Telegram, Slack, Feishu/Lark, or WeChat
 - **Persistent Storage** — SQLite-backed task history, run logs, and streaming output
 - **Native macOS App** — Electron shell with one-click DMG install
+
+---
+
+## Skill Library
+
+**Turn the work you repeat into skills your agents reuse — automatically.** The more you use AgentForge, the better it gets at *your* workflows.
+
+1. **Detect** — A background sweep (or the manual **Scan** button) analyzes your completed task runs and tracks recurring patterns in a cross-run ledger — both *recipes* (workflows you repeat) and *pitfalls* (failures you diagnosed and fixed). Counting is idempotent per run, so re-scanning never inflates it.
+2. **Distill** — For a pattern worth codifying, AgentForge uses Anthropic's **[skill-creator](https://github.com/anthropics/skills/tree/main/skills/skill-creator)** skill to author a proper `SKILL.md` — and first judges whether it's even *worth* a skill, so you don't drown in noise.
+3. **Approve** — Review the draft: the worthiness verdict, the contributing tasks, and a fully editable `SKILL.md`. Approve or dismiss — you stay in control.
+4. **Deliver** — Approved skills are written once to a canonical store and symlinked into **both** `~/.claude/skills` (Claude Code) and `~/.agents/skills` (Codex). Both agents load them natively via progressive disclosure — zero prompt injection.
+5. **Manage** — Enable/disable each skill (toggles the symlinks, keeps the file), view its `SKILL.md`, or delete it — all from the **Skills** tab.
+
+> The automatic daily sweep is **off by default** (it spends tokens). Flip it on in **Settings → Skill Library**, choose the agent and cadence, or just hit the manual **Scan** button whenever you like — that always works, threshold or not.
+
+Distilled skills are standard Claude Code `SKILL.md` files (canonical copy in `~/.agentforge/skills`, symlinked to each agent's native dir) — portable, inspectable, no lock-in.
 
 ---
 

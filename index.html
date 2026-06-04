@@ -203,6 +203,7 @@ AgentForge
 </a>
 <ul class="nav-links">
 <li><a href="#features">Features</a></li>
+<li><a href="#skills">Skills</a></li>
 <li><a href="#architecture">Architecture</a></li>
 <li><a href="#integrations">Integrations</a></li>
 <li><a href="#api">API</a></li>
@@ -263,6 +264,11 @@ View on GitHub
 <p class="section-sub fade-in-up">Everything you need to run, schedule, and chain AI coding agents at scale.</p>
 <div class="features-grid">
 <div class="feature-card fade-in-up">
+<svg width="36" height="36" viewBox="0 0 36 36" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M9 4h12l6 6v22H9z"/><polyline points="21,4 21,10 27,10"/><path d="M16 23l1.7-3.6 3.6-1.7-3.6-1.7L16 12.4l-1.7 3.6-3.6 1.7 3.6 1.7z"/></svg>
+<h3>Compounding Skill Library</h3>
+<p>AgentForge detects recurring patterns across your tasks and distills them into reusable Claude Code skills &mdash; with skill-creator and one-click approval. <a href="#skills" style="color:var(--accent)">See how &rarr;</a></p>
+</div>
+<div class="feature-card fade-in-up">
 <svg width="36" height="36" viewBox="0 0 36 36" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="18" cy="6" r="4"/><circle cx="8" cy="20" r="4"/><circle cx="28" cy="20" r="4"/><circle cx="8" cy="32" r="3"/><circle cx="18" cy="32" r="3"/><line x1="18" y1="10" x2="8" y2="16"/><line x1="18" y1="10" x2="28" y2="16"/><line x1="8" y1="24" x2="8" y2="29"/><line x1="8" y1="24" x2="18" y2="29"/></svg>
 <h3>Agents that Spawn Agents</h3>
 <p>Any running task can create sub-tasks, build DAG pipelines, and collect results &mdash; enabling recursive, multi-agent workflows.</p>
@@ -283,6 +289,37 @@ View on GitHub
 <p>Real-time colorized output from Claude Code CLI, streaming NDJSON events as your agents work.</p>
 </div>
 </div>
+</div>
+</section>
+
+<!-- SKILL LIBRARY -->
+<section id="skills">
+<div class="container">
+<h2 class="section-title fade-in-up">Your agents compound your skills</h2>
+<p class="section-sub fade-in-up">AgentForge turns the work you repeat into reusable skills &mdash; detected, distilled, approved, and loaded by both Claude Code and Codex.</p>
+<div class="fade-in-up" style="display:flex;flex-wrap:wrap;gap:16px;justify-content:center;margin-top:8px">
+<div style="flex:1 1 180px;max-width:230px;background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:20px">
+<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px"><span style="display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;border-radius:50%;background:var(--accent);color:#fff;font-size:.8rem;font-weight:700">1</span><strong style="font-size:.98rem">Detect</strong></div>
+<p style="color:var(--text-muted);font-size:.85rem;line-height:1.6;margin:0">A sweep tracks recurring patterns across your completed runs &mdash; both recipes you repeat and pitfalls you fixed.</p>
+</div>
+<div style="flex:1 1 180px;max-width:230px;background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:20px">
+<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px"><span style="display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;border-radius:50%;background:var(--accent);color:#fff;font-size:.8rem;font-weight:700">2</span><strong style="font-size:.98rem">Distill</strong></div>
+<p style="color:var(--text-muted);font-size:.85rem;line-height:1.6;margin:0">Anthropic's skill-creator authors a proper <code>SKILL.md</code> &mdash; and first judges whether the pattern is even worth a skill.</p>
+</div>
+<div style="flex:1 1 180px;max-width:230px;background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:20px">
+<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px"><span style="display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;border-radius:50%;background:var(--accent);color:#fff;font-size:.8rem;font-weight:700">3</span><strong style="font-size:.98rem">Approve</strong></div>
+<p style="color:var(--text-muted);font-size:.85rem;line-height:1.6;margin:0">Review the worthiness verdict and a fully editable <code>SKILL.md</code>, then approve or dismiss. You stay in control.</p>
+</div>
+<div style="flex:1 1 180px;max-width:230px;background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:20px">
+<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px"><span style="display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;border-radius:50%;background:var(--accent);color:#fff;font-size:.8rem;font-weight:700">4</span><strong style="font-size:.98rem">Deliver</strong></div>
+<p style="color:var(--text-muted);font-size:.85rem;line-height:1.6;margin:0">Written once and symlinked into both Claude Code and Codex &mdash; loaded natively via progressive disclosure, zero prompt injection.</p>
+</div>
+<div style="flex:1 1 180px;max-width:230px;background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:20px">
+<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px"><span style="display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;border-radius:50%;background:var(--accent);color:#fff;font-size:.8rem;font-weight:700">5</span><strong style="font-size:.98rem">Manage</strong></div>
+<p style="color:var(--text-muted);font-size:.85rem;line-height:1.6;margin:0">Enable/disable, inspect the <code>SKILL.md</code>, or delete each skill from the Skills tab.</p>
+</div>
+</div>
+<p class="fade-in-up" style="text-align:center;color:var(--text-muted);font-size:.9rem;margin:26px auto 0;max-width:660px;line-height:1.7">Distilled skills are standard, portable <code>SKILL.md</code> files. The automatic sweep is <strong>off by default</strong> (it spends tokens) &mdash; flip it on in Settings, or just hit the manual <strong>Scan</strong> button anytime.</p>
 </div>
 </section>
 
