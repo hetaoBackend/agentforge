@@ -2074,6 +2074,31 @@ class TaskScheduler(BusAwareSchedulerMixin):
         self.db.set_skill_pattern_status(pattern_id, "dismissed")
         self.db.delete_skill_draft(pattern_id)
 
+    # ── Skill Library: registry management (#19) ───────────────────────────
+    def toggle_skill(self, skill_id: int, enabled: bool) -> Optional[dict]:
+        """Enable/disable a registered skill by adding/removing both symlinks.
+
+        Canonical SKILL.md is preserved either way — disabling just stops the
+        agents from loading it.
+        """
+        skill = self.db.get_skill(skill_id)
+        if not skill:
+            raise ValueError("skill not found")
+        if enabled:
+            link_skill(skill["name"])
+        else:
+            unlink_skill(skill["name"])
+        self.db.set_skill_enabled(skill_id, enabled)
+        return self.db.get_skill(skill_id)
+
+    def remove_skill(self, skill_id: int) -> None:
+        """Delete a skill: remove symlinks, canonical dir, and registry row."""
+        skill = self.db.get_skill(skill_id)
+        if not skill:
+            raise ValueError("skill not found")
+        remove_skill_from_disk(skill["name"])
+        self.db.delete_skill(skill_id)
+
     def _build_sweep_prompt(self, runs: list[dict], existing: list[dict]) -> str:
         if existing:
             existing_block = "\n".join(
@@ -4398,6 +4423,20 @@ class TaskAPIHandler(BaseHTTPRequestHandler):
                 self.db.set_setting(key, str(value))
             self._json_response({"status": "updated"})
 
+        elif path.startswith("/api/skills/"):
+            try:
+                sid = int(path.split("/")[3])
+            except (ValueError, IndexError):
+                self._json_response({"error": "invalid skill id"}, 400)
+                return
+            enabled = bool(body.get("enabled", True))
+            try:
+                skill = self.scheduler.toggle_skill(sid, enabled)
+            except ValueError as e:
+                self._json_response({"error": str(e)}, 404)
+                return
+            self._json_response({"status": "updated", "skill": skill})
+
         elif path.startswith("/api/heartbeats/") and path.count("/") == 3:
             try:
                 hid = int(path.split("/")[3])
@@ -4608,6 +4647,18 @@ class TaskAPIHandler(BaseHTTPRequestHandler):
         elif parsed.path.startswith("/api/heartbeats/"):
             hid = int(parsed.path.split("/")[3])
             self.db.delete_heartbeat(hid)
+            self._json_response({"status": "deleted"})
+        elif parsed.path.startswith("/api/skills/"):
+            try:
+                sid = int(parsed.path.split("/")[3])
+            except (ValueError, IndexError):
+                self._json_response({"error": "invalid skill id"}, 400)
+                return
+            try:
+                self.scheduler.remove_skill(sid)
+            except ValueError as e:
+                self._json_response({"error": str(e)}, 404)
+                return
             self._json_response({"status": "deleted"})
         elif parsed.path.startswith("/api/tasks/"):
             tid = int(parsed.path.split("/")[3])

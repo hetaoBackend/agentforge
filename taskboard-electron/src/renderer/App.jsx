@@ -571,6 +571,31 @@ async function dismissSkillPattern(id) {
   return payload;
 }
 
+async function fetchSkills() {
+  const res = await fetch(`${API}/skills`);
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json();
+}
+
+async function setSkillEnabledApi(id, enabled) {
+  const res = await fetch(`${API}/skills/${id}`, {
+    method: "PUT", headers: await csrfHeaders(),
+    body: JSON.stringify({ enabled }),
+  });
+  const payload = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(payload.error || `HTTP ${res.status}`);
+  return payload;
+}
+
+async function deleteSkillApi(id) {
+  const res = await fetch(`${API}/skills/${id}`, {
+    method: "DELETE", headers: await csrfHeaders(),
+  });
+  const payload = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(payload.error || `HTTP ${res.status}`);
+  return payload;
+}
+
 async function createHeartbeat(data) {
   const res = await fetch(`${API}/heartbeats`, {
     method: "POST", headers: await csrfHeaders(),
@@ -3204,7 +3229,7 @@ function SkillPatternCard({ p, onDraft, onApprove, onDismiss }) {
   );
 }
 
-function SkillsView({ skillData, onSweep, onDraft, onApprove, onDismiss }) {
+function SkillsView({ skillData, skills, onSweep, onDraft, onApprove, onDismiss, onToggleSkill, onDeleteSkill }) {
   const patterns = skillData.patterns || [];
   const sweep = skillData.sweep || {};
   const running = sweep.running;
@@ -3236,6 +3261,48 @@ function SkillsView({ skillData, onSweep, onDraft, onApprove, onDismiss }) {
           {running ? "扫描中…" : "扫一遍"}
         </button>
       </div>
+
+      {(skills || []).length > 0 && (
+        <div style={{ marginBottom: 26 }}>
+          <div style={{ color: theme.text, fontSize: 13, fontWeight: 700, marginBottom: 10 }}>
+            已沉淀 Skills（{skills.length}）
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(360px, 1fr))", gap: 12 }}>
+            {skills.map(s => (
+              <div key={s.id} style={{
+                background: theme.surface, border: `1px solid ${theme.border}`,
+                borderRadius: 12, padding: 14, opacity: s.enabled ? 1 : 0.55,
+              }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+                  <SkillKindBadge kind={s.kind} />
+                  <span style={{ fontFamily: "monospace", fontSize: 12, color: theme.text, fontWeight: 700 }}>{s.name}</span>
+                </div>
+                <div style={{ color: theme.textMuted, fontSize: 12, marginBottom: 10 }}>{s.description || "—"}</div>
+                <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                  <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11, color: theme.textDim, cursor: "pointer" }}>
+                    <input
+                      type="checkbox" checked={!!s.enabled}
+                      onChange={e => onToggleSkill(s.id, e.target.checked)}
+                      style={{ cursor: "pointer" }}
+                    />
+                    {s.enabled ? "已启用（claude/codex 加载中）" : "已停用（symlink 已摘除）"}
+                  </label>
+                  <button
+                    onClick={() => onDeleteSkill(s.id)}
+                    style={{
+                      marginLeft: "auto", padding: "4px 10px", borderRadius: 6,
+                      border: `1px solid ${theme.border}`, background: "transparent",
+                      color: theme.red, cursor: "pointer", fontSize: 11, fontWeight: 700,
+                    }}
+                  >删除</button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <div style={{ color: theme.text, fontSize: 13, fontWeight: 700, marginBottom: 10 }}>检测到的模式</div>
       {patterns.length === 0 ? (
         <div style={{
           border: `1px dashed ${theme.border}`, borderRadius: 12,
@@ -3265,6 +3332,7 @@ export default function App() {
   const [heartbeats, setHeartbeats] = useState([]);
   const [heartbeatTicks, setHeartbeatTicks] = useState([]);
   const [skillData, setSkillData] = useState({ patterns: [], sweep: { running: false, last: null } });
+  const [skills, setSkills] = useState([]);
   const [activeView, setActiveView] = useState("tasks");
   const [showNew, setShowNew] = useState(false);
   const [showNewHeartbeat, setShowNewHeartbeat] = useState(false);
@@ -3327,12 +3395,13 @@ export default function App() {
 
   const poll = useCallback(async () => {
     try {
-      const [taskData, heartbeatData, skillRes] = await Promise.all([
-        fetchTasks(), fetchHeartbeats(), fetchSkillPatterns(),
+      const [taskData, heartbeatData, skillRes, skillsRes] = await Promise.all([
+        fetchTasks(), fetchHeartbeats(), fetchSkillPatterns(), fetchSkills(),
       ]);
       setTasks(taskData);
       setHeartbeats(heartbeatData);
       setSkillData(skillRes);
+      setSkills(skillsRes.skills || []);
       setConnected(true);
       setApiError(null);
     } catch (err) {
@@ -3448,6 +3517,24 @@ export default function App() {
       poll();
     } catch (e) {
       setApiError(`Dismiss failed: ${e.message}`);
+    }
+  };
+
+  const handleSkillToggle = async (id, enabled) => {
+    try {
+      await setSkillEnabledApi(id, enabled);
+      poll();
+    } catch (e) {
+      setApiError(`Toggle skill failed: ${e.message}`);
+    }
+  };
+
+  const handleSkillDelete = async (id) => {
+    try {
+      await deleteSkillApi(id);
+      poll();
+    } catch (e) {
+      setApiError(`Delete skill failed: ${e.message}`);
     }
   };
 
@@ -3766,10 +3853,13 @@ export default function App() {
       ) : (
         <SkillsView
           skillData={skillData}
+          skills={skills}
           onSweep={handleSweep}
           onDraft={handleSkillDraft}
           onApprove={handleSkillApprove}
           onDismiss={handleSkillDismiss}
+          onToggleSkill={handleSkillToggle}
+          onDeleteSkill={handleSkillDelete}
         />
       )}
 
