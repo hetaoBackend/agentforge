@@ -1568,6 +1568,12 @@ def _skill_library_dirs() -> tuple[str, str, str]:
     )
 
 
+def _skill_creator_dir() -> str:
+    """Path to the vendored Anthropic skill-creator skill (dev tree or PyInstaller bundle)."""
+    base = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
+    return os.path.join(base, "vendor", "skill-creator")
+
+
 def _sanitize_skill_name(name: str) -> str:
     """Lowercase kebab slug safe as a directory name (no path traversal)."""
     name = (name or "").strip().lower()
@@ -1988,13 +1994,31 @@ class TaskScheduler(BusAwareSchedulerMixin):
             )
         return "\n\n".join(blocks)
 
-    def _build_distill_prompt(self, pattern: dict, context: str) -> str:
+    def _build_distill_prompt(
+        self, pattern: dict, context: str, skill_creator_rel: Optional[str] = None
+    ) -> str:
         kind = pattern.get("kind", "recipe")
+        if skill_creator_rel:
+            header = (
+                "You are creating a reusable Claude Code skill from a recurring task pattern. "
+                "You MUST author it USING the skill-creator skill, whose full authoring guidance "
+                "is on disk in this working directory at:\n"
+                f"  {skill_creator_rel}\n"
+                "Read that file first and follow its conventions for skill structure, the "
+                "description (triggering accuracy), progressive disclosure, and body style. "
+                "Do NOT run any of skill-creator's scripts, do NOT scaffold a directory on disk, "
+                "do NOT run evals or package anything — your ONLY output is the JSON described "
+                "below.\n\n"
+            )
+        else:
+            header = (
+                "You are creating a reusable Claude Code skill from a recurring task pattern, "
+                "following Anthropic's skill-creator conventions (concise description that states "
+                "what AND when with concrete triggers; imperative body that explains why; "
+                "progressive disclosure; well under 500 lines).\n\n"
+            )
         return (
-            "You evaluate whether a recurring task pattern is worth turning into a reusable "
-            "Claude Code skill, and if so, author it following Anthropic's skill-creator "
-            "conventions.\n\n"
-            f"Pattern key: {pattern['pattern_key']}\n"
+            header + f"Pattern key: {pattern['pattern_key']}\n"
             f"Kind: {kind}\n"
             f"Summary: {pattern.get('summary', '')}\n"
             f"Observed {pattern.get('recurrence_count', 0)} times across these task runs:\n\n"
@@ -2008,15 +2032,10 @@ class TaskScheduler(BusAwareSchedulerMixin):
             "A skill is NOT warranted for one-off, trivial, or purely subjective work (taste, "
             "writing style) with no reusable procedure. Be honest — most patterns are not "
             "skill-worthy.\n\n"
-            "STEP 2 — If worthy, author the skill following these conventions:\n"
-            "  - name: short kebab-case, descriptive.\n"
-            "  - description: this is the PRIMARY trigger. State BOTH what it does AND when to "
-            "use it, in the third person, with concrete trigger phrasing (e.g. 'Use this "
-            "whenever the user wants to X or mentions Y/Z'). Be specific, not abstract.\n"
-            "  - body_markdown: imperative voice ('Do X'); explain WHY each step matters; stay "
-            "general across inputs (do NOT hard-code these specific runs); include the concrete "
-            "steps and an output format where relevant. Keep it concise (well under 500 lines). "
-            "Avoid all-caps MUSTs. No YAML frontmatter.\n\n"
+            "STEP 2 — If worthy, author the SKILL.md using the skill-creator guidance above. "
+            "The description is the PRIMARY trigger: state BOTH what it does AND when to use it, "
+            "third person, concrete trigger phrasing. The body_markdown must NOT include YAML "
+            "frontmatter (it is added separately).\n\n"
             "Respond with ONLY a JSON object, no prose, no code fence:\n"
             '{"worthy": true, "worthiness_reason": "one sentence on why it is / is not '
             'skill-worthy", "name": "short-kebab-name", "description": "what AND when, with '
@@ -2039,8 +2058,27 @@ class TaskScheduler(BusAwareSchedulerMixin):
             tids = json.loads(pattern["contributing_task_ids"]) or []
         except (ValueError, TypeError):
             tids = []
-        prompt = self._build_distill_prompt(pattern, self._build_distill_context(tids))
-        ok, raw = self._run_agent_prompt_once(agent, prompt, ".")
+        context = self._build_distill_context(tids)
+
+        # Run the distill in a throwaway working dir that has the vendored
+        # skill-creator skill loaded, so the agent actually authors the SKILL.md
+        # *using* skill-creator (not just "in its style").
+        import shutil
+        import tempfile
+
+        creator_src = _skill_creator_dir()
+        creator_rel = None
+        workdir = tempfile.mkdtemp(prefix="agentforge-distill-")
+        try:
+            if os.path.isfile(os.path.join(creator_src, "SKILL.md")):
+                dest = os.path.join(workdir, ".claude", "skills", "skill-creator")
+                os.makedirs(dest, exist_ok=True)
+                shutil.copy(os.path.join(creator_src, "SKILL.md"), os.path.join(dest, "SKILL.md"))
+                creator_rel = ".claude/skills/skill-creator/SKILL.md"
+            prompt = self._build_distill_prompt(pattern, context, skill_creator_rel=creator_rel)
+            ok, raw = self._run_agent_prompt_once(agent, prompt, workdir)
+        finally:
+            shutil.rmtree(workdir, ignore_errors=True)
         if not ok:
             raise RuntimeError(raw or "distill agent failed")
         obj = _parse_json_object(raw)
