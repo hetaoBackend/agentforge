@@ -18,15 +18,9 @@ test("parseTaskDateTime keeps naive timestamps in local wall time", () => {
 });
 
 test("formatDateTimeLocalInput converts aware timestamps into local datetime-local values", () => {
-  assert.equal(
-    formatDateTimeLocalInput("2026-03-19T10:04:00+00:00"),
-    "2026-03-19T18:04",
-  );
+  assert.equal(formatDateTimeLocalInput("2026-03-19T10:04:00+00:00"), "2026-03-19T18:04");
 });
 
 test("serializeDateTimeLocalInput preserves local wall time without forcing UTC", () => {
-  assert.equal(
-    serializeDateTimeLocalInput("2026-03-19T18:04"),
-    "2026-03-19T18:04:00",
-  );
+  assert.equal(serializeDateTimeLocalInput("2026-03-19T18:04"), "2026-03-19T18:04:00");
 });

@@ -34,16 +34,24 @@ cd taskboard-electron && npm run make
 
 ### Tests & Quality
 ```bash
-make check        # ⭐ CI gate — ruff lint + ruff format --check + pytest (coverage)
+# Backend (⭐ backend-quality CI job runs `make check`)
+make check        # ruff lint + ruff format --check + pytest (coverage, fail_under=90)
 make test         # pytest only
 make lint         # ruff check ONLY (no format-check, no tests — NOT the CI gate)
 make format       # apply ruff formatting
 uv run pytest -q  # run the Python suite directly
 
-# Frontend unit tests (node built-in runner, no deps):
-node --test taskboard-electron/src/renderer/*.test.mjs
+# Frontend (⭐ frontend-quality CI job runs all four, from taskboard-electron/)
+cd taskboard-electron
+npm run lint          # ESLint (flat config, eslint.config.mjs)
+npm run format:check  # Prettier --check (npm run format to apply)
+npm test              # node --test (pins TZ=Asia/Shanghai — date tests assert local wall time)
+npm run build:check   # vite renderer build — catches compile/import errors
 ```
-CI (`.github/workflows/ci.yml`) runs `make check`. There are 18 pytest files under `tests/` plus `.test.mjs` files beside the renderer.
+CI (`.github/workflows/ci.yml`) runs two jobs: **backend-quality** (`make check`)
+and **frontend-quality** (lint + format check + tests + build). The workflow uses
+`concurrency` to cancel superseded runs on the same ref. There are 34 pytest files
+under `tests/` (backend coverage gate is 90%) plus `.test.mjs` files beside the renderer.
 
 ## Architecture
 
@@ -94,4 +102,4 @@ Single large component (~4200 lines). Key design points:
 ### Always run `make check` after changing code
 - After any change to Python code (or before pushing / reporting done), run **`make check`** — not `make lint`. `make lint` only runs `ruff check`; it skips `ruff format --check` and the tests, so it will pass while CI still fails on formatting or a broken test.
 - If `make check` reports formatting diffs, run `make format` to fix them, then re-run `make check`.
-- For frontend-only changes, also run the renderer node tests (`node --test taskboard-electron/src/renderer/*.test.mjs`); there is no JS linter (`npm run lint` is a no-op).
+- For frontend-only changes, run the frontend gate from `taskboard-electron/`: `npm run lint && npm run format:check && npm test && npm run build:check` (this is exactly what the frontend-quality CI job runs). If `format:check` fails, run `npm run format` to fix.

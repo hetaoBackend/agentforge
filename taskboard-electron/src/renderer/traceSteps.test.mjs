@@ -51,7 +51,7 @@ test("buildExecutionSteps formats command execution details", () => {
   assert.equal(steps.length, 1);
   assert.equal(steps[0].title, "Run command: npm test");
   assert.deepEqual(
-    steps[0].rows.map(row => [row.label, row.value]),
+    steps[0].rows.map((row) => [row.label, row.value]),
     [
       ["Command", "npm test"],
       ["Output", "12 passed"],
@@ -99,7 +99,7 @@ test("buildExecutionSteps summarizes generated image events", () => {
   assert.equal(steps[0].type, "generated_image");
   assert.equal(steps[0].title, "Generated image: result.png");
   assert.deepEqual(
-    steps[0].rows.map(row => [row.label, row.value]),
+    steps[0].rows.map((row) => [row.label, row.value]),
     [
       ["Path", "/Users/example/.codex/generated_images/thread/result.png"],
       ["Media", "image/png"],
@@ -125,7 +125,7 @@ test("buildExecutionSteps preserves renderable image_content previews", () => {
   assert.equal(steps[0].title, "Image output");
   assert.equal(steps[0].imageSrc, "data:image/png;base64,aW1hZ2U=");
   assert.deepEqual(
-    steps[0].rows.map(row => [row.label, row.value]),
+    steps[0].rows.map((row) => [row.label, row.value]),
     [["Media", "image/png"]],
   );
 });

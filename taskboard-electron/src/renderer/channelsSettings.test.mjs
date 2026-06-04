@@ -64,24 +64,14 @@ test("buildChannelsSavePayload serializes weixin settings for the API", () => {
 });
 
 test("isWeixinQrImageSource recognizes real image sources only", () => {
+  assert.equal(isWeixinQrImageSource("data:image/png;base64,abc"), true);
+  assert.equal(isWeixinQrImageSource("https://example.test/qr.png"), true);
   assert.equal(
-    isWeixinQrImageSource("data:image/png;base64,abc"),
-    true,
-  );
-  assert.equal(
-    isWeixinQrImageSource("https://example.test/qr.png"),
-    true,
-  );
-  assert.equal(
-    isWeixinQrImageSource("https://liteapp.weixin.qq.com/q/7GiQu1?qrcode=7a9bf9b71b5bc24cac576b5098adb5b4&b"),
+    isWeixinQrImageSource(
+      "https://liteapp.weixin.qq.com/q/7GiQu1?qrcode=7a9bf9b71b5bc24cac576b5098adb5b4&b",
+    ),
     false,
   );
-  assert.equal(
-    isWeixinQrImageSource("otpauth://totp/example"),
-    false,
-  );
-  assert.equal(
-    isWeixinQrImageSource("wxp://some-qr-payload"),
-    false,
-  );
+  assert.equal(isWeixinQrImageSource("otpauth://totp/example"), false);
+  assert.equal(isWeixinQrImageSource("wxp://some-qr-payload"), false);
 });

@@ -4176,11 +4176,14 @@ class TaskAPIHandler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         if not self._check_csrf():
+            self._drain_body()
             self._json_response({"error": "CSRF token missing or invalid"}, 403)
             return
         parsed = urlparse(self.path)
         path = parsed.path
         body = self._read_body()
+        if body is None:
+            return
 
         if path == "/api/heartbeats":
             heartbeat, error = self._validate_heartbeat_payload(body)
@@ -4619,7 +4622,7 @@ class TaskAPIHandler(BaseHTTPRequestHandler):
                         ("blocked", datetime.now().isoformat(), tid),
                     )
             if should_block:
-                self._notify(tid)
+                self.scheduler._notify(tid)
             self._json_response({"status": "added"})
 
         elif path.startswith("/api/tasks/") and path.endswith("/cancel"):
@@ -4665,11 +4668,14 @@ class TaskAPIHandler(BaseHTTPRequestHandler):
 
     def do_PUT(self):
         if not self._check_csrf():
+            self._drain_body()
             self._json_response({"error": "CSRF token missing or invalid"}, 403)
             return
         parsed = urlparse(self.path)
         path = parsed.path
         body = self._read_body()
+        if body is None:
+            return
 
         if path == "/api/settings":
             for key, value in body.items():
@@ -4887,6 +4893,7 @@ class TaskAPIHandler(BaseHTTPRequestHandler):
 
     def do_DELETE(self):
         if not self._check_csrf():
+            self._drain_body()
             self._json_response({"error": "CSRF token missing or invalid"}, 403)
             return
         parsed = urlparse(self.path)
@@ -4922,14 +4929,44 @@ class TaskAPIHandler(BaseHTTPRequestHandler):
 
     MAX_BODY_SIZE = 10 * 1024 * 1024  # 10 MB
 
-    def _read_body(self) -> dict:
-        length = int(self.headers.get("Content-Length", 0))
+    def _drain_body(self):
+        """Consume and discard the request body (capped) so an early rejection
+        doesn't desync the keep-alive connection and surface to the client as a
+        connection reset instead of the intended response."""
+        try:
+            length = int(self.headers.get("Content-Length", 0))
+        except (TypeError, ValueError):
+            return
+        remaining = min(length, self.MAX_BODY_SIZE)
+        while remaining > 0:
+            chunk = self.rfile.read(min(remaining, 65536))
+            if not chunk:
+                break
+            remaining -= len(chunk)
+
+    def _read_body(self):
+        """Read and JSON-parse the request body.
+
+        Returns the parsed dict, or None if the request was rejected (in which
+        case a response has already been sent — the caller must return). The
+        declared body is always consumed before responding so the connection
+        stays in sync.
+        """
+        try:
+            length = int(self.headers.get("Content-Length", 0))
+        except (TypeError, ValueError):
+            length = 0
         if length > self.MAX_BODY_SIZE:
-            self.send_response(413)
-            self.end_headers()
-            raise ValueError(f"Request body too large: {length} bytes")
-        raw = self.rfile.read(length)
-        return json.loads(raw) if raw else {}
+            self._json_response({"error": "request body too large"}, 413)
+            return None
+        raw = self.rfile.read(length) if length > 0 else b""
+        if not raw:
+            return {}
+        try:
+            return json.loads(raw)
+        except json.JSONDecodeError:
+            self._json_response({"error": "invalid JSON body"}, 400)
+            return None
 
     def _json_response(self, data, status=200):
         try:
