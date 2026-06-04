@@ -3120,6 +3120,21 @@ function SettingsModal({ onClose, timeout: initialTimeout, defaultAgent: initial
 
 // ─── App ───
 
+function parseSkillFrontmatter(body) {
+  const m = (body || "").match(/^---\s*\n([\s\S]*?)\n---/);
+  if (!m) return { name: "", description: "" };
+  const out = { name: "", description: "" };
+  for (const line of m[1].split("\n")) {
+    const i = line.indexOf(":");
+    if (i === -1) continue;
+    const k = line.slice(0, i).trim().toLowerCase();
+    const v = line.slice(i + 1).trim();
+    if (k === "name" && !out.name) out.name = v;
+    if (k === "description" && !out.description) out.description = v;
+  }
+  return out;
+}
+
 function SkillKindBadge({ kind }) {
   const isPitfall = kind === "pitfall";
   return (
@@ -3140,17 +3155,12 @@ function SkillPatternCard({ p, tasks, onDraft, onApprove, onDismiss }) {
   const ready = p.recurrence_count >= 3 && taskCount >= 2;
   const draftStatus = p.draft_status;
   const [expanded, setExpanded] = useState(false);
-  const [name, setName] = useState(p.draft_name || "");
-  const [desc, setDesc] = useState(p.draft_description || "");
   const [body, setBody] = useState(p.draft_body || "");
-  // Sync local edit buffers when a fresh draft arrives (body is stable across polls).
+  // The full SKILL.md is the single source of truth (name + description live in
+  // its frontmatter). Sync the buffer when a fresh draft arrives.
   useEffect(() => {
-    if (draftStatus === "ready") {
-      setName(p.draft_name || "");
-      setDesc(p.draft_description || "");
-      setBody(p.draft_body || "");
-    }
-  }, [draftStatus, p.draft_body, p.draft_name, p.draft_description]);
+    if (draftStatus === "ready") setBody(p.draft_body || "");
+  }, [draftStatus, p.draft_body]);
 
   const borderColor =
     p.status === "promoted" ? theme.green
@@ -3248,31 +3258,51 @@ function SkillPatternCard({ p, tasks, onDraft, onApprove, onDismiss }) {
         <div style={{ fontSize: 12, color: theme.textMuted }}>蒸馏中…</div>
       )}
 
-      {draftStatus === "ready" && (
-        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-          <input
-            value={name} onChange={e => setName(e.target.value)} placeholder="skill name"
-            style={{ padding: "6px 10px", borderRadius: 7, border: `1px solid ${theme.border}`,
-              background: theme.bg, color: theme.text, fontSize: 12, fontFamily: "monospace" }}
-          />
-          <input
-            value={desc} onChange={e => setDesc(e.target.value)} placeholder="description (trigger)"
-            style={{ padding: "6px 10px", borderRadius: 7, border: `1px solid ${theme.border}`,
-              background: theme.bg, color: theme.text, fontSize: 12 }}
-          />
-          <textarea
-            value={body} onChange={e => setBody(e.target.value)} rows={8}
-            style={{ padding: "8px 10px", borderRadius: 7, border: `1px solid ${theme.border}`,
-              background: theme.bg, color: theme.text, fontSize: 11, fontFamily: "monospace", resize: "vertical" }}
-          />
-          <div style={{ display: "flex", gap: 8 }}>
-            <button onClick={() => onApprove(p.id, { name, description: desc, body })} style={btn(theme.green, "#fff")}>
-              批准并写入 ~/.claude/skills
-            </button>
-            <button onClick={() => onDismiss(p.id)} style={btn("transparent", theme.textMuted)}>驳回</button>
+      {draftStatus === "ready" && (() => {
+        const fm = parseSkillFrontmatter(body);
+        return (
+          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+            {/* preview header */}
+            <div style={{ display: "flex", alignItems: "baseline", gap: 8, flexWrap: "wrap" }}>
+              <span style={{
+                fontFamily: "ui-monospace, Menlo, monospace", fontSize: 12, fontWeight: 800,
+                color: theme.accent, background: theme.accentGlow, padding: "3px 9px", borderRadius: 6,
+              }}>{fm.name || "(无 name)"}</span>
+              <span style={{ fontSize: 11, color: theme.textDim }}>
+                → ~/.claude/skills/{fm.name || "…"}/SKILL.md
+              </span>
+            </div>
+            {fm.description && (
+              <div style={{ fontSize: 12, color: theme.textMuted, lineHeight: 1.55 }}>{fm.description}</div>
+            )}
+            {/* editor */}
+            <div>
+              <div style={{ fontSize: 10.5, color: theme.textDim, marginBottom: 5, fontWeight: 600, letterSpacing: 0.3 }}>
+                SKILL.md · 可编辑（frontmatter 决定名称与触发描述）
+              </div>
+              <textarea
+                value={body} onChange={e => setBody(e.target.value)} rows={16} spellCheck={false}
+                style={{
+                  width: "100%", boxSizing: "border-box", padding: "12px 14px", borderRadius: 10,
+                  border: `1px solid ${theme.border}`, background: theme.bg, color: theme.text,
+                  fontSize: 12, fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+                  lineHeight: 1.65, resize: "vertical", outline: "none",
+                }}
+              />
+            </div>
+            <div style={{ display: "flex", gap: 8 }}>
+              <button
+                onClick={() => onApprove(p.id, { body })}
+                style={{ ...btn(theme.green, "#fff"), padding: "8px 18px", fontSize: 12 }}
+              >✓ 批准并写入</button>
+              <button
+                onClick={() => onDismiss(p.id)}
+                style={{ ...btn("transparent", theme.textMuted), padding: "8px 18px", fontSize: 12 }}
+              >驳回</button>
+            </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
     </div>
   );
 }

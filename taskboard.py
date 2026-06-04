@@ -1741,6 +1741,28 @@ def _compose_skill_md(name: str, description: str, body_markdown: str) -> str:
     return f"---\nname: {name}\ndescription: {desc}\n---\n\n{body}\n"
 
 
+def _parse_skill_frontmatter(body: str) -> tuple[str, str]:
+    """Pull name + description out of a SKILL.md's YAML frontmatter (best-effort)."""
+    name, description = "", ""
+    text = (body or "").lstrip()
+    if not text.startswith("---"):
+        return name, description
+    end = text.find("\n---", 3)
+    if end == -1:
+        return name, description
+    for line in text[3:end].splitlines():
+        key, sep, val = line.partition(":")
+        if not sep:
+            continue
+        key = key.strip().lower()
+        val = val.strip()
+        if key == "name" and not name:
+            name = val
+        elif key == "description" and not description:
+            description = val
+    return name, description
+
+
 def _parse_json_object(raw_text: str) -> dict:
     text = (raw_text or "").strip()
     if text.startswith("```"):
@@ -2255,11 +2277,15 @@ class TaskScheduler(BusAwareSchedulerMixin):
         pattern = self.db.get_skill_pattern(pattern_id)
         if not pattern:
             raise ValueError("pattern not found")
-        name = _sanitize_skill_name(name)
-        if not name:
-            raise ValueError("invalid skill name")
         if not (body or "").strip():
             raise ValueError("skill body is empty")
+        # The edited SKILL.md is the single source of truth: derive the skill name
+        # and registry description from its frontmatter, falling back to the args.
+        fm_name, fm_desc = _parse_skill_frontmatter(body)
+        name = _sanitize_skill_name(fm_name or name or pattern["pattern_key"])
+        if not name:
+            raise ValueError("invalid skill name")
+        description = fm_desc or description or ""
         skill_md_path, _ = write_skill_to_disk(name, body)
         skill_id = self.db.add_skill(
             name=name,
