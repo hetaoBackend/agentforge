@@ -519,6 +519,39 @@ class TaskDB:
             ON skill_patterns(status, recurrence_count DESC)
         """)
 
+        # Skill Library: registry of distilled, approved skills. The canonical
+        # SKILL.md lives at `path` (~/.claude/skills/<name>/SKILL.md) and is
+        # symlinked into ~/.agents/skills for codex. `enabled` toggles whether
+        # the symlinks exist (i.e. whether agents load it).
+        self.conn.execute("""
+            CREATE TABLE IF NOT EXISTS skills (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL UNIQUE,
+                description TEXT NOT NULL DEFAULT '',
+                path TEXT NOT NULL,
+                source_pattern_key TEXT,
+                source_task_ids TEXT,
+                kind TEXT,
+                enabled INTEGER NOT NULL DEFAULT 1,
+                created_at TEXT DEFAULT (datetime('now'))
+            )
+        """)
+        # Skill Library: one pending draft per candidate pattern (agent-distilled
+        # SKILL.md awaiting human review/approval).
+        self.conn.execute("""
+            CREATE TABLE IF NOT EXISTS skill_drafts (
+                pattern_id INTEGER PRIMARY KEY,
+                name TEXT DEFAULT '',
+                description TEXT DEFAULT '',
+                kind TEXT DEFAULT 'recipe',
+                body TEXT DEFAULT '',
+                status TEXT NOT NULL DEFAULT 'drafting',
+                error TEXT,
+                updated_at TEXT DEFAULT (datetime('now')),
+                FOREIGN KEY (pattern_id) REFERENCES skill_patterns(id)
+            )
+        """)
+
         # Migration: add dag_id column to tasks
         try:
             self.conn.execute("ALTER TABLE tasks ADD COLUMN dag_id TEXT")
@@ -1162,13 +1195,196 @@ class TaskDB:
         with self.lock:
             rows = self.conn.execute(
                 """
-                SELECT * FROM skill_patterns
-                ORDER BY recurrence_count DESC, last_seen DESC
+                SELECT p.*, d.status AS draft_status, d.name AS draft_name,
+                       d.description AS draft_description, d.kind AS draft_kind,
+                       d.body AS draft_body, d.error AS draft_error
+                FROM skill_patterns p
+                LEFT JOIN skill_drafts d ON d.pattern_id = p.id
+                ORDER BY p.recurrence_count DESC, p.last_seen DESC
                 LIMIT ?
                 """,
                 (limit,),
             ).fetchall()
             return [dict(r) for r in rows]
+
+    def get_skill_pattern(self, pattern_id: int) -> Optional[dict]:
+        with self.lock:
+            row = self.conn.execute(
+                "SELECT * FROM skill_patterns WHERE id = ?", (pattern_id,)
+            ).fetchone()
+            return dict(row) if row else None
+
+    @staticmethod
+    def _within_window(first_seen: str, last_seen: str, window_days: int) -> bool:
+        """True if the pattern's recurrences cluster within `window_days`.
+
+        Tolerant: if timestamps can't be parsed, don't block promotion.
+        """
+        try:
+            f = _parse_comparable_datetime(first_seen)
+            ls = _parse_comparable_datetime(last_seen)
+        except (ValueError, TypeError):
+            return True
+        if f is None or ls is None:
+            return True
+        return (ls - f).days <= window_days
+
+    def refresh_skill_candidates(
+        self, min_recurrence: int = 3, min_tasks: int = 2, window_days: int = 30
+    ) -> int:
+        """Promote 'tracking' patterns that cross the threshold to 'candidate'.
+
+        Threshold (borrowed from pskoett self-improvement): recurrence >= 3 AND
+        >= 2 distinct tasks AND recurrences within a 30-day window. Returns the
+        number newly marked.
+        """
+        marked = 0
+        now = datetime.now().isoformat()
+        with self.lock:
+            rows = self.conn.execute(
+                """
+                SELECT id, recurrence_count, contributing_task_ids, first_seen, last_seen
+                FROM skill_patterns WHERE status = 'tracking'
+                """
+            ).fetchall()
+            for r in rows:
+                if r["recurrence_count"] < min_recurrence:
+                    continue
+                try:
+                    tids = json.loads(r["contributing_task_ids"]) or []
+                except (ValueError, TypeError):
+                    tids = []
+                if len(set(tids)) < min_tasks:
+                    continue
+                if not self._within_window(r["first_seen"], r["last_seen"], window_days):
+                    continue
+                self.conn.execute(
+                    "UPDATE skill_patterns SET status = 'candidate', updated_at = ? WHERE id = ?",
+                    (now, r["id"]),
+                )
+                marked += 1
+            if marked:
+                self.conn.commit()
+        return marked
+
+    def set_skill_pattern_status(
+        self, pattern_id: int, status: str, promoted_skill_id: Optional[int] = None
+    ):
+        with self.lock:
+            self.conn.execute(
+                """
+                UPDATE skill_patterns
+                SET status = ?, promoted_skill_id = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (status, promoted_skill_id, datetime.now().isoformat(), pattern_id),
+            )
+            self.conn.commit()
+
+    # ── Skill drafts ───────────────────────────────────────────────────────
+    def upsert_skill_draft(
+        self,
+        pattern_id: int,
+        status: str,
+        name: str = "",
+        description: str = "",
+        kind: str = "recipe",
+        body: str = "",
+        error: Optional[str] = None,
+    ):
+        with self.lock:
+            self.conn.execute(
+                """
+                INSERT INTO skill_drafts (pattern_id, name, description, kind, body, status, error, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(pattern_id) DO UPDATE SET
+                    name = excluded.name,
+                    description = excluded.description,
+                    kind = excluded.kind,
+                    body = excluded.body,
+                    status = excluded.status,
+                    error = excluded.error,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    pattern_id,
+                    name,
+                    description,
+                    kind,
+                    body,
+                    status,
+                    error,
+                    datetime.now().isoformat(),
+                ),
+            )
+            self.conn.commit()
+
+    def get_skill_draft(self, pattern_id: int) -> Optional[dict]:
+        with self.lock:
+            row = self.conn.execute(
+                "SELECT * FROM skill_drafts WHERE pattern_id = ?", (pattern_id,)
+            ).fetchone()
+            return dict(row) if row else None
+
+    def delete_skill_draft(self, pattern_id: int):
+        with self.lock:
+            self.conn.execute("DELETE FROM skill_drafts WHERE pattern_id = ?", (pattern_id,))
+            self.conn.commit()
+
+    # ── Skill registry ─────────────────────────────────────────────────────
+    def add_skill(
+        self,
+        name: str,
+        description: str,
+        path: str,
+        source_pattern_key: Optional[str] = None,
+        source_task_ids: Optional[str] = None,
+        kind: Optional[str] = None,
+    ) -> int:
+        with self.lock:
+            cur = self.conn.execute(
+                """
+                INSERT INTO skills (name, description, path, source_pattern_key, source_task_ids, kind, enabled)
+                VALUES (?, ?, ?, ?, ?, ?, 1)
+                ON CONFLICT(name) DO UPDATE SET
+                    description = excluded.description,
+                    path = excluded.path,
+                    source_pattern_key = excluded.source_pattern_key,
+                    source_task_ids = excluded.source_task_ids,
+                    kind = excluded.kind,
+                    enabled = 1
+                """,
+                (name, description, path, source_pattern_key, source_task_ids, kind),
+            )
+            self.conn.commit()
+            if cur.lastrowid:
+                return cur.lastrowid
+            row = self.conn.execute("SELECT id FROM skills WHERE name = ?", (name,)).fetchone()
+            return row["id"] if row else None
+
+    def get_skills(self) -> list[dict]:
+        with self.lock:
+            rows = self.conn.execute(
+                "SELECT * FROM skills ORDER BY created_at DESC"
+            ).fetchall()
+            return [dict(r) for r in rows]
+
+    def get_skill(self, skill_id: int) -> Optional[dict]:
+        with self.lock:
+            row = self.conn.execute("SELECT * FROM skills WHERE id = ?", (skill_id,)).fetchone()
+            return dict(row) if row else None
+
+    def set_skill_enabled(self, skill_id: int, enabled: bool):
+        with self.lock:
+            self.conn.execute(
+                "UPDATE skills SET enabled = ? WHERE id = ?", (1 if enabled else 0, skill_id)
+            )
+            self.conn.commit()
+
+    def delete_skill(self, skill_id: int):
+        with self.lock:
+            self.conn.execute("DELETE FROM skills WHERE id = ?", (skill_id,))
+            self.conn.commit()
 
     def add_dependency(self, task_id: int, depends_on_task_id: int, inject_result: bool = False):
         with self.lock:
@@ -1322,6 +1538,103 @@ class AgentExecutor:
 
 
 # ──────────────────────────── Scheduler ────────────────────────────
+
+
+# ── Skill Library: on-disk skill files ─────────────────────────────────────
+# Canonical SKILL.md lives in an AgentForge-owned dir and is symlinked into
+# each agent's native skill dir. Both agents load via their own progressive
+# disclosure; enable/disable just adds/removes the two symlinks (canonical kept).
+def _skill_library_dirs() -> tuple[str, str, str]:
+    return (
+        os.path.expanduser("~/.agentforge/skills"),  # canonical (AgentForge-owned)
+        os.path.expanduser("~/.claude/skills"),  # claude consumer
+        os.path.expanduser("~/.agents/skills"),  # codex consumer
+    )
+
+
+def _sanitize_skill_name(name: str) -> str:
+    """Lowercase kebab slug safe as a directory name (no path traversal)."""
+    name = (name or "").strip().lower()
+    slug = "".join(ch if ch.isalnum() else "-" for ch in name)
+    while "--" in slug:
+        slug = slug.replace("--", "-")
+    return slug.strip("-")
+
+
+def link_skill(name: str) -> list[str]:
+    """Create/refresh the claude + codex symlinks pointing at the canonical dir."""
+    canonical_root, claude_root, agents_root = _skill_library_dirs()
+    skill_dir = os.path.join(canonical_root, name)
+    links = []
+    for root in (claude_root, agents_root):
+        os.makedirs(root, exist_ok=True)
+        link = os.path.join(root, name)
+        if os.path.islink(link):
+            os.unlink(link)
+        if not os.path.exists(link):
+            try:
+                os.symlink(skill_dir, link, target_is_directory=True)
+            except OSError as e:
+                logger.warning(f"symlink {link} failed: {e}")
+        links.append(link)
+    return links
+
+
+def unlink_skill(name: str) -> None:
+    """Remove both consumer symlinks; leave the canonical dir intact."""
+    _canonical_root, claude_root, agents_root = _skill_library_dirs()
+    for root in (claude_root, agents_root):
+        link = os.path.join(root, name)
+        if os.path.islink(link):
+            try:
+                os.unlink(link)
+            except OSError:
+                pass
+
+
+def write_skill_to_disk(name: str, body: str) -> tuple[str, str]:
+    """Write canonical SKILL.md and create both symlinks. Returns (md_path, dir)."""
+    canonical_root, _claude_root, _agents_root = _skill_library_dirs()
+    skill_dir = os.path.join(canonical_root, name)
+    os.makedirs(skill_dir, exist_ok=True)
+    skill_md = os.path.join(skill_dir, "SKILL.md")
+    with open(skill_md, "w", encoding="utf-8") as f:
+        f.write(body)
+    link_skill(name)
+    return skill_md, skill_dir
+
+
+def remove_skill_from_disk(name: str) -> None:
+    """Remove symlinks and the canonical dir entirely (used on delete)."""
+    unlink_skill(name)
+    canonical_root, _claude_root, _agents_root = _skill_library_dirs()
+    skill_dir = os.path.join(canonical_root, name)
+    if os.path.isdir(skill_dir):
+        import shutil
+
+        shutil.rmtree(skill_dir, ignore_errors=True)
+
+
+def _compose_skill_md(name: str, description: str, body_markdown: str) -> str:
+    desc = (description or "").replace("\n", " ").strip()
+    body = (body_markdown or "").strip()
+    return f"---\nname: {name}\ndescription: {desc}\n---\n\n{body}\n"
+
+
+def _parse_json_object(raw_text: str) -> dict:
+    text = (raw_text or "").strip()
+    if text.startswith("```"):
+        lines = [ln for ln in text.splitlines() if not ln.strip().startswith("```")]
+        text = "\n".join(lines).strip()
+    if not text.startswith("{"):
+        start = text.find("{")
+        end = text.rfind("}")
+        if start != -1 and end != -1 and end > start:
+            text = text[start : end + 1]
+    data = json.loads(text)
+    if not isinstance(data, dict):
+        raise ValueError("expected JSON object")
+    return data
 
 
 class TaskScheduler(BusAwareSchedulerMixin):
@@ -1572,9 +1885,11 @@ class TaskScheduler(BusAwareSchedulerMixin):
         )
         if new_watermark and new_watermark != watermark:
             self.db.set_setting("skill_sweep_watermark", new_watermark)
+        candidates = self.db.refresh_skill_candidates()
         result = {
             "scanned": len(runs),
             "detected": detected,
+            "candidates": candidates,
             "watermark": new_watermark,
             "agent": agent,
         }
@@ -1609,6 +1924,124 @@ class TaskScheduler(BusAwareSchedulerMixin):
         with self._skill_sweep_lock:
             running = self._skill_sweep_running
         return {"running": running, "last": self._last_skill_sweep}
+
+    # ── Skill Library: distillation / approval ─────────────────────────────
+    def _build_distill_context(self, tids: list) -> str:
+        blocks = []
+        for tid in tids[:5]:
+            task = self.db.get_task(tid)
+            if not task:
+                continue
+            runs = self.db.get_task_runs(tid, limit=1)
+            result = (runs[0].get("result") if runs else "") or ""
+            blocks.append(
+                f"[task #{tid}] {task.get('title') or 'Untitled'}\n"
+                f"  prompt: {(task.get('prompt') or '').strip()[:600]}\n"
+                f"  result: {result.strip()[:600]}"
+            )
+        return "\n\n".join(blocks)
+
+    def _build_distill_prompt(self, pattern: dict, context: str) -> str:
+        kind = pattern.get("kind", "recipe")
+        return (
+            f"You are distilling a recurring {kind} into a reusable Claude Code skill (SKILL.md).\n\n"
+            f"Pattern key: {pattern['pattern_key']}\n"
+            f"Summary: {pattern.get('summary', '')}\n"
+            f"Observed {pattern.get('recurrence_count', 0)} times across these task runs:\n\n"
+            f"{context}\n\n"
+            "Write a self-contained skill that captures this capability for reuse in fresh contexts.\n"
+            'For a "recipe": describe the repeatable approach/steps and when to apply it.\n'
+            'For a "pitfall": describe the trap and the verified fix to avoid it next time.\n\n'
+            "Respond with ONLY a JSON object, no prose, no code fence:\n"
+            '{"name":"short-kebab-name",'
+            '"description":"one-sentence trigger description (when to use this skill)",'
+            '"body_markdown":"the skill body in markdown — do NOT include YAML frontmatter"}\n'
+        )
+
+    def distill_skill_draft(self, pattern_id: int, agent: Optional[str] = None) -> dict:
+        """Synchronous distill core (tested directly). Saves a 'ready' draft."""
+        pattern = self.db.get_skill_pattern(pattern_id)
+        if not pattern:
+            raise ValueError("pattern not found")
+        agent = (
+            agent
+            or self.db.get_setting("skill_sweep_agent", None)
+            or self.db.get_setting("default_agent", "claude")
+        )
+        try:
+            tids = json.loads(pattern["contributing_task_ids"]) or []
+        except (ValueError, TypeError):
+            tids = []
+        prompt = self._build_distill_prompt(pattern, self._build_distill_context(tids))
+        ok, raw = self._run_agent_prompt_once(agent, prompt, ".")
+        if not ok:
+            raise RuntimeError(raw or "distill agent failed")
+        obj = _parse_json_object(raw)
+        name = _sanitize_skill_name(obj.get("name") or pattern["pattern_key"])
+        description = str(obj.get("description", "")).strip()
+        body_md = str(obj.get("body_markdown") or obj.get("body") or "").strip()
+        skill_md = _compose_skill_md(name, description, body_md)
+        self.db.upsert_skill_draft(
+            pattern_id, "ready", name=name, description=description,
+            kind=pattern["kind"], body=skill_md,
+        )
+        return {
+            "pattern_id": pattern_id,
+            "name": name,
+            "description": description,
+            "kind": pattern["kind"],
+            "body": skill_md,
+        }
+
+    def trigger_skill_draft(self, pattern_id: int, agent: Optional[str] = None) -> bool:
+        """Start distillation in the background (single-threaded server)."""
+        pattern = self.db.get_skill_pattern(pattern_id)
+        if not pattern:
+            return False
+        self.db.upsert_skill_draft(pattern_id, "drafting", kind=pattern["kind"])
+
+        def _worker():
+            try:
+                self.distill_skill_draft(pattern_id, agent)
+            except Exception as e:  # noqa: BLE001 - surface to draft row, never crash
+                logger.error(f"Skill distill failed: {e}")
+                self.db.upsert_skill_draft(
+                    pattern_id, "error", kind=pattern["kind"], error=str(e)
+                )
+
+        threading.Thread(target=_worker, daemon=True).start()
+        return True
+
+    def approve_skill(
+        self, pattern_id: int, name: str, description: str, body: str
+    ) -> Optional[dict]:
+        """Write the approved SKILL.md, symlink it for both agents, register it."""
+        pattern = self.db.get_skill_pattern(pattern_id)
+        if not pattern:
+            raise ValueError("pattern not found")
+        name = _sanitize_skill_name(name)
+        if not name:
+            raise ValueError("invalid skill name")
+        if not (body or "").strip():
+            raise ValueError("skill body is empty")
+        skill_md_path, _ = write_skill_to_disk(name, body)
+        skill_id = self.db.add_skill(
+            name=name,
+            description=description or "",
+            path=skill_md_path,
+            source_pattern_key=pattern["pattern_key"],
+            source_task_ids=pattern["contributing_task_ids"],
+            kind=pattern["kind"],
+        )
+        self.db.set_skill_pattern_status(pattern_id, "promoted", promoted_skill_id=skill_id)
+        self.db.delete_skill_draft(pattern_id)
+        return self.db.get_skill(skill_id)
+
+    def dismiss_skill_pattern(self, pattern_id: int) -> None:
+        if not self.db.get_skill_pattern(pattern_id):
+            raise ValueError("pattern not found")
+        self.db.set_skill_pattern_status(pattern_id, "dismissed")
+        self.db.delete_skill_draft(pattern_id)
 
     def _build_sweep_prompt(self, runs: list[dict], existing: list[dict]) -> str:
         if existing:
@@ -3348,6 +3781,9 @@ class TaskAPIHandler(BaseHTTPRequestHandler):
                 }
             )
 
+        elif path == "/api/skills":
+            self._json_response({"skills": self.db.get_skills()})
+
         elif path == "/api/csrf-token":
             self._json_response({"csrf_token": _CSRF_TOKEN})
 
@@ -3481,6 +3917,38 @@ class TaskAPIHandler(BaseHTTPRequestHandler):
                 self._json_response({"error": "sweep already running"}, 409)
                 return
             self._json_response({"status": "started"})
+
+        elif path.startswith("/api/skill-patterns/") and path.endswith("/draft"):
+            pid = int(path.split("/")[3])
+            if not self.scheduler.trigger_skill_draft(pid, body.get("agent")):
+                self._json_response({"error": "pattern not found"}, 404)
+                return
+            self._json_response({"status": "drafting"})
+
+        elif path.startswith("/api/skill-patterns/") and path.endswith("/approve"):
+            pid = int(path.split("/")[3])
+            draft = self.db.get_skill_draft(pid)
+            name = body.get("name") or (draft or {}).get("name", "")
+            description = body.get("description")
+            if description is None:
+                description = (draft or {}).get("description", "")
+            skill_body = body.get("body") or (draft or {}).get("body", "")
+            try:
+                skill = self.scheduler.approve_skill(pid, name, description, skill_body)
+            except ValueError as e:
+                status = 404 if "not found" in str(e) else 400
+                self._json_response({"error": str(e)}, status)
+                return
+            self._json_response({"status": "approved", "skill": skill})
+
+        elif path.startswith("/api/skill-patterns/") and path.endswith("/dismiss"):
+            pid = int(path.split("/")[3])
+            try:
+                self.scheduler.dismiss_skill_pattern(pid)
+            except ValueError as e:
+                self._json_response({"error": str(e)}, 404)
+                return
+            self._json_response({"status": "dismissed"})
 
         elif path == "/api/tasks":
             # ── Input validation ──────────────────────────────────────

@@ -542,6 +542,35 @@ async function triggerSkillSweep(agent) {
   return payload;
 }
 
+async function triggerSkillDraft(id, agent) {
+  const res = await fetch(`${API}/skill-patterns/${id}/draft`, {
+    method: "POST", headers: await csrfHeaders(),
+    body: JSON.stringify(agent ? { agent } : {}),
+  });
+  const payload = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(payload.error || `HTTP ${res.status}`);
+  return payload;
+}
+
+async function approveSkill(id, data) {
+  const res = await fetch(`${API}/skill-patterns/${id}/approve`, {
+    method: "POST", headers: await csrfHeaders(),
+    body: JSON.stringify(data),
+  });
+  const payload = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(payload.error || `HTTP ${res.status}`);
+  return payload;
+}
+
+async function dismissSkillPattern(id) {
+  const res = await fetch(`${API}/skill-patterns/${id}/dismiss`, {
+    method: "POST", headers: await csrfHeaders(), body: "{}",
+  });
+  const payload = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(payload.error || `HTTP ${res.status}`);
+  return payload;
+}
+
 async function createHeartbeat(data) {
   const res = await fetch(`${API}/heartbeats`, {
     method: "POST", headers: await csrfHeaders(),
@@ -3021,7 +3050,103 @@ function SkillKindBadge({ kind }) {
   );
 }
 
-function SkillsView({ skillData, onSweep }) {
+function SkillPatternCard({ p, onDraft, onApprove, onDismiss }) {
+  let taskCount = 0;
+  try { taskCount = (JSON.parse(p.contributing_task_ids || "[]")).length; } catch { /* ignore */ }
+  const ready = p.recurrence_count >= 3 && taskCount >= 2;
+  const draftStatus = p.draft_status;
+  const [name, setName] = useState(p.draft_name || "");
+  const [desc, setDesc] = useState(p.draft_description || "");
+  const [body, setBody] = useState(p.draft_body || "");
+  // Sync local edit buffers when a fresh draft arrives (body is stable across polls).
+  useEffect(() => {
+    if (draftStatus === "ready") {
+      setName(p.draft_name || "");
+      setDesc(p.draft_description || "");
+      setBody(p.draft_body || "");
+    }
+  }, [draftStatus, p.draft_body, p.draft_name, p.draft_description]);
+
+  const borderColor =
+    p.status === "promoted" ? theme.green
+    : p.status === "candidate" ? theme.accent
+    : theme.border;
+  const muted = p.status === "dismissed";
+
+  const btn = (bg, color) => ({
+    padding: "6px 14px", borderRadius: 7, border: bg === "transparent" ? `1px solid ${theme.border}` : "none",
+    background: bg, color, cursor: "pointer", fontSize: 11, fontWeight: 700,
+  });
+
+  return (
+    <div style={{
+      background: theme.surface, border: `1px solid ${borderColor}`,
+      borderRadius: 12, padding: 16, opacity: muted ? 0.5 : 1,
+    }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+        <SkillKindBadge kind={p.kind} />
+        <span style={{ fontFamily: "monospace", fontSize: 12, color: theme.text, fontWeight: 700 }}>
+          {p.pattern_key}
+        </span>
+      </div>
+      <div style={{ color: theme.textMuted, fontSize: 13, marginBottom: 10 }}>{p.summary || "—"}</div>
+      <div style={{ display: "flex", gap: 12, fontSize: 11, color: theme.textDim, marginBottom: 10 }}>
+        <span>复发 {p.recurrence_count}×</span>
+        <span>{taskCount} 个任务</span>
+        <span>{p.status}</span>
+        {ready && p.status !== "promoted" && <span style={{ color: theme.accent, fontWeight: 700 }}>✓ 达标</span>}
+      </div>
+
+      {p.status === "promoted" && (
+        <div style={{ fontSize: 12, color: theme.green, fontWeight: 700 }}>✓ 已沉淀为 Skill</div>
+      )}
+
+      {p.status === "candidate" && draftStatus !== "ready" && draftStatus !== "drafting" && (
+        <div style={{ display: "flex", gap: 8 }}>
+          <button onClick={() => onDraft(p.id)} style={btn(theme.accent, "#fff")}>
+            {draftStatus === "error" ? "重试蒸馏" : "蒸馏成 Skill"}
+          </button>
+          <button onClick={() => onDismiss(p.id)} style={btn("transparent", theme.textMuted)}>驳回</button>
+          {draftStatus === "error" && (
+            <span style={{ color: theme.red, fontSize: 11, alignSelf: "center" }}>蒸馏失败：{p.draft_error}</span>
+          )}
+        </div>
+      )}
+
+      {draftStatus === "drafting" && (
+        <div style={{ fontSize: 12, color: theme.textMuted }}>蒸馏中…</div>
+      )}
+
+      {draftStatus === "ready" && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          <input
+            value={name} onChange={e => setName(e.target.value)} placeholder="skill name"
+            style={{ padding: "6px 10px", borderRadius: 7, border: `1px solid ${theme.border}`,
+              background: theme.bg, color: theme.text, fontSize: 12, fontFamily: "monospace" }}
+          />
+          <input
+            value={desc} onChange={e => setDesc(e.target.value)} placeholder="description (trigger)"
+            style={{ padding: "6px 10px", borderRadius: 7, border: `1px solid ${theme.border}`,
+              background: theme.bg, color: theme.text, fontSize: 12 }}
+          />
+          <textarea
+            value={body} onChange={e => setBody(e.target.value)} rows={8}
+            style={{ padding: "8px 10px", borderRadius: 7, border: `1px solid ${theme.border}`,
+              background: theme.bg, color: theme.text, fontSize: 11, fontFamily: "monospace", resize: "vertical" }}
+          />
+          <div style={{ display: "flex", gap: 8 }}>
+            <button onClick={() => onApprove(p.id, { name, description: desc, body })} style={btn(theme.green, "#fff")}>
+              批准并写入 ~/.claude/skills
+            </button>
+            <button onClick={() => onDismiss(p.id)} style={btn("transparent", theme.textMuted)}>驳回</button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function SkillsView({ skillData, onSweep, onDraft, onApprove, onDismiss }) {
   const patterns = skillData.patterns || [];
   const sweep = skillData.sweep || {};
   const running = sweep.running;
@@ -3030,7 +3155,7 @@ function SkillsView({ skillData, onSweep }) {
   if (last) {
     lastNote = last.error
       ? `上次扫描失败：${last.error}`
-      : `上次扫描：扫描 ${last.scanned}、检出 ${last.detected}（agent ${last.agent}）`;
+      : `上次扫描：扫描 ${last.scanned}、检出 ${last.detected}、候选 ${last.candidates ?? 0}（agent ${last.agent}）`;
   }
   return (
     <div style={{ padding: 28, minHeight: "calc(100vh - 72px)" }}>
@@ -3062,32 +3187,15 @@ function SkillsView({ skillData, onSweep }) {
         </div>
       ) : (
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(360px, 1fr))", gap: 14 }}>
-          {patterns.map(p => {
-            let taskCount = 0;
-            try { taskCount = (JSON.parse(p.contributing_task_ids || "[]")).length; } catch { /* ignore */ }
-            const ready = p.recurrence_count >= 3 && taskCount >= 2;
-            return (
-              <div key={p.id} style={{
-                background: theme.surface,
-                border: `1px solid ${ready ? theme.accent : theme.border}`,
-                borderRadius: 12, padding: 16,
-              }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
-                  <SkillKindBadge kind={p.kind} />
-                  <span style={{ fontFamily: "monospace", fontSize: 12, color: theme.text, fontWeight: 700 }}>
-                    {p.pattern_key}
-                  </span>
-                </div>
-                <div style={{ color: theme.textMuted, fontSize: 13, marginBottom: 10 }}>{p.summary || "—"}</div>
-                <div style={{ display: "flex", gap: 12, fontSize: 11, color: theme.textDim }}>
-                  <span>复发 {p.recurrence_count}×</span>
-                  <span>{taskCount} 个任务</span>
-                  <span>{p.status}</span>
-                  {ready && <span style={{ color: theme.accent, fontWeight: 700 }}>✓ 达标</span>}
-                </div>
-              </div>
-            );
-          })}
+          {patterns.map(p => (
+            <SkillPatternCard
+              key={p.id}
+              p={p}
+              onDraft={onDraft}
+              onApprove={onApprove}
+              onDismiss={onDismiss}
+            />
+          ))}
         </div>
       )}
     </div>
@@ -3255,6 +3363,33 @@ export default function App() {
       setTimeout(poll, 1500);
     } catch (e) {
       setApiError(`Sweep failed: ${e.message}`);
+    }
+  };
+
+  const handleSkillDraft = async (id) => {
+    try {
+      await triggerSkillDraft(id);
+      setTimeout(poll, 1500);
+    } catch (e) {
+      setApiError(`Distill failed: ${e.message}`);
+    }
+  };
+
+  const handleSkillApprove = async (id, data) => {
+    try {
+      await approveSkill(id, data);
+      poll();
+    } catch (e) {
+      setApiError(`Approve failed: ${e.message}`);
+    }
+  };
+
+  const handleSkillDismiss = async (id) => {
+    try {
+      await dismissSkillPattern(id);
+      poll();
+    } catch (e) {
+      setApiError(`Dismiss failed: ${e.message}`);
     }
   };
 
@@ -3571,7 +3706,13 @@ export default function App() {
           </div>
         </div>
       ) : (
-        <SkillsView skillData={skillData} onSweep={handleSweep} />
+        <SkillsView
+          skillData={skillData}
+          onSweep={handleSweep}
+          onDraft={handleSkillDraft}
+          onApprove={handleSkillApprove}
+          onDismiss={handleSkillDismiss}
+        />
       )}
 
       {/* Modals */}
