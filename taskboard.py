@@ -495,6 +495,30 @@ class TaskDB:
             ON task_dependencies(depends_on_task_id)
         """)
 
+        # Skill Library: cross-run pattern ledger. The sweep agent tallies
+        # recurring task patterns here (dedup by semantic pattern_key); once a
+        # pattern crosses the recurrence threshold it becomes a skill candidate.
+        self.conn.execute("""
+            CREATE TABLE IF NOT EXISTS skill_patterns (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                pattern_key TEXT NOT NULL UNIQUE,
+                kind TEXT NOT NULL DEFAULT 'recipe',
+                summary TEXT NOT NULL DEFAULT '',
+                recurrence_count INTEGER NOT NULL DEFAULT 1,
+                first_seen TEXT DEFAULT (datetime('now')),
+                last_seen TEXT DEFAULT (datetime('now')),
+                contributing_task_ids TEXT NOT NULL DEFAULT '[]',
+                status TEXT NOT NULL DEFAULT 'tracking',
+                promoted_skill_id INTEGER,
+                created_at TEXT DEFAULT (datetime('now')),
+                updated_at TEXT DEFAULT (datetime('now'))
+            )
+        """)
+        self.conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_skill_patterns_status
+            ON skill_patterns(status, recurrence_count DESC)
+        """)
+
         # Migration: add dag_id column to tasks
         try:
             self.conn.execute("ALTER TABLE tasks ADD COLUMN dag_id TEXT")
@@ -1049,6 +1073,103 @@ class TaskDB:
             ).fetchall()
             return [dict(r) for r in rows]
 
+    # ── Skill Library: pattern ledger ──────────────────────────────────────
+    def get_completed_runs_since(self, watermark: str, limit: int = 50) -> list[dict]:
+        """Completed task runs finished after `watermark`, oldest first.
+
+        Joined with task metadata so the sweep agent can read what each run did.
+        Ordering ASC + limit makes the watermark advance incrementally so a large
+        backlog is processed across several sweeps rather than all at once.
+        """
+        with self.lock:
+            rows = self.conn.execute(
+                """
+                SELECT r.id AS run_id, r.task_id, r.finished_at, r.result,
+                       t.title, t.prompt, t.working_dir, t.agent
+                FROM task_runs r
+                JOIN tasks t ON t.id = r.task_id
+                WHERE r.status = 'completed'
+                  AND r.finished_at IS NOT NULL
+                  AND r.finished_at > ?
+                ORDER BY r.finished_at ASC
+                LIMIT ?
+                """,
+                (watermark or "", limit),
+            ).fetchall()
+            return [dict(r) for r in rows]
+
+    def upsert_skill_pattern(
+        self, pattern_key: str, kind: str, summary: str, task_id: Optional[int]
+    ) -> Optional[int]:
+        """Record one observation of a pattern. Dedup by exact pattern_key.
+
+        Semantic matching is done by the sweep agent (it reuses an existing key);
+        here we only do exact-key upsert: bump recurrence_count, merge the task id
+        into the distinct contributing set, refresh summary/last_seen.
+        """
+        pattern_key = (pattern_key or "").strip()
+        if not pattern_key:
+            return None
+        kind = kind if kind in ("recipe", "pitfall") else "recipe"
+        now = datetime.now().isoformat()
+        with self.lock:
+            row = self.conn.execute(
+                "SELECT id, contributing_task_ids FROM skill_patterns WHERE pattern_key = ?",
+                (pattern_key,),
+            ).fetchone()
+            if row:
+                try:
+                    tids = list(json.loads(row["contributing_task_ids"]) or [])
+                except (ValueError, TypeError):
+                    tids = []
+                if task_id is not None and task_id not in tids:
+                    tids.append(task_id)
+                self.conn.execute(
+                    """
+                    UPDATE skill_patterns
+                    SET recurrence_count = recurrence_count + 1,
+                        last_seen = ?,
+                        updated_at = ?,
+                        summary = CASE WHEN ? != '' THEN ? ELSE summary END,
+                        contributing_task_ids = ?
+                    WHERE id = ?
+                    """,
+                    (
+                        now,
+                        now,
+                        summary or "",
+                        summary or "",
+                        json.dumps(tids, ensure_ascii=False),
+                        row["id"],
+                    ),
+                )
+                self.conn.commit()
+                return row["id"]
+            tids = [task_id] if task_id is not None else []
+            cur = self.conn.execute(
+                """
+                INSERT INTO skill_patterns
+                    (pattern_key, kind, summary, recurrence_count,
+                     first_seen, last_seen, contributing_task_ids, status)
+                VALUES (?, ?, ?, 1, ?, ?, ?, 'tracking')
+                """,
+                (pattern_key, kind, summary or "", now, now, json.dumps(tids, ensure_ascii=False)),
+            )
+            self.conn.commit()
+            return cur.lastrowid
+
+    def get_skill_patterns(self, limit: int = 200) -> list[dict]:
+        with self.lock:
+            rows = self.conn.execute(
+                """
+                SELECT * FROM skill_patterns
+                ORDER BY recurrence_count DESC, last_seen DESC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+            return [dict(r) for r in rows]
+
     def add_dependency(self, task_id: int, depends_on_task_id: int, inject_result: bool = False):
         with self.lock:
             self.conn.execute(
@@ -1229,6 +1350,10 @@ class TaskScheduler(BusAwareSchedulerMixin):
         self._active_pgids: dict[int, int] = {}  # task_id -> process group id
         self._codex_item_text: dict[tuple[Optional[int], str], str] = {}
         self._claude_message_text: dict[tuple[Optional[int], str], str] = {}
+        # Skill Library sweep state (manual + scheduled share this guard)
+        self._skill_sweep_lock = threading.Lock()
+        self._skill_sweep_running = False
+        self._last_skill_sweep: Optional[dict] = None
 
     def start(self):
         self._running = True
@@ -1395,6 +1520,147 @@ class TaskScheduler(BusAwareSchedulerMixin):
         if not isinstance(normalized["metadata"], dict):
             raise ValueError("Heartbeat decision metadata must be an object")
         return normalized
+
+    # ── Skill Library: cross-run sweep ─────────────────────────────────────
+    SKILL_SWEEP_RUN_LIMIT = 50
+
+    def run_skill_sweep(self, agent: Optional[str] = None) -> dict:
+        """Synchronous sweep core (tested directly).
+
+        Reads completed runs since the watermark, asks an agent to tally recurring
+        patterns (reusing existing pattern_keys), upserts them, advances the
+        watermark. Never re-scans already-processed history.
+        """
+        agent = (
+            agent
+            or self.db.get_setting("skill_sweep_agent", None)
+            or self.db.get_setting("default_agent", "claude")
+        )
+        watermark = self.db.get_setting("skill_sweep_watermark", "") or ""
+        runs = self.db.get_completed_runs_since(watermark, limit=self.SKILL_SWEEP_RUN_LIMIT)
+        if not runs:
+            result = {"scanned": 0, "detected": 0, "watermark": watermark, "agent": agent}
+            self._last_skill_sweep = result
+            return result
+
+        existing = self.db.get_skill_patterns()
+        prompt = self._build_sweep_prompt(runs, existing)
+        ok, raw = self._run_agent_prompt_once(agent, prompt, ".")
+        if not ok:
+            raise RuntimeError(raw or "skill sweep agent failed")
+
+        detected = 0
+        for item in self._parse_sweep_output(raw):
+            if not isinstance(item, dict):
+                continue
+            raw_tid = item.get("task_id")
+            try:
+                tid = int(raw_tid) if raw_tid is not None else None
+            except (ValueError, TypeError):
+                tid = None
+            pid = self.db.upsert_skill_pattern(
+                item.get("pattern_key", ""),
+                item.get("kind", "recipe"),
+                str(item.get("summary", "")),
+                tid,
+            )
+            if pid is not None:
+                detected += 1
+
+        new_watermark = max(
+            (r["finished_at"] for r in runs if r.get("finished_at")), default=watermark
+        )
+        if new_watermark and new_watermark != watermark:
+            self.db.set_setting("skill_sweep_watermark", new_watermark)
+        result = {
+            "scanned": len(runs),
+            "detected": detected,
+            "watermark": new_watermark,
+            "agent": agent,
+        }
+        self._last_skill_sweep = result
+        return result
+
+    def trigger_skill_sweep(self, agent: Optional[str] = None) -> bool:
+        """Start a sweep in the background. Returns False if one is already running.
+
+        The HTTP server is single-threaded, so a sweep (which can take minutes)
+        must not block the request thread.
+        """
+        with self._skill_sweep_lock:
+            if self._skill_sweep_running:
+                return False
+            self._skill_sweep_running = True
+
+        def _worker():
+            try:
+                self.run_skill_sweep(agent)
+            except Exception as e:  # noqa: BLE001 - surface to status, never crash thread
+                logger.error(f"Skill sweep failed: {e}")
+                self._last_skill_sweep = {"error": str(e)}
+            finally:
+                with self._skill_sweep_lock:
+                    self._skill_sweep_running = False
+
+        threading.Thread(target=_worker, daemon=True).start()
+        return True
+
+    def skill_sweep_status(self) -> dict:
+        with self._skill_sweep_lock:
+            running = self._skill_sweep_running
+        return {"running": running, "last": self._last_skill_sweep}
+
+    def _build_sweep_prompt(self, runs: list[dict], existing: list[dict]) -> str:
+        if existing:
+            existing_block = "\n".join(
+                f"- {p['pattern_key']} ({p['kind']}, seen {p['recurrence_count']}x): {p['summary']}"
+                for p in existing
+            )
+        else:
+            existing_block = "(none yet)"
+        run_lines = []
+        for r in runs:
+            p = (r.get("prompt") or "").strip().replace("\n", " ")[:400]
+            res = (r.get("result") or "").strip().replace("\n", " ")[:300]
+            run_lines.append(
+                f"[task #{r['task_id']}] {r.get('title') or 'Untitled'}\n"
+                f"  prompt: {p}\n"
+                f"  result: {res}"
+            )
+        runs_block = "\n".join(run_lines)
+        return (
+            "You analyze a developer's recently completed AI-agent task runs to detect "
+            "RECURRING patterns of work worth distilling into a reusable skill.\n\n"
+            "Existing tracked patterns — REUSE an existing pattern_key verbatim when a run "
+            "matches one semantically; otherwise mint a new short kebab-case key:\n"
+            f"{existing_block}\n\n"
+            "Recently completed task runs to analyze:\n"
+            f"{runs_block}\n\n"
+            "For each run that represents a meaningful, repeatable capability, emit one entry. Kinds:\n"
+            '- "recipe": a successful repeatable approach/workflow worth reusing.\n'
+            '- "pitfall": a failure that was diagnosed and fixed, worth avoiding next time.\n'
+            "Skip trivial or one-off runs. A run may map to an existing pattern_key to bump its count.\n\n"
+            "Respond with ONLY a JSON array, no prose, no code fence:\n"
+            '[{"pattern_key":"run-pytest-suite","kind":"recipe","summary":"one concise line","task_id":12}]\n'
+            "If nothing is worth tracking, respond with []."
+        )
+
+    @staticmethod
+    def _parse_sweep_output(raw_text: str) -> list:
+        text = (raw_text or "").strip()
+        if text.startswith("```"):
+            lines = [ln for ln in text.splitlines() if not ln.strip().startswith("```")]
+            text = "\n".join(lines).strip()
+        if not text.startswith("["):
+            start = text.find("[")
+            end = text.rfind("]")
+            if start != -1 and end != -1 and end > start:
+                text = text[start : end + 1]
+        try:
+            data = json.loads(text)
+        except (ValueError, TypeError):
+            return []
+        return data if isinstance(data, list) else []
 
     def _run_agent_prompt_once(self, agent: str, prompt: str, working_dir: str) -> tuple[bool, str]:
         working_dir_expanded = os.path.expanduser(working_dir)
@@ -3074,6 +3340,14 @@ class TaskAPIHandler(BaseHTTPRequestHandler):
             else:
                 self._json_response({"error": "not found"}, 404)
 
+        elif path == "/api/skill-patterns":
+            self._json_response(
+                {
+                    "patterns": self.db.get_skill_patterns(),
+                    "sweep": self.scheduler.skill_sweep_status(),
+                }
+            )
+
         elif path == "/api/csrf-token":
             self._json_response({"csrf_token": _CSRF_TOKEN})
 
@@ -3198,6 +3472,15 @@ class TaskAPIHandler(BaseHTTPRequestHandler):
                 self._json_response({"error": str(e)}, 404)
                 return
             self._json_response({"status": "resumed"})
+
+        elif path == "/api/skills/sweep":
+            # Manual "扫一遍" — runs in the background (single-threaded server).
+            # Always available, independent of the skill_library_enabled toggle.
+            started = self.scheduler.trigger_skill_sweep(body.get("agent"))
+            if not started:
+                self._json_response({"error": "sweep already running"}, 409)
+                return
+            self._json_response({"status": "started"})
 
         elif path == "/api/tasks":
             # ── Input validation ──────────────────────────────────────

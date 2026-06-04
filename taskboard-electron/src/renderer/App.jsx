@@ -526,6 +526,22 @@ async function createTask(data) {
   return res.json();
 }
 
+async function fetchSkillPatterns() {
+  const res = await fetch(`${API}/skill-patterns`);
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json();
+}
+
+async function triggerSkillSweep(agent) {
+  const res = await fetch(`${API}/skills/sweep`, {
+    method: "POST", headers: await csrfHeaders(),
+    body: JSON.stringify(agent ? { agent } : {}),
+  });
+  const payload = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(payload.error || `HTTP ${res.status}`);
+  return payload;
+}
+
 async function createHeartbeat(data) {
   const res = await fetch(`${API}/heartbeats`, {
     method: "POST", headers: await csrfHeaders(),
@@ -2992,10 +3008,97 @@ function SettingsModal({ onClose, timeout: initialTimeout, defaultAgent: initial
 
 // ─── App ───
 
+function SkillKindBadge({ kind }) {
+  const isPitfall = kind === "pitfall";
+  return (
+    <span style={{
+      fontSize: 10, fontWeight: 700, padding: "2px 7px", borderRadius: 6, letterSpacing: 0.4,
+      background: isPitfall ? "rgba(239,68,68,0.15)" : "rgba(34,197,94,0.15)",
+      color: isPitfall ? theme.red : theme.green,
+    }}>
+      {isPitfall ? "PITFALL" : "RECIPE"}
+    </span>
+  );
+}
+
+function SkillsView({ skillData, onSweep }) {
+  const patterns = skillData.patterns || [];
+  const sweep = skillData.sweep || {};
+  const running = sweep.running;
+  const last = sweep.last;
+  let lastNote = null;
+  if (last) {
+    lastNote = last.error
+      ? `上次扫描失败：${last.error}`
+      : `上次扫描：扫描 ${last.scanned}、检出 ${last.detected}（agent ${last.agent}）`;
+  }
+  return (
+    <div style={{ padding: 28, minHeight: "calc(100vh - 72px)" }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16, gap: 12 }}>
+        <div style={{ color: theme.textMuted, fontSize: 12 }}>
+          跨任务复发模式账本 · 复发 ≥3 且跨 ≥2 任务即可沉淀为 Skill
+          {lastNote && <span style={{ marginLeft: 10, color: theme.textDim }}>· {lastNote}</span>}
+        </div>
+        <button
+          onClick={onSweep}
+          disabled={running}
+          style={{
+            padding: "8px 18px", borderRadius: 8, border: "none",
+            background: running ? theme.border : theme.accent,
+            color: "#fff", cursor: running ? "default" : "pointer",
+            fontSize: 12, fontWeight: 700, letterSpacing: 0.3, whiteSpace: "nowrap",
+            boxShadow: running ? "none" : `0 0 24px ${theme.accentGlow}`,
+          }}
+        >
+          {running ? "扫描中…" : "扫一遍"}
+        </button>
+      </div>
+      {patterns.length === 0 ? (
+        <div style={{
+          border: `1px dashed ${theme.border}`, borderRadius: 12,
+          padding: 32, textAlign: "center", color: theme.textDim, fontSize: 12,
+        }}>
+          还没有检测到模式 — 点「扫一遍」让 agent 分析最近完成的任务
+        </div>
+      ) : (
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(360px, 1fr))", gap: 14 }}>
+          {patterns.map(p => {
+            let taskCount = 0;
+            try { taskCount = (JSON.parse(p.contributing_task_ids || "[]")).length; } catch { /* ignore */ }
+            const ready = p.recurrence_count >= 3 && taskCount >= 2;
+            return (
+              <div key={p.id} style={{
+                background: theme.surface,
+                border: `1px solid ${ready ? theme.accent : theme.border}`,
+                borderRadius: 12, padding: 16,
+              }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+                  <SkillKindBadge kind={p.kind} />
+                  <span style={{ fontFamily: "monospace", fontSize: 12, color: theme.text, fontWeight: 700 }}>
+                    {p.pattern_key}
+                  </span>
+                </div>
+                <div style={{ color: theme.textMuted, fontSize: 13, marginBottom: 10 }}>{p.summary || "—"}</div>
+                <div style={{ display: "flex", gap: 12, fontSize: 11, color: theme.textDim }}>
+                  <span>复发 {p.recurrence_count}×</span>
+                  <span>{taskCount} 个任务</span>
+                  <span>{p.status}</span>
+                  {ready && <span style={{ color: theme.accent, fontWeight: 700 }}>✓ 达标</span>}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function App() {
   const [tasks, setTasks] = useState([]);
   const [heartbeats, setHeartbeats] = useState([]);
   const [heartbeatTicks, setHeartbeatTicks] = useState([]);
+  const [skillData, setSkillData] = useState({ patterns: [], sweep: { running: false, last: null } });
   const [activeView, setActiveView] = useState("tasks");
   const [showNew, setShowNew] = useState(false);
   const [showNewHeartbeat, setShowNewHeartbeat] = useState(false);
@@ -3058,9 +3161,12 @@ export default function App() {
 
   const poll = useCallback(async () => {
     try {
-      const [taskData, heartbeatData] = await Promise.all([fetchTasks(), fetchHeartbeats()]);
+      const [taskData, heartbeatData, skillRes] = await Promise.all([
+        fetchTasks(), fetchHeartbeats(), fetchSkillPatterns(),
+      ]);
       setTasks(taskData);
       setHeartbeats(heartbeatData);
+      setSkillData(skillRes);
       setConnected(true);
       setApiError(null);
     } catch (err) {
@@ -3138,6 +3244,17 @@ export default function App() {
       }
     } catch (e) {
       setApiError(`Heartbeat ${action} failed: ${e.message}`);
+    }
+  };
+
+  const handleSweep = async () => {
+    try {
+      await triggerSkillSweep();
+      // Optimistically reflect the running state; poll picks up the real status.
+      setSkillData(prev => ({ ...prev, sweep: { ...prev.sweep, running: true } }));
+      setTimeout(poll, 1500);
+    } catch (e) {
+      setApiError(`Sweep failed: ${e.message}`);
     }
   };
 
@@ -3334,6 +3451,7 @@ export default function App() {
             {[
               { key: "tasks", label: "Tasks" },
               { key: "heartbeats", label: "Heartbeats" },
+              { key: "skills", label: "Skills" },
             ].map(tab => (
               <button
                 key={tab.key}
@@ -3390,16 +3508,18 @@ export default function App() {
             ⚙
           </button>
           </Tooltip>
-          <button onClick={() => activeView === "tasks" ? setShowNew(true) : setShowNewHeartbeat(true)} style={{
-            padding: "8px 18px", borderRadius: 8, border: "none",
-            background: theme.accent, color: "#fff", cursor: "pointer",
-            fontSize: 12, fontWeight: 700, letterSpacing: 0.3,
-            display: "flex", alignItems: "center", gap: 6,
-            boxShadow: `0 0 24px ${theme.accentGlow}`,
-            transition: "transform 0.15s",
-          }}>
-            {activeView === "tasks" ? "+ New Task" : "+ New Heartbeat"}
-          </button>
+          {activeView !== "skills" && (
+            <button onClick={() => activeView === "tasks" ? setShowNew(true) : setShowNewHeartbeat(true)} style={{
+              padding: "8px 18px", borderRadius: 8, border: "none",
+              background: theme.accent, color: "#fff", cursor: "pointer",
+              fontSize: 12, fontWeight: 700, letterSpacing: 0.3,
+              display: "flex", alignItems: "center", gap: 6,
+              boxShadow: `0 0 24px ${theme.accentGlow}`,
+              transition: "transform 0.15s",
+            }}>
+              {activeView === "tasks" ? "+ New Task" : "+ New Heartbeat"}
+            </button>
+          )}
         </div>
       </div>
 
@@ -3418,7 +3538,7 @@ export default function App() {
             />
           ))}
         </div>
-      ) : (
+      ) : activeView === "heartbeats" ? (
         <div style={{ padding: 28, minHeight: "calc(100vh - 72px)" }}>
           <div style={{
             display: "grid",
@@ -3450,6 +3570,8 @@ export default function App() {
             )}
           </div>
         </div>
+      ) : (
+        <SkillsView skillData={skillData} onSweep={handleSweep} />
       )}
 
       {/* Modals */}
