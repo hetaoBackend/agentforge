@@ -75,6 +75,8 @@ class TestLifecycle:
                 "register_p2_im_chat_member_bot_added_v1",
                 "register_p2_im_message_reaction_created_v1",
                 "register_p2_im_message_reaction_deleted_v1",
+                "register_p2_im_message_message_read_v1",
+                "register_p2_im_message_recalled_v1",
             ):
                 getattr(dispatcher_builder, name).return_value = dispatcher_builder
             built_handler = Mock()
@@ -119,6 +121,73 @@ class TestLifecycle:
             assert len(started_threads) == 1
             assert started_threads[0].started is True
             ws_client.start.assert_not_called()
+
+    def test_start_registers_readonly_event_noops(self):
+        """message_read / recalled receipts must have (no-op) processors, else
+        the lark SDK logs 'processor not found, type: im.message.message_read_v1'
+        on every read receipt.
+        """
+        with patch("channels.feishu_channel.FEISHU_AVAILABLE", True):
+            from channels.feishu_channel import FeishuChannel
+
+            ch = FeishuChannel(Mock(), Mock(), Mock())
+            ch.db.get_setting.side_effect = lambda key: {
+                "feishu_app_id": "cli_app_id_value",
+                "feishu_app_secret": "secret_value",
+            }.get(key, "")
+
+            fake_lark = Mock()
+            built_client = Mock()
+            fake_lark.Client.builder.return_value.app_id.return_value.app_secret.return_value.log_level.return_value.build.return_value = built_client
+            dispatcher_builder = fake_lark.EventDispatcherHandler.builder.return_value
+            # every register call returns the builder so the fluent chain holds
+            for name in (
+                "register_p2_im_message_receive_v1",
+                "register_p2_im_chat_member_bot_added_v1",
+                "register_p2_im_message_reaction_created_v1",
+                "register_p2_im_message_reaction_deleted_v1",
+                "register_p2_im_message_message_read_v1",
+                "register_p2_im_message_recalled_v1",
+            ):
+                getattr(dispatcher_builder, name).return_value = dispatcher_builder
+            dispatcher_builder.build.return_value = Mock()
+            fake_lark.ws.Client.return_value = Mock()
+
+            with (
+                patch("channels.feishu_channel.lark", fake_lark),
+                patch("channels.feishu_channel.threading.Thread", Mock()),
+            ):
+                ch.start()
+
+            dispatcher_builder.register_p2_im_message_message_read_v1.assert_called_once()
+            dispatcher_builder.register_p2_im_message_recalled_v1.assert_called_once()
+
+    def test_start_disables_lark_logger_propagation(self):
+        """The lark SDK's 'Lark' logger has its own handler; if it also
+        propagates to the root logger (basicConfig) every line prints twice.
+        start() must turn propagation off.
+        """
+        import logging
+
+        logging.getLogger("Lark").propagate = True  # reset global state
+
+        with patch("channels.feishu_channel.FEISHU_AVAILABLE", True):
+            from channels.feishu_channel import FeishuChannel
+
+            ch = FeishuChannel(Mock(), Mock(), Mock())
+            ch.db.get_setting.side_effect = lambda key: {
+                "feishu_app_id": "cli_app_id_value",
+                "feishu_app_secret": "secret_value",
+            }.get(key, "")
+
+            fake_lark = Mock()
+            with (
+                patch("channels.feishu_channel.lark", fake_lark),
+                patch("channels.feishu_channel.threading.Thread", Mock()),
+            ):
+                ch.start()
+
+            assert logging.getLogger("Lark").propagate is False
 
     def test_start_handles_build_exception(self):
         with patch("channels.feishu_channel.FEISHU_AVAILABLE", True):

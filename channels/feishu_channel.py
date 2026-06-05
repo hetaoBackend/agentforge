@@ -14,6 +14,7 @@ Configure via settings API:
 
 import base64
 import json
+import logging
 import re
 import threading
 import time
@@ -385,12 +386,17 @@ class FeishuChannel(Channel):
             return
 
         try:
+            # The lark SDK's "Lark" logger ships its own stdout handler; stop it
+            # propagating to the root logger (configured via basicConfig in
+            # taskboard.py) so each line isn't emitted twice.
+            logging.getLogger("Lark").propagate = False
+
             print("[Feishu] Building Lark client...")
             self._client = (
                 lark.Client.builder()
                 .app_id(app_id)
                 .app_secret(app_secret)
-                .log_level(lark.LogLevel.DEBUG)
+                .log_level(lark.LogLevel.INFO)
                 .build()
             )
             print("[Feishu] Lark client built successfully")
@@ -402,6 +408,11 @@ class FeishuChannel(Channel):
                 .register_p2_im_chat_member_bot_added_v1(self._on_bot_added)
                 .register_p2_im_message_reaction_created_v1(self._on_reaction)
                 .register_p2_im_message_reaction_deleted_v1(self._on_reaction)
+                # No-op processors for read-only receipts we subscribe to but
+                # don't act on — without these the SDK logs "processor not
+                # found, type: im.message.message_read_v1" on every receipt.
+                .register_p2_im_message_message_read_v1(lambda data: None)
+                .register_p2_im_message_recalled_v1(lambda data: None)
                 .build()
             )
             print("[Feishu] Event handler registered")
@@ -411,7 +422,7 @@ class FeishuChannel(Channel):
                 app_id,
                 app_secret,
                 event_handler=event_handler,
-                log_level=lark.LogLevel.DEBUG,
+                log_level=lark.LogLevel.INFO,
             )
             print("[Feishu] WebSocket client created")
 
