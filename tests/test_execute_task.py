@@ -357,6 +357,64 @@ def test_execute_task_failure_sets_failed_with_error_summary(scheduler):
     assert runs[0]["status"] == "failed"
 
 
+# ── _execute_task: failure still persists session_id (resumable retry) ───────
+def test_execute_task_codex_failure_still_persists_session_id(scheduler, monkeypatch):
+    """A codex run that emits ``thread.started`` then fails must still persist
+    the ``thread_id`` as ``session_id``. Otherwise a failed task cannot be
+    resumed (e.g. replying in the Feishu thread to retry) → "no saved session".
+    """
+    db = scheduler.db
+    tid = db.add_task(Task(title="codex boom", prompt="x", working_dir=".", agent="codex"))
+    task = db.get_task(tid)
+    scheduler._active_tasks[tid] = object()
+    monkeypatch.setattr(scheduler, "_find_codex_generated_images", lambda *a, **k: [])
+
+    stdout_lines = [
+        json.dumps({"type": "thread.started", "thread_id": "thread-fail-1"}) + "\n",
+    ]
+    fake = FakePopen(
+        stdout_lines,
+        stderr_lines=["codex error: model overloaded\n"],
+        returncode=1,
+    )
+    with patch.object(taskboard.subprocess, "Popen", return_value=fake):
+        scheduler._execute_task(task)
+
+    refreshed = db.get_task(tid)
+    assert refreshed["status"] == "failed"
+    # The conversation id is preserved despite the failure → resumable.
+    assert refreshed["session_id"] == "thread-fail-1"
+
+
+def test_execute_task_claude_failure_still_persists_session_id(scheduler):
+    """A claude run whose trailing ``result`` event carries a ``session_id``
+    (e.g. ``error_during_execution``) must persist it on failure too.
+    """
+    db = scheduler.db
+    tid = db.add_task(Task(title="claude boom", prompt="x", working_dir=".", agent="claude"))
+    task = db.get_task(tid)
+    scheduler._active_tasks[tid] = object()
+
+    stdout_lines = [
+        json.dumps({"type": "system", "subtype": "init", "session_id": "sess-fail-9"}) + "\n",
+        json.dumps(
+            {
+                "type": "result",
+                "subtype": "error_during_execution",
+                "session_id": "sess-fail-9",
+            }
+        )
+        + "\n",
+    ]
+    fake = FakePopen(stdout_lines, stderr_lines=["boom\n"], returncode=1)
+    with patch.object(taskboard.subprocess, "Popen", return_value=fake):
+        scheduler._execute_task(task)
+
+    refreshed = db.get_task(tid)
+    assert refreshed["status"] == "failed"
+    assert refreshed["session_id"] == "sess-fail-9"
+
+
 # ── _execute_task: missing CLI binary ────────────────────────────────────────
 def test_execute_task_missing_binary_fails_with_install_hint(scheduler):
     db = scheduler.db
@@ -520,6 +578,38 @@ def test_execute_task_timeout_kills_group_and_marks_failed(scheduler):
     runs = db.get_task_runs(tid)
     assert runs[0]["status"] == "failed"
     assert "timed out" in (runs[0]["error"] or "")
+
+
+def test_execute_task_timeout_error_summary_states_timeout_not_stderr(scheduler, monkeypatch):
+    """On timeout the human-readable ``task.error`` must say it timed out, not
+    surface an unrelated stderr line. Regression: codex prints "Reading
+    additional input from stdin…" to stderr, which ``_extract_error_summary``
+    picked over the real "Task timed out after Ns" reason.
+    """
+    db = scheduler.db
+    db.set_setting("timeout", "0")  # kill timer (delay 0) fires immediately
+    tid = db.add_task(Task(title="slow review", prompt="hang", working_dir=".", agent="codex"))
+    task = db.get_task(tid)
+    scheduler._active_tasks[tid] = object()
+    monkeypatch.setattr(scheduler, "_find_codex_generated_images", lambda *a, **k: [])
+
+    def slow_lines():
+        time.sleep(0.2)  # let the delay-0 timer fire mid-stream
+        yield json.dumps({"type": "thread.started", "thread_id": "t-1"}) + "\n"
+
+    fake = FakePopen(
+        slow_lines(),
+        stderr_lines=["Reading additional input from stdin...\n"],
+        returncode=0,
+    )
+    with patch.object(taskboard.subprocess, "Popen", return_value=fake):
+        scheduler._execute_task(task)
+
+    refreshed = db.get_task(tid)
+    assert refreshed["status"] == "failed"
+    # error summary states the timeout, not the stderr noise
+    assert "timed out" in (refreshed["error"] or "")
+    assert "stdin" not in (refreshed["error"] or "")
 
 
 # ── _run_agent_command: heartbeat/skill-sweep invocation ─────────────────────

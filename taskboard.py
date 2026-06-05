@@ -3281,6 +3281,9 @@ class TaskScheduler(BusAwareSchedulerMixin):
             cmd.extend(["--resume", task["session_id"]])
         raw_stdout = ""
         raw_stderr = ""
+        # Initialized before the try so the failure branch can read it even when
+        # Popen itself raises (e.g. CLI not found) before the timer is armed.
+        timed_out = [False]
         try:
             timeout_secs = int(self.db.get_setting("timeout", "600"))
             start_time = time.time()
@@ -3327,8 +3330,6 @@ class TaskScheduler(BusAwareSchedulerMixin):
             stderr_thread.start()
 
             # Timer that kills the entire process group if it exceeds the configured timeout
-            timed_out = [False]
-
             def _kill():
                 timed_out[0] = True
                 try:
@@ -3509,21 +3510,33 @@ class TaskScheduler(BusAwareSchedulerMixin):
         else:
             # Extract a clean, human-readable error summary for task.error and
             # notification channels. The full raw output is preserved in run_error.
-            error_summary = (
-                self._extract_error_summary(raw_stderr, raw_stdout)
-                if (raw_stderr or raw_stdout)
-                else (output or "Unknown error")
-            )
+            if timed_out[0]:
+                # The timeout IS the reason — don't let an unrelated stderr line
+                # (e.g. codex's "Reading additional input from stdin…") mask it.
+                error_summary = output
+            else:
+                error_summary = (
+                    self._extract_error_summary(raw_stderr, raw_stdout)
+                    if (raw_stderr or raw_stdout)
+                    else (output or "Unknown error")
+                )
+            updates = {
+                "status": "failed",
+                "error": error_summary,
+                "last_run_at": datetime.now().isoformat(),
+                "run_count": new_count,
+            }
+            # Persist the conversation id even on failure so the task stays
+            # resumable (e.g. replying in a Feishu/Slack/Telegram thread to
+            # retry). Codex emits thread_id in the opening thread.started event,
+            # so even a started-then-failed run has one to recover.
+            if extracted_session_id:
+                updates["session_id"] = extracted_session_id
             self.db.finish_run_and_update_task(
                 run_id,
                 "failed",
                 tid,
-                {
-                    "status": "failed",
-                    "error": error_summary,
-                    "last_run_at": datetime.now().isoformat(),
-                    "run_count": new_count,
-                },
+                updates,
                 run_error=output,
                 raw_output=raw_output_stored,
             )
