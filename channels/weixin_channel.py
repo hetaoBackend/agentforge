@@ -265,6 +265,15 @@ class WeixinChannel(Channel):
                 last_error="",
             )
             print("[Weixin] Bridge event: ready")
+        elif event_type == "logged_out":
+            self._update_status(
+                configured=False,
+                login_status="idle",
+                qr_code_url="",
+                last_error="",
+                user_id="",
+            )
+            print("[Weixin] Bridge event: logged_out")
         elif event_type == "error":
             self._update_status(
                 login_status="error",
@@ -674,12 +683,19 @@ class WeixinChannel(Channel):
         return None
 
     def _send_command(self, payload: dict[str, Any]) -> None:
+        proc_alive = self._bridge_proc and self._bridge_proc.poll() is None
+        stdin_ok = bool(self._bridge_proc and self._bridge_proc.stdin)
+        print(
+            f"[Weixin] _send_command: type={payload.get('type')} proc_alive={proc_alive} stdin_ok={stdin_ok}"
+        )
         if not self._bridge_proc or not self._bridge_proc.stdin:
+            print("[Weixin] _send_command: bridge not running, command dropped")
             return
         self._bridge_proc.stdin.write(json.dumps(payload, ensure_ascii=False) + "\n")
         self._bridge_proc.stdin.flush()
 
     def request_login(self) -> None:
+        print("[Weixin] request_login: called")
         self._update_status(
             configured=False,
             login_status="idle",
@@ -690,6 +706,7 @@ class WeixinChannel(Channel):
         self._send_command({"type": "login"})
 
     def request_logout(self) -> None:
+        print("[Weixin] request_logout: called")
         self._update_status(
             configured=False,
             login_status="idle",

@@ -1003,11 +1003,15 @@ async function updateChannelsSettings(data) {
 }
 
 async function runWeixinAction(action) {
-  await fetch(`${API}/channels/weixin/action`, {
+  const res = await fetch(`${API}/channels/weixin/action`, {
     method: "POST",
     headers: await csrfHeaders(),
     body: JSON.stringify({ action }),
   });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.error || `HTTP ${res.status}`);
+  }
 }
 
 // ─── Components ───
@@ -3394,14 +3398,24 @@ function SettingsModal({
   // Refresh all channel settings when the modal opens so bot-side /dir changes are visible
   useEffect(() => {
     let cancelled = false;
-    const refreshChannels = async () => {
+    const refreshChannels = async (preserveUserEdits = true) => {
       const status = await fetchChannelsStatus();
       if (!cancelled) {
-        setChannels((c) => mergeChannelsStatus(c, status));
+        setChannels((c) => {
+          const merged = mergeChannelsStatus(c, status);
+          if (!preserveUserEdits) return merged;
+          // During background polling, keep user-edited config fields untouched
+          // so toggling enabled / editing URLs isn't overwritten before Save.
+          return {
+            telegram: { ...merged.telegram, enabled: c.telegram.enabled },
+            slack: { ...merged.slack, enabled: c.slack.enabled },
+            weixin: { ...merged.weixin, enabled: c.weixin.enabled },
+          };
+        });
       }
     };
-    refreshChannels();
-    const intervalId = setInterval(refreshChannels, 2000);
+    refreshChannels(false); // initial load: full merge to populate fields
+    const intervalId = setInterval(refreshChannels, 2000); // polling: preserve edits
     fetchFeishuSettings().then((s) => {
       if (s && Object.keys(s).length) setFeishu((f) => ({ ...f, ...s }));
     });

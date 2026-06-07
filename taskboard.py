@@ -4535,6 +4535,9 @@ class TaskAPIHandler(BaseHTTPRequestHandler):
         elif path == "/api/channels/weixin/action":
             action = (body.get("action") or "").strip().lower()
             if not self.__class__.weixin_channel:
+                print(
+                    f"[Weixin] action={action!r} rejected: weixin_channel is None (not enabled/started)"
+                )
                 self._json_response({"error": "weixin channel not running"}, 400)
                 return
             if action in {"login", "reconnect"}:

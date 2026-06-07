@@ -4,6 +4,7 @@ import path from "node:path";
 import readline from "node:readline";
 
 const DEFAULT_BASE_URL = "https://ilinkai.weixin.qq.com";
+const INITIAL_BASE_URL = process.env.AGENTFORGE_WEIXIN_BASE_URL || DEFAULT_BASE_URL;
 const BOT_TYPE = process.env.AGENTFORGE_WEIXIN_BOT_TYPE || "3";
 const DATA_DIR = process.env.AGENTFORGE_WEIXIN_DATA_DIR || path.join(process.env.HOME || ".", ".agentforge", "weixin");
 const ACCOUNT_FILE = path.join(DATA_DIR, "account.json");
@@ -196,6 +197,7 @@ function clearSession() {
     ...state,
     token: "",
     syncCursor: "",
+    baseUrl: INITIAL_BASE_URL,
   };
   saveState();
 }
@@ -354,23 +356,28 @@ async function fetchQrCode() {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 15000);
   try {
-    const url = new URL(`ilink/bot/get_bot_qrcode?bot_type=${encodeURIComponent(BOT_TYPE)}`, ensureTrailingSlash(state.baseUrl));
+    const url = new URL(`ilink/bot/get_bot_qrcode?bot_type=${encodeURIComponent(BOT_TYPE)}`, ensureTrailingSlash(INITIAL_BASE_URL));
+    log(`fetchQrCode: GET ${url}`);
     const response = await fetch(url, { signal: controller.signal });
+    log(`fetchQrCode: status=${response.status} ok=${response.ok}`);
     const raw = await response.text();
     if (!response.ok) {
+      log(`fetchQrCode: error body=${raw.slice(0, 200)}`);
       throw new Error(`${response.status} ${response.statusText}: ${raw}`);
     }
-    return JSON.parse(raw);
+    const data = JSON.parse(raw);
+    log(`fetchQrCode: qrcode=${data?.qrcode || "MISSING"} img_len=${String(data?.qrcode_img_content || "").length}`);
+    return data;
   } finally {
     clearTimeout(timeout);
   }
 }
 
-async function pollQrStatus(qrcode) {
+async function pollQrStatus(qrcode, baseUrl = INITIAL_BASE_URL) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 35000);
   try {
-    const url = new URL(`ilink/bot/get_qrcode_status?qrcode=${encodeURIComponent(qrcode)}`, ensureTrailingSlash(state.baseUrl));
+    const url = new URL(`ilink/bot/get_qrcode_status?qrcode=${encodeURIComponent(qrcode)}`, ensureTrailingSlash(baseUrl));
     const response = await fetch(url, {
       headers: { "iLink-App-ClientVersion": "1" },
       signal: controller.signal,
@@ -657,48 +664,70 @@ async function startPollingIfReady() {
 }
 
 async function loginFlow() {
+  const MAX_QR_RETRIES = 3;
+  log(`loginFlow: start INITIAL_BASE_URL=${INITIAL_BASE_URL} state.baseUrl=${state.baseUrl}`);
   try {
-    const qr = await fetchQrCode();
-    if (!qr?.qrcode || !qr?.qrcode_img_content) {
-      throw new Error("QR code response missing qrcode image content");
-    }
-    log(
-      `qr payload received: len=${String(qr.qrcode_img_content).length} prefix=${String(qr.qrcode_img_content).slice(0, 80)}`,
-    );
+    for (let attempt = 0; attempt < MAX_QR_RETRIES; attempt++) {
+      log(`loginFlow: fetchQrCode attempt ${attempt + 1}/${MAX_QR_RETRIES}`);
+      const qr = await fetchQrCode();
+      if (!qr?.qrcode || !qr?.qrcode_img_content) {
+        throw new Error("QR code response missing qrcode image content");
+      }
+      log(
+        `qr payload received: len=${String(qr.qrcode_img_content).length} prefix=${String(qr.qrcode_img_content).slice(0, 80)}`,
+      );
 
-    emit({
-      type: "qr",
-      qrcode_url: qr.qrcode_img_content,
-      account_id: state.accountId || ACCOUNT_ID_OVERRIDE || "",
-    });
+      emit({
+        type: "qr",
+        qrcode_url: qr.qrcode_img_content,
+        account_id: state.accountId || ACCOUNT_ID_OVERRIDE || "",
+      });
 
-    while (!shuttingDown) {
-      const status = await pollQrStatus(qr.qrcode);
-      if (status?.status === "confirmed" && status?.bot_token) {
-        state = {
-          ...state,
-          accountId: ACCOUNT_ID_OVERRIDE || status.ilink_bot_id || state.accountId,
-          baseUrl: status.baseurl || state.baseUrl,
-          token: status.bot_token,
-          userId: status.ilink_user_id || state.userId,
-          syncCursor: "",
-        };
-        saveState();
-        emit({
-          type: "login_success",
-          account_id: state.accountId,
-          user_id: state.userId,
-        });
-        await startPollingIfReady();
-        return;
+      let currentPollBaseUrl = INITIAL_BASE_URL;
+      let expired = false;
+
+      while (!shuttingDown) {
+        const status = await pollQrStatus(qr.qrcode, currentPollBaseUrl);
+        if (status?.status === "confirmed" && status?.bot_token) {
+          state = {
+            ...state,
+            accountId: ACCOUNT_ID_OVERRIDE || status.ilink_bot_id || state.accountId,
+            baseUrl: status.baseurl || state.baseUrl,
+            token: status.bot_token,
+            userId: status.ilink_user_id || state.userId,
+            syncCursor: "",
+          };
+          saveState();
+          emit({
+            type: "login_success",
+            account_id: state.accountId,
+            user_id: state.userId,
+          });
+          await startPollingIfReady();
+          return;
+        }
+        if (status?.status === "scaned_but_redirect") {
+          const redirect = String(status.redirect_host || "").trim();
+          if (redirect) {
+            currentPollBaseUrl = redirect.startsWith("http") ? redirect : `https://${redirect}`;
+          }
+          continue;
+        }
+        if (status?.status === "expired") {
+          expired = true;
+          break;
+        }
+        if (status?.status === "scaned") {
+          emit({ type: "scaned" });
+        }
       }
-      if (status?.status === "expired") {
-        throw new Error("QR code expired, restart login");
-      }
-      if (status?.status === "scaned") {
-        emit({ type: "scaned" });
+
+      if (!expired) return;
+      if (attempt + 1 < MAX_QR_RETRIES) {
+        log(`QR code expired, retrying (attempt ${attempt + 2}/${MAX_QR_RETRIES})`);
       }
     }
+    throw new Error("QR code expired");
   } catch (error) {
     emit({ type: "error", message: `login_failed: ${String(error)}` });
     throw error;
@@ -709,8 +738,10 @@ async function loginFlow() {
 
 async function ensureLogin() {
   if (loginInFlight) {
+    log("ensureLogin: login already in flight, reusing");
     return loginInFlight;
   }
+  log("ensureLogin: starting new loginFlow");
   loginInFlight = loginFlow().catch(() => undefined);
   return loginInFlight;
 }
@@ -726,14 +757,20 @@ async function handleCommand(command) {
   }
 
   if (command.type === "login") {
+    log(`handleCommand: login — token=${state.token ? "present" : "absent"} baseUrl=${state.baseUrl} loginInFlight=${loginInFlight != null}`);
     clearSession();
+    log(`handleCommand: login — session cleared, INITIAL_BASE_URL=${INITIAL_BASE_URL}`);
     await ensureLogin();
     return;
   }
 
   if (command.type === "logout") {
+    log(`handleCommand: logout — token=${state.token ? "present" : "absent"} baseUrl=${state.baseUrl} loginInFlight=${loginInFlight != null}`);
+    loginInFlight = null;
     clearSession();
+    log(`handleCommand: logout — session cleared, INITIAL_BASE_URL=${INITIAL_BASE_URL}`);
     emit({ type: "logged_out" });
+    await ensureLogin();
   }
 }
 
