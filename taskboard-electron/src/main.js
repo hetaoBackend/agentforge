@@ -71,12 +71,22 @@ function killPortSync(port) {
   }
 }
 
+// macOS apps launched from Finder/Dock inherit a minimal PATH (no Homebrew),
+// so the Python backend can't find tools like `node` (needed by the Weixin
+// bridge). Prepend the common install dirs so child processes resolve them.
+function augmentedPath() {
+  const extra = ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin"];
+  const current = process.env.PATH || "";
+  const merged = [...extra, ...current.split(":")].filter(Boolean);
+  return [...new Set(merged)].join(":");
+}
+
 function startPythonBackend() {
   killPortSync(9712);
   const { cmd, args, cwd } = getPythonCommand();
   pythonProcess = spawn(cmd, args, {
     stdio: ["ignore", "pipe", "pipe"],
-    env: { ...process.env },
+    env: { ...process.env, PATH: augmentedPath() },
     ...(cwd ? { cwd } : {}),
   });
 

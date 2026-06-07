@@ -5,7 +5,7 @@ a = Analysis(
     ['taskboard.py'],
     pathex=[],
     binaries=[],
-    datas=[('vendor/skill-creator', 'vendor/skill-creator')],
+    datas=[('vendor/skill-creator', 'vendor/skill-creator'), ('channels/weixin_bridge', 'channels/weixin_bridge')],
     hiddenimports=['croniter', 'dateutil', 'pytz'],
     hookspath=[],
     hooksconfig={},
