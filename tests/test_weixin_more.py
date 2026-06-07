@@ -89,8 +89,57 @@ def _make_channel():
 def test_default_bridge_cmd_points_at_index_mjs():
     channel = _make_channel()
     cmd = channel._default_bridge_cmd()
-    assert cmd[0] == "node"
+    # cmd[0] is now a resolved node path (or bare "node" when none is found)
+    assert cmd[0] == "node" or cmd[0].endswith("/node")
     assert cmd[1].endswith("weixin_bridge/index.mjs")
+
+
+def test_default_bridge_cmd_resolves_full_node_path(monkeypatch):
+    channel = _make_channel()
+    monkeypatch.setattr("channels.weixin_channel.shutil.which", lambda exe: "/fake/bin/node")
+    cmd = channel._default_bridge_cmd()
+    assert cmd[0] == "/fake/bin/node"
+    assert cmd[1].endswith("weixin_bridge/index.mjs")
+
+
+def test_default_bridge_cmd_falls_back_to_homebrew_when_node_not_on_path(monkeypatch):
+    """macOS GUI-launched apps inherit a minimal PATH without Homebrew, so
+    `shutil.which("node")` misses — we must fall back to common install dirs."""
+    channel = _make_channel()
+    monkeypatch.setattr("channels.weixin_channel.shutil.which", lambda exe: None)
+    monkeypatch.setattr(
+        "channels.weixin_channel.os.path.exists",
+        lambda p: p == "/opt/homebrew/bin/node",
+    )
+    cmd = channel._default_bridge_cmd()
+    assert cmd[0] == "/opt/homebrew/bin/node"
+
+
+def test_bridge_script_path_uses_meipass_when_frozen(monkeypatch):
+    """In the PyInstaller bundle the bridge lives under sys._MEIPASS, not next
+    to the (frozen) source module."""
+    channel = _make_channel()
+    monkeypatch.setattr("channels.weixin_channel.sys.frozen", True, raising=False)
+    monkeypatch.setattr("channels.weixin_channel.sys._MEIPASS", "/tmp/meipass", raising=False)
+    path = channel._bridge_script_path()
+    assert str(path) == "/tmp/meipass/channels/weixin_bridge/index.mjs"
+
+
+def test_start_surfaces_missing_node_as_error_status(monkeypatch):
+    """When node is genuinely absent, Popen raises FileNotFoundError. Instead of
+    silently failing (blank QR), the channel must report an error status."""
+    channel = _make_channel()
+
+    def no_node(cmd, **kwargs):
+        raise FileNotFoundError("node")
+
+    monkeypatch.setattr("channels.weixin_channel.subprocess.Popen", no_node)
+    channel.start()
+    assert channel._running is False
+    assert channel._bridge_proc is None
+    snap = channel.get_status_snapshot()
+    assert snap["login_status"] == "error"
+    assert "Node" in (snap["last_error"] or "")
 
 
 def test_explicit_bridge_cmd_overrides_default():

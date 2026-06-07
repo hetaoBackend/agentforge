@@ -11,7 +11,9 @@ import base64
 import json
 import os
 import re
+import shutil
 import subprocess
+import sys
 import threading
 import uuid
 from pathlib import Path
@@ -19,6 +21,23 @@ from typing import TYPE_CHECKING, Any, Optional
 from urllib.parse import unquote, urlparse
 
 from taskboard_bus import Channel, MessageBus, OutboundMessage, OutboundMessageType
+
+
+def _find_node_executable() -> Optional[str]:
+    """Locate the Node.js binary.
+
+    macOS apps launched from Finder/Dock inherit a minimal PATH that excludes
+    Homebrew (`/opt/homebrew/bin`), so ``shutil.which("node")`` misses even when
+    node is installed. Fall back to the common install locations.
+    """
+    found = shutil.which("node")
+    if found:
+        return found
+    for candidate in ("/opt/homebrew/bin/node", "/usr/local/bin/node", "/usr/bin/node"):
+        if os.path.exists(candidate):
+            return candidate
+    return None
+
 
 if TYPE_CHECKING:
     from taskboard import TaskDB, TaskScheduler
@@ -74,9 +93,18 @@ class WeixinChannel(Channel):
 
         bus.subscribe_outbound(self._on_outbound)
 
+    def _bridge_script_path(self) -> Path:
+        # In the PyInstaller bundle the bridge is shipped under sys._MEIPASS
+        # (via --add-data), not beside the frozen source module.
+        if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
+            return Path(sys._MEIPASS) / "channels" / "weixin_bridge" / "index.mjs"
+        return Path(__file__).resolve().parent / "weixin_bridge" / "index.mjs"
+
     def _default_bridge_cmd(self) -> list[str]:
-        bridge_path = Path(__file__).resolve().parent / "weixin_bridge" / "index.mjs"
-        return ["node", str(bridge_path)]
+        # Resolve node to a full path so it's found even under the minimal PATH
+        # a packaged macOS app inherits. Falls back to bare "node" when missing;
+        # start() then surfaces the FileNotFoundError as an error status.
+        return [_find_node_executable() or "node", str(self._bridge_script_path())]
 
     def start(self) -> None:
         self._running = True
@@ -102,9 +130,21 @@ class WeixinChannel(Channel):
                 bufsize=1,
                 env=env,
             )
+        except FileNotFoundError:
+            self._running = False
+            self._bridge_proc = None
+            msg = (
+                "Node.js not found. Install Node.js (https://nodejs.org) to use the Weixin channel."
+            )
+            print(f"[Weixin] {msg}")
+            self._update_status(login_status="error", last_error=msg)
+            return
         except Exception as exc:
             self._running = False
-            print(f"[Weixin] Failed to start bridge: {exc}")
+            self._bridge_proc = None
+            msg = f"Failed to start Weixin bridge: {exc}"
+            print(f"[Weixin] {msg}")
+            self._update_status(login_status="error", last_error=msg)
             return
 
         self._reader_thread = threading.Thread(target=self._read_bridge_events, daemon=True)

@@ -32,6 +32,7 @@ build-backend:
 		--distpath $(ELECTRON_DIR)/resources \
 		--hidden-import croniter --hidden-import dateutil --hidden-import pytz \
 		--add-data vendor/skill-creator:vendor/skill-creator \
+		--add-data channels/weixin_bridge:channels/weixin_bridge \
 		$(BACKEND_SRC)
 	@echo "后端二进制文件位置: $(BACKEND_BINARY)"
 	@ls -lh $(BACKEND_BINARY)
