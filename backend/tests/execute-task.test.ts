@@ -333,6 +333,46 @@ describe("execute task", () => {
     expect(types.has("assistant")).toBe(true);
   });
 
+  test("test_execute_task_codex_does_not_wait_for_notify_process_group", async () => {
+    // Codex can leave notify hook processes alive after `codex exec` exits.
+    // The task should complete once the Codex process exits successfully;
+    // only Claude needs the post-exit process-group wait for background Task agents.
+    const tid = db.add_task(
+      makeTask({
+        title: "codex notify",
+        prompt: "hello",
+        working_dir: ".",
+        agent: "codex",
+      }),
+    );
+    const task = db.get_task(tid)!;
+    scheduler._active_tasks.set(tid, { is_alive: () => true });
+    (scheduler as any)._find_codex_generated_images = () => [];
+
+    let group_probed = false;
+    scheduler._os = {
+      getpgid: (pid: number) => pid,
+      killpg: (_pgid: number, sig: number | NodeJS.Signals) => {
+        if (sig === 0) {
+          group_probed = true;
+        }
+        throw new ProcessLookupError();
+      },
+      kill: () => {
+        throw new ProcessLookupError();
+      },
+    };
+
+    const fake = new FakePopen(_codex_lines("thread-notify", "done"));
+    scheduler._popen = () => fake;
+    await scheduler._execute_task(task);
+
+    expect(group_probed).toBe(false);
+    const refreshed = db.get_task(tid)!;
+    expect(refreshed["status"]).toBe("completed");
+    expect(refreshed["result"]).toBe("done");
+  });
+
   test("test_execute_task_codex_builds_resume_command_when_session_present", async () => {
     const tid = db.add_task(
       makeTask({

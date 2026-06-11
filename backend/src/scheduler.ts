@@ -2663,9 +2663,10 @@ export class TaskScheduler extends BusAwareSchedulerMixin {
       }
       await joinWithTimeout(stderr_promise, 2);
 
-      // Wait for any sub-agents still running in the process group.
-      // Claude Code may spawn background Task agents that outlive the main process.
-      if (!timed_out.value && proc.returncode === 0) {
+      // Wait for any Claude sub-agents still running in the process group.
+      // Codex may spawn notify hooks that outlive `codex exec`; treating those
+      // as task work leaves completed Codex runs stuck in "running".
+      if (!timed_out.value && proc.returncode === 0 && agent === "claude") {
         const elapsed = Date.now() / 1000 - start_time;
         const remaining = Math.max(0, timeout_secs - elapsed);
         const subagent_deadline = Date.now() / 1000 + remaining;
