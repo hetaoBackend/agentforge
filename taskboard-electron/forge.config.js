@@ -8,7 +8,13 @@ module.exports = {
     appBundleId: "com.agentforge.app",
     extraResource: ["./resources/taskboard"],
     osxSign: {
+      // "-" is codesign's ad-hoc identity, not a keychain certificate name.
       identity: "-",
+      identityValidation: false,
+      continueOnError: false,
+      optionsForFile: () => ({
+        hardenedRuntime: false,
+      }),
     },
   },
   rebuildConfig: {},
