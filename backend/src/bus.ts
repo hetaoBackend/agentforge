@@ -32,7 +32,8 @@ export const InboundMessageType = {
   CANCEL_TASK: "cancel_task", // cancel a task
   STATUS_QUERY: "status_query", // query task status
 } as const;
-export type InboundMessageType = (typeof InboundMessageType)[keyof typeof InboundMessageType];
+export type InboundMessageType =
+  (typeof InboundMessageType)[keyof typeof InboundMessageType];
 
 /** Outbound message event types (enum values identical to Python). */
 export const OutboundMessageType = {
@@ -42,7 +43,8 @@ export const OutboundMessageType = {
   TASK_UPDATED: "task_updated",
   STATUS_RESPONSE: "status_response",
 } as const;
-export type OutboundMessageType = (typeof OutboundMessageType)[keyof typeof OutboundMessageType];
+export type OutboundMessageType =
+  (typeof OutboundMessageType)[keyof typeof OutboundMessageType];
 
 /**
  * UTC-naive ISO timestamp, matching Python's `datetime.utcnow().isoformat()`
@@ -214,7 +216,10 @@ export class MessageBus {
   }
 
   /** The scheduler calls this to take the next inbound message (optional). */
-  get_inbound(block: boolean = true, timeout: number | null = null): Promise<InboundMessage | null> {
+  get_inbound(
+    block: boolean = true,
+    timeout: number | null = null,
+  ): Promise<InboundMessage | null> {
     return this.inbound_queue.get(block, timeout);
   }
 
@@ -247,7 +252,10 @@ export class MessageBus {
   }
 
   /** Polling channels call this to take the next outbound message. */
-  get_outbound(block: boolean = true, timeout: number | null = null): Promise<OutboundMessage | null> {
+  get_outbound(
+    block: boolean = true,
+    timeout: number | null = null,
+  ): Promise<OutboundMessage | null> {
     return this.outbound_queue.get(block, timeout);
   }
 }
@@ -487,7 +495,10 @@ export abstract class BusAwareSchedulerMixin {
   bus: MessageBus | null = null;
   abstract db: TaskDBLike;
 
-  _bus_notify(task_id: number, override_type: OutboundMessageType | null = null): void {
+  _bus_notify(
+    task_id: number,
+    override_type: OutboundMessageType | null = null,
+  ): void {
     bus_notify(this.bus, this.db, task_id, override_type);
   }
 }

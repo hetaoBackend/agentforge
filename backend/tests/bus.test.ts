@@ -238,7 +238,10 @@ test("test_bus_aware_scheduler_mixin_publishes_task_updates", async () => {
 });
 
 test("test_bus_aware_scheduler_mixin_noops_without_bus", () => {
-  const scheduler = new FakeScheduler(new StubDB({ 1: { status: "completed" } }), null);
+  const scheduler = new FakeScheduler(
+    new StubDB({ 1: { status: "completed" } }),
+    null,
+  );
 
   scheduler._bus_notify(1);
 });

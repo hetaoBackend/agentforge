@@ -78,7 +78,9 @@ export class TaskDB {
       // Columns already exist
     }
     this._migrate("ALTER TABLE tasks ADD COLUMN session_id TEXT");
-    this._migrate("ALTER TABLE tasks ADD COLUMN prompt_images TEXT DEFAULT '[]'");
+    this._migrate(
+      "ALTER TABLE tasks ADD COLUMN prompt_images TEXT DEFAULT '[]'",
+    );
     this._migrate("ALTER TABLE tasks ADD COLUMN image_paths TEXT DEFAULT '[]'");
     this._migrate("ALTER TABLE tasks ADD COLUMN notify_slack_channel TEXT");
     this._migrate("ALTER TABLE tasks ADD COLUMN notify_telegram_chat_id TEXT");
@@ -273,7 +275,9 @@ export class TaskDB {
         const run_ids = runRows.map((r) => r["id"]);
         if (run_ids.length) {
           this.conn
-            .query("UPDATE skill_patterns SET contributing_run_ids = ? WHERE id = ?")
+            .query(
+              "UPDATE skill_patterns SET contributing_run_ids = ? WHERE id = ?",
+            )
             .run(JSON.stringify(run_ids), row["id"]);
         }
       }
@@ -377,7 +381,9 @@ export class TaskDB {
 
   add_task(task: Task): number {
     const now = nowIso();
-    logger.debug(`add_task called with image_paths: ${JSON.stringify(task.image_paths)}`);
+    logger.debug(
+      `add_task called with image_paths: ${JSON.stringify(task.image_paths)}`,
+    );
     const image_paths_json = JSON.stringify(task.image_paths);
     logger.debug(`image_paths JSON: ${image_paths_json}`);
     const cur = this.conn
@@ -415,18 +421,24 @@ export class TaskDB {
   /** Look up the most recent task created from a given Feishu root message ID. */
   get_task_by_feishu_root_msg(root_msg_id: string): Row | null {
     const row = this.conn
-      .query("SELECT * FROM tasks WHERE feishu_root_msg_id = ? ORDER BY id DESC LIMIT 1")
+      .query(
+        "SELECT * FROM tasks WHERE feishu_root_msg_id = ? ORDER BY id DESC LIMIT 1",
+      )
       .get(root_msg_id) as Row | null;
     return row ? { ...row } : null;
   }
 
   get_setting(key: string, defaultValue: string | null = null): string | null {
-    const row = this.conn.query("SELECT value FROM settings WHERE key = ?").get(key) as Row | null;
+    const row = this.conn
+      .query("SELECT value FROM settings WHERE key = ?")
+      .get(key) as Row | null;
     return row ? row["value"] : defaultValue;
   }
 
   set_setting(key: string, value: string): void {
-    this.conn.query("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)").run(key, value);
+    this.conn
+      .query("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)")
+      .run(key, value);
   }
 
   private _deserialize_heartbeat(row: Row): Row {
@@ -435,14 +447,19 @@ export class TaskDB {
     return d;
   }
 
-  _compute_heartbeat_next_run_at(heartbeat: Heartbeat, now: Date | null = null): string {
+  _compute_heartbeat_next_run_at(
+    heartbeat: Heartbeat,
+    now: Date | null = null,
+  ): string {
     const base = now ?? new Date();
     if (heartbeat.schedule_type === HeartbeatScheduleType.CRON) {
       if (!heartbeat.cron_expr) {
         throw new Error("cron heartbeat requires cron_expr");
       }
       return dateToLocalIso(
-        CronExpressionParser.parse(heartbeat.cron_expr, { currentDate: base }).next().toDate(),
+        CronExpressionParser.parse(heartbeat.cron_expr, { currentDate: base })
+          .next()
+          .toDate(),
       );
     }
     if (heartbeat.schedule_type === HeartbeatScheduleType.INTERVAL) {
@@ -450,16 +467,23 @@ export class TaskDB {
         throw new Error("interval heartbeat requires interval_seconds > 0");
       }
       return dateToLocalIso(
-        new Date(base.getTime() + Math.trunc(heartbeat.interval_seconds) * 1000),
+        new Date(
+          base.getTime() + Math.trunc(heartbeat.interval_seconds) * 1000,
+        ),
       );
     }
-    throw new Error(`Unsupported heartbeat schedule_type: ${heartbeat.schedule_type}`);
+    throw new Error(
+      `Unsupported heartbeat schedule_type: ${heartbeat.schedule_type}`,
+    );
   }
 
   add_heartbeat(heartbeat: Heartbeat): number {
     const now = nowIso();
     if (heartbeat.next_run_at === null) {
-      heartbeat.next_run_at = this._compute_heartbeat_next_run_at(heartbeat, new Date());
+      heartbeat.next_run_at = this._compute_heartbeat_next_run_at(
+        heartbeat,
+        new Date(),
+      );
     }
     const cur = this.conn
       .query(
@@ -516,12 +540,17 @@ export class TaskDB {
     "updated_at",
   ]);
 
-  update_heartbeat(heartbeat_id: number, kwargs: Record<string, unknown>): void {
+  update_heartbeat(
+    heartbeat_id: number,
+    kwargs: Record<string, unknown>,
+  ): void {
     const invalid = Object.keys(kwargs).filter(
       (k) => !TaskDB.ALLOWED_HEARTBEAT_COLUMNS.has(k),
     );
     if (invalid.length) {
-      throw new Error(`Invalid heartbeat column(s): ${JSON.stringify(invalid)}`);
+      throw new Error(
+        `Invalid heartbeat column(s): ${JSON.stringify(invalid)}`,
+      );
     }
     const updates: Record<string, unknown> = { ...kwargs };
     updates["updated_at"] = nowIso();
@@ -529,7 +558,9 @@ export class TaskDB {
       .map((k) => `${k} = ?`)
       .join(", ");
     const vals = [...Object.values(updates), heartbeat_id];
-    this.conn.query(`UPDATE heartbeats SET ${sets} WHERE id = ?`).run(...(vals as any[]));
+    this.conn
+      .query(`UPDATE heartbeats SET ${sets} WHERE id = ?`)
+      .run(...(vals as any[]));
   }
 
   get_heartbeat(heartbeat_id: number): Row | null {
@@ -575,8 +606,12 @@ export class TaskDB {
 
   delete_heartbeat(heartbeat_id: number): void {
     this.transaction(() => {
-      this.conn.query("DELETE FROM heartbeat_ticks WHERE heartbeat_id = ?").run(heartbeat_id);
-      this.conn.query("DELETE FROM heartbeat_dedup WHERE heartbeat_id = ?").run(heartbeat_id);
+      this.conn
+        .query("DELETE FROM heartbeat_ticks WHERE heartbeat_id = ?")
+        .run(heartbeat_id);
+      this.conn
+        .query("DELETE FROM heartbeat_dedup WHERE heartbeat_id = ?")
+        .run(heartbeat_id);
       this.conn.query("DELETE FROM heartbeats WHERE id = ?").run(heartbeat_id);
     });
   }
@@ -602,7 +637,8 @@ export class TaskDB {
     raw_output: string | null = null,
     error: string | null = null,
   ): void {
-    const payload_json = decision_payload !== null ? JSON.stringify(decision_payload) : null;
+    const payload_json =
+      decision_payload !== null ? JSON.stringify(decision_payload) : null;
     this.conn
       .query(
         `
@@ -611,7 +647,16 @@ export class TaskDB {
         WHERE id = ?
     `,
       )
-      .run(nowIso(), status, decision_type, payload_json, task_id, raw_output, error, tick_id);
+      .run(
+        nowIso(),
+        status,
+        decision_type,
+        payload_json,
+        task_id,
+        raw_output,
+        error,
+        tick_id,
+      );
   }
 
   get_heartbeat_ticks(heartbeat_id: number, limit: number = 50): Row[] {
@@ -666,7 +711,11 @@ export class TaskDB {
     return row ? { ...row } : null;
   }
 
-  upsert_heartbeat_dedup(heartbeat_id: number, dedupe_key: string, task_id: number | null): void {
+  upsert_heartbeat_dedup(
+    heartbeat_id: number,
+    dedupe_key: string,
+    task_id: number | null,
+  ): void {
     const now = nowIso();
     this.conn
       .query(
@@ -706,7 +755,9 @@ export class TaskDB {
   ]);
 
   update_task(task_id: number, kwargs: Record<string, unknown>): void {
-    const invalid = Object.keys(kwargs).filter((k) => !TaskDB.ALLOWED_TASK_COLUMNS.has(k));
+    const invalid = Object.keys(kwargs).filter(
+      (k) => !TaskDB.ALLOWED_TASK_COLUMNS.has(k),
+    );
     if (invalid.length) {
       throw new Error(`Invalid task column(s): ${JSON.stringify(invalid)}`);
     }
@@ -721,7 +772,9 @@ export class TaskDB {
       .map((k) => `${k} = ?`)
       .join(", ");
     const vals = [...Object.values(updates), task_id];
-    this.conn.query(`UPDATE tasks SET ${sets} WHERE id = ?`).run(...(vals as any[]));
+    this.conn
+      .query(`UPDATE tasks SET ${sets} WHERE id = ?`)
+      .run(...(vals as any[]));
   }
 
   private _deserialize_task(row: Row): Row {
@@ -734,7 +787,10 @@ export class TaskDB {
       } catch {
         d["prompt_images"] = [];
       }
-    } else if (d["prompt_images"] === null || d["prompt_images"] === undefined) {
+    } else if (
+      d["prompt_images"] === null ||
+      d["prompt_images"] === undefined
+    ) {
       d["prompt_images"] = [];
     }
     // Deserialize image_paths
@@ -752,12 +808,16 @@ export class TaskDB {
   }
 
   get_task(task_id: number): Row | null {
-    const row = this.conn.query("SELECT * FROM tasks WHERE id = ?").get(task_id) as Row | null;
+    const row = this.conn
+      .query("SELECT * FROM tasks WHERE id = ?")
+      .get(task_id) as Row | null;
     return row ? this._deserialize_task(row) : null;
   }
 
   get_all_tasks(): Row[] {
-    const rows = this.conn.query("SELECT * FROM tasks ORDER BY created_at DESC").all() as Row[];
+    const rows = this.conn
+      .query("SELECT * FROM tasks ORDER BY created_at DESC")
+      .all() as Row[];
     return rows.map((r) => this._deserialize_task(r));
   }
 
@@ -838,7 +898,9 @@ export class TaskDB {
     `,
         )
         .run(run_status, run_result, run_error, raw_output, run_id);
-      this.conn.query(`UPDATE tasks SET ${sets} WHERE id = ?`).run(...(vals as any[]));
+      this.conn
+        .query(`UPDATE tasks SET ${sets} WHERE id = ?`)
+        .run(...(vals as any[]));
     });
   }
 
@@ -855,7 +917,12 @@ export class TaskDB {
   }
 
   /** Add a new output event to the database. */
-  add_output_event(task_id: number, run_id: number, event_type: string, content: string): void {
+  add_output_event(
+    task_id: number,
+    run_id: number,
+    event_type: string,
+    content: string,
+  ): void {
     this.conn
       .query(
         `
@@ -867,7 +934,11 @@ export class TaskDB {
   }
 
   /** Get output events for a task, ordered by timestamp. */
-  get_output_events(task_id: number, limit: number = 1000, offset: number = 0): Row[] {
+  get_output_events(
+    task_id: number,
+    limit: number = 1000,
+    offset: number = 0,
+  ): Row[] {
     const rows = this.conn
       .query(
         `
@@ -1031,7 +1102,15 @@ export class TaskDB {
         VALUES (?, ?, ?, 1, ?, ?, ?, ?, 'tracking')
         `,
       )
-      .run(pattern_key, kind, summary || "", now, now, JSON.stringify(tids), JSON.stringify(rids));
+      .run(
+        pattern_key,
+        kind,
+        summary || "",
+        now,
+        now,
+        JSON.stringify(tids),
+        JSON.stringify(rids),
+      );
     return Number(cur.lastInsertRowid);
   }
 
@@ -1067,7 +1146,9 @@ export class TaskDB {
       return 0;
     }
     const row = this.conn
-      .query("SELECT recurrence_count FROM skill_patterns WHERE pattern_key = ?")
+      .query(
+        "SELECT recurrence_count FROM skill_patterns WHERE pattern_key = ?",
+      )
       .get(pattern_key) as Row | null;
     return row ? row["recurrence_count"] : 0;
   }
@@ -1077,7 +1158,11 @@ export class TaskDB {
    *
    * Tolerant: if timestamps can't be parsed, don't block promotion.
    */
-  static _within_window(first_seen: string, last_seen: string, window_days: number): boolean {
+  static _within_window(
+    first_seen: string,
+    last_seen: string,
+    window_days: number,
+  ): boolean {
     let f: Date | null;
     let ls: Date | null;
     try {
@@ -1129,11 +1214,15 @@ export class TaskDB {
       if (new Set(tids).size < min_tasks) {
         continue;
       }
-      if (!TaskDB._within_window(r["first_seen"], r["last_seen"], window_days)) {
+      if (
+        !TaskDB._within_window(r["first_seen"], r["last_seen"], window_days)
+      ) {
         continue;
       }
       this.conn
-        .query("UPDATE skill_patterns SET status = 'candidate', updated_at = ? WHERE id = ?")
+        .query(
+          "UPDATE skill_patterns SET status = 'candidate', updated_at = ? WHERE id = ?",
+        )
         .run(now, r["id"]);
       marked += 1;
     }
@@ -1209,7 +1298,9 @@ export class TaskDB {
   }
 
   delete_skill_draft(pattern_id: number): void {
-    this.conn.query("DELETE FROM skill_drafts WHERE pattern_id = ?").run(pattern_id);
+    this.conn
+      .query("DELETE FROM skill_drafts WHERE pattern_id = ?")
+      .run(pattern_id);
   }
 
   // ── Skill registry ─────────────────────────────────────────────────────
@@ -1240,29 +1331,41 @@ export class TaskDB {
     if (cur.lastInsertRowid) {
       return Number(cur.lastInsertRowid);
     }
-    const row = this.conn.query("SELECT id FROM skills WHERE name = ?").get(name) as Row | null;
+    const row = this.conn
+      .query("SELECT id FROM skills WHERE name = ?")
+      .get(name) as Row | null;
     return row ? Number(row["id"]) : null;
   }
 
   get_skills(): Row[] {
-    const rows = this.conn.query("SELECT * FROM skills ORDER BY created_at DESC").all() as Row[];
+    const rows = this.conn
+      .query("SELECT * FROM skills ORDER BY created_at DESC")
+      .all() as Row[];
     return rows.map((r) => ({ ...r }));
   }
 
   get_skill(skill_id: number): Row | null {
-    const row = this.conn.query("SELECT * FROM skills WHERE id = ?").get(skill_id) as Row | null;
+    const row = this.conn
+      .query("SELECT * FROM skills WHERE id = ?")
+      .get(skill_id) as Row | null;
     return row ? { ...row } : null;
   }
 
   set_skill_enabled(skill_id: number, enabled: boolean): void {
-    this.conn.query("UPDATE skills SET enabled = ? WHERE id = ?").run(enabled ? 1 : 0, skill_id);
+    this.conn
+      .query("UPDATE skills SET enabled = ? WHERE id = ?")
+      .run(enabled ? 1 : 0, skill_id);
   }
 
   delete_skill(skill_id: number): void {
     this.conn.query("DELETE FROM skills WHERE id = ?").run(skill_id);
   }
 
-  add_dependency(task_id: number, depends_on_task_id: number, inject_result: boolean = false): void {
+  add_dependency(
+    task_id: number,
+    depends_on_task_id: number,
+    inject_result: boolean = false,
+  ): void {
     this.conn
       .query(
         `
@@ -1309,7 +1412,9 @@ export class TaskDB {
 
   /** Remove all upstream dependencies for a task. */
   clear_dependencies(task_id: number): void {
-    this.conn.query("DELETE FROM task_dependencies WHERE task_id = ?").run(task_id);
+    this.conn
+      .query("DELETE FROM task_dependencies WHERE task_id = ?")
+      .run(task_id);
   }
 
   /** Return upstream tasks that task_id depends on. */
@@ -1351,10 +1456,14 @@ export class TaskDB {
 
   delete_task(task_id: number): void {
     this.transaction(() => {
-      this.conn.query("DELETE FROM task_output_events WHERE task_id = ?").run(task_id);
+      this.conn
+        .query("DELETE FROM task_output_events WHERE task_id = ?")
+        .run(task_id);
       this.conn.query("DELETE FROM task_runs WHERE task_id = ?").run(task_id);
       this.conn
-        .query("DELETE FROM task_dependencies WHERE task_id = ? OR depends_on_task_id = ?")
+        .query(
+          "DELETE FROM task_dependencies WHERE task_id = ? OR depends_on_task_id = ?",
+        )
         .run(task_id, task_id);
       this.conn.query("DELETE FROM tasks WHERE id = ?").run(task_id);
     });

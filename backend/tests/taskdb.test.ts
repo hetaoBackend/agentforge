@@ -33,7 +33,9 @@ describe("TaskDB", () => {
   // ── completed-run queries (skill sweep inputs) helper ─────────────────────
   function finishWithTimestamp(run_id: number, finished_at: string): void {
     db.conn
-      .query("UPDATE task_runs SET status='completed', finished_at=? WHERE id=?")
+      .query(
+        "UPDATE task_runs SET status='completed', finished_at=? WHERE id=?",
+      )
       .run(finished_at, run_id);
   }
 
@@ -49,14 +51,18 @@ describe("TaskDB", () => {
 
   // ── run history ────────────────────────────────────────────────────────────
   test("test_run_lifecycle_and_ordering", () => {
-    const tid = db.add_task(makeTask({ title: "t", prompt: "p", working_dir: "." }));
+    const tid = db.add_task(
+      makeTask({ title: "t", prompt: "p", working_dir: "." }),
+    );
     const run1 = db.add_run(tid);
     db.finish_run(run1, "completed", "ok", null, "raw1");
     const run2 = db.add_run(tid);
     db.finish_run(run2, "failed", null, "boom");
 
     const runs = db.get_task_runs(tid);
-    expect(new Set(runs.map((r) => r["status"]))).toEqual(new Set(["completed", "failed"]));
+    expect(new Set(runs.map((r) => r["status"]))).toEqual(
+      new Set(["completed", "failed"]),
+    );
     expect(new Set(runs.map((r) => r["id"]))).toEqual(new Set([run1, run2]));
     const completed = runs.find((r) => r["id"] === run1)!;
     expect(completed["result"]).toBe("ok");
@@ -65,7 +71,9 @@ describe("TaskDB", () => {
   });
 
   test("test_finish_run_and_update_task_is_atomic", () => {
-    const tid = db.add_task(makeTask({ title: "t", prompt: "p", working_dir: "." }));
+    const tid = db.add_task(
+      makeTask({ title: "t", prompt: "p", working_dir: "." }),
+    );
     const rid = db.add_run(tid);
 
     db.finish_run_and_update_task(
@@ -87,7 +95,9 @@ describe("TaskDB", () => {
 
   // ── output events ──────────────────────────────────────────────────────────
   test("test_output_events_per_task_and_per_run", () => {
-    const tid = db.add_task(makeTask({ title: "t", prompt: "p", working_dir: "." }));
+    const tid = db.add_task(
+      makeTask({ title: "t", prompt: "p", working_dir: "." }),
+    );
     const run1 = db.add_run(tid);
     const run2 = db.add_run(tid);
     db.add_output_event(tid, run1, "assistant", "hello");
@@ -109,7 +119,9 @@ describe("TaskDB", () => {
 
   // ── completed-run queries (skill sweep inputs) ─────────────────────────────
   test("test_get_completed_runs_since_watermark", () => {
-    const tid = db.add_task(makeTask({ title: "t", prompt: "p", working_dir: "." }));
+    const tid = db.add_task(
+      makeTask({ title: "t", prompt: "p", working_dir: "." }),
+    );
     const old = db.add_run(tid);
     const newer = db.add_run(tid);
     finishWithTimestamp(old, "2020-01-01T00:00:00");
@@ -126,7 +138,9 @@ describe("TaskDB", () => {
   });
 
   test("test_get_recent_completed_runs_oldest_first_with_limit", () => {
-    const tid = db.add_task(makeTask({ title: "t", prompt: "p", working_dir: "." }));
+    const tid = db.add_task(
+      makeTask({ title: "t", prompt: "p", working_dir: "." }),
+    );
     const r1 = db.add_run(tid);
     const r2 = db.add_run(tid);
     const r3 = db.add_run(tid);
@@ -158,8 +172,12 @@ describe("TaskDB", () => {
     db.upsert_skill_pattern("k", "recipe", "", 2, 11);
     expect(db.get_skill_pattern_recurrence("k")).toBe(2);
     const pattern = db.get_skill_pattern(pid)!;
-    expect([...JSON.parse(pattern["contributing_task_ids"])].sort()).toEqual([1, 2]);
-    expect([...JSON.parse(pattern["contributing_run_ids"])].sort()).toEqual([10, 11]);
+    expect([...JSON.parse(pattern["contributing_task_ids"])].sort()).toEqual([
+      1, 2,
+    ]);
+    expect([...JSON.parse(pattern["contributing_run_ids"])].sort()).toEqual([
+      10, 11,
+    ]);
     // empty summary must NOT clobber the prior one
     expect(pattern["summary"]).toBe("updated");
   });
@@ -205,7 +223,17 @@ describe("TaskDB", () => {
     expect(db.get_skill_draft(pid)!["status"]).toBe("drafting");
 
     // ON CONFLICT(pattern_id) updates in place
-    db.upsert_skill_draft(pid, "ready", "my-skill", "", "recipe", "b", null, true, "reusable");
+    db.upsert_skill_draft(
+      pid,
+      "ready",
+      "my-skill",
+      "",
+      "recipe",
+      "b",
+      null,
+      true,
+      "reusable",
+    );
     const draft = db.get_skill_draft(pid)!;
     expect(draft["status"]).toBe("ready");
     expect(draft["name"]).toBe("my-skill");
@@ -223,8 +251,12 @@ describe("TaskDB", () => {
 
   // ── dependencies / DAG ─────────────────────────────────────────────────────
   test("test_dependency_crud_and_views", () => {
-    const up = db.add_task(makeTask({ title: "up", prompt: "p", working_dir: "." }));
-    const down = db.add_task(makeTask({ title: "down", prompt: "p", working_dir: "." }));
+    const up = db.add_task(
+      makeTask({ title: "up", prompt: "p", working_dir: "." }),
+    );
+    const down = db.add_task(
+      makeTask({ title: "down", prompt: "p", working_dir: "." }),
+    );
 
     db.add_dependency(down, up, true);
     // duplicate insert is ignored
@@ -246,25 +278,39 @@ describe("TaskDB", () => {
   });
 
   test("test_add_dependencies_batch_and_clear", () => {
-    const a = db.add_task(makeTask({ title: "a", prompt: "p", working_dir: "." }));
-    const b = db.add_task(makeTask({ title: "b", prompt: "p", working_dir: "." }));
-    const down = db.add_task(makeTask({ title: "d", prompt: "p", working_dir: "." }));
+    const a = db.add_task(
+      makeTask({ title: "a", prompt: "p", working_dir: "." }),
+    );
+    const b = db.add_task(
+      makeTask({ title: "b", prompt: "p", working_dir: "." }),
+    );
+    const down = db.add_task(
+      makeTask({ title: "d", prompt: "p", working_dir: "." }),
+    );
 
     db.add_dependencies_batch(down, [
       { task_id: a, inject_result: true },
       { task_id: b, inject_result: false },
     ]);
     const deps = db.get_dependencies(down);
-    expect(new Set(deps.map((d) => d["depends_on_task_id"]))).toEqual(new Set([a, b]));
+    expect(new Set(deps.map((d) => d["depends_on_task_id"]))).toEqual(
+      new Set([a, b]),
+    );
 
     db.clear_dependencies(down);
     expect(db.get_dependencies(down)).toEqual([]);
   });
 
   test("test_get_dag_tasks_filters_by_dag_id", () => {
-    db.add_task(makeTask({ title: "x", prompt: "p", working_dir: ".", dag_id: "flow-1" }));
-    db.add_task(makeTask({ title: "y", prompt: "p", working_dir: ".", dag_id: "flow-1" }));
-    db.add_task(makeTask({ title: "z", prompt: "p", working_dir: ".", dag_id: "other" }));
+    db.add_task(
+      makeTask({ title: "x", prompt: "p", working_dir: ".", dag_id: "flow-1" }),
+    );
+    db.add_task(
+      makeTask({ title: "y", prompt: "p", working_dir: ".", dag_id: "flow-1" }),
+    );
+    db.add_task(
+      makeTask({ title: "z", prompt: "p", working_dir: ".", dag_id: "other" }),
+    );
 
     const flow = db.get_dag_tasks("flow-1");
     expect(new Set(flow.map((t) => t["title"]))).toEqual(new Set(["x", "y"]));
@@ -272,8 +318,12 @@ describe("TaskDB", () => {
 
   // ── cascading delete ───────────────────────────────────────────────────────
   test("test_delete_task_removes_runs_events_and_deps", () => {
-    const up = db.add_task(makeTask({ title: "up", prompt: "p", working_dir: "." }));
-    const tid = db.add_task(makeTask({ title: "t", prompt: "p", working_dir: "." }));
+    const up = db.add_task(
+      makeTask({ title: "up", prompt: "p", working_dir: "." }),
+    );
+    const tid = db.add_task(
+      makeTask({ title: "t", prompt: "p", working_dir: "." }),
+    );
     db.add_dependency(tid, up);
     const rid = db.add_run(tid);
     db.add_output_event(tid, rid, "assistant", "hi");
@@ -293,7 +343,9 @@ describe("TaskDB", () => {
     const past = dateToLocalIso(new Date(now.getTime() - 5 * 60 * 1000));
     const future = dateToLocalIso(new Date(now.getTime() + 60 * 60 * 1000));
 
-    const immediate = db.add_task(makeTask({ title: "now", prompt: "p", working_dir: "." }));
+    const immediate = db.add_task(
+      makeTask({ title: "now", prompt: "p", working_dir: "." }),
+    );
     const due_scheduled = db.add_task(
       makeTask({
         title: "due",
@@ -314,7 +366,9 @@ describe("TaskDB", () => {
       }),
     );
     db.update_task(not_yet, { status: "scheduled" });
-    const running = db.add_task(makeTask({ title: "running", prompt: "p", working_dir: "." }));
+    const running = db.add_task(
+      makeTask({ title: "running", prompt: "p", working_dir: "." }),
+    );
     db.update_task(running, { status: "running" });
 
     const due_ids = new Set(db.get_due_tasks().map((t) => t["id"]));

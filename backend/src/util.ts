@@ -26,7 +26,8 @@ export function getEnv(): Record<string, string> {
   ];
   const current = env.PATH ?? "";
   env.PATH =
-    extra.filter((p) => !current.includes(p)).join(":") + (current ? `:${current}` : "");
+    extra.filter((p) => !current.includes(p)).join(":") +
+    (current ? `:${current}` : "");
   return env;
 }
 
@@ -60,9 +61,13 @@ export function nowIso(): string {
  *
  * Throws on unparseable input (≙ Python ValueError).
  */
-export function parseComparableDatetime(value: string | null | undefined): Date | null {
+export function parseComparableDatetime(
+  value: string | null | undefined,
+): Date | null {
   if (!value) return null;
-  const normalized = /^\d{4}-\d{2}-\d{2}$/.test(value) ? `${value}T00:00:00` : value;
+  const normalized = /^\d{4}-\d{2}-\d{2}$/.test(value)
+    ? `${value}T00:00:00`
+    : value;
   const dt = new Date(normalized);
   if (Number.isNaN(dt.getTime())) {
     throw new Error(`Invalid isoformat string: ${JSON.stringify(value)}`);
@@ -70,7 +75,9 @@ export function parseComparableDatetime(value: string | null | undefined): Date 
   return dt;
 }
 
-export function normalizeDatetimeForStorage(value: string | null | undefined): string | null {
+export function normalizeDatetimeForStorage(
+  value: string | null | undefined,
+): string | null {
   if (value === null || value === undefined) return null;
   let dt: Date | null;
   try {
