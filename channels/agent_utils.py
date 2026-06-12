@@ -20,6 +20,7 @@ SUPPORTED_AGENTS = {
     "claude": "Claude Code (claude CLI)",
     "codex": "Codex CLI (openai/codex)",
 }
+DEFAULT_AGENT = "codex"
 
 # Regex: /agent <name>
 _AGENT_CMD_RE = re.compile(
@@ -62,6 +63,6 @@ def handle_agent_command(
 def resolve_agent(channel_key: str, db: "TaskDB") -> str:
     """
     Return the current default agent from settings.
-    Falls back to "claude" if not set.
+    Falls back to the app default if not set.
     """
-    return db.get_setting("default_agent", "claude")
+    return db.get_setting("default_agent", DEFAULT_AGENT)

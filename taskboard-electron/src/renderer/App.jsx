@@ -95,6 +95,8 @@ const AGENTS = {
   claude: { label: "Claude Code", icon: "⌘", color: "#7c6aff" },
   codex: { label: "Codex CLI", icon: "◈", color: "#10a37f" },
 };
+const DEFAULT_AGENT = "codex";
+const DEFAULT_TIMEOUT_SECONDS = 12000;
 
 // ─── Formatted Output Component ───
 function FormattedOutput({ content, theme }) {
@@ -1388,7 +1390,7 @@ function HeartbeatModal({ onClose, onSubmit, initialData, defaultAgent, mode = "
     cron_expr: initialData?.cron_expr || "",
     check_prompt: initialData?.check_prompt || "",
     action_prompt_template: initialData?.action_prompt_template || "",
-    default_agent: initialData?.default_agent || defaultAgent || "claude",
+    default_agent: initialData?.default_agent || defaultAgent || DEFAULT_AGENT,
     cooldown_seconds: initialData?.cooldown_seconds || 1800,
     enabled: initialData?.enabled ?? true,
   }));
@@ -2118,7 +2120,7 @@ function NewTaskModal({ onClose, onSubmit, initialData, mode = "create" }) {
           : "",
         max_runs: initialData.max_runs || "",
         tags: initialData.tags || "",
-        agent: initialData.agent || "claude",
+        agent: initialData.agent || DEFAULT_AGENT,
         dag_id: initialData.dag_id || "",
       };
     }
@@ -2132,7 +2134,7 @@ function NewTaskModal({ onClose, onSubmit, initialData, mode = "create" }) {
       scheduled_at: "",
       max_runs: "",
       tags: "",
-      agent: "claude",
+      agent: DEFAULT_AGENT,
       dag_id: "",
     };
   });
@@ -2881,7 +2883,7 @@ function DetailPanel({ task, onClose, onResume }) {
 
       <Section title="Configuration">
         <InfoRow label="Working Dir" value={task.working_dir} />
-        <InfoRow label="Agent" value={task.agent || "claude"} />
+        <InfoRow label="Agent" value={task.agent || DEFAULT_AGENT} />
         <InfoRow label="Schedule" value={task.schedule_type} />
         {task.cron_expr && <InfoRow label="Cron" value={task.cron_expr} />}
         {task.delay_seconds && <InfoRow label="Delay" value={`${task.delay_seconds}s`} />}
@@ -3369,10 +3371,10 @@ function SettingsModal({
   onChannelsSave,
 }) {
   const [tab, setTab] = useState("general");
-  const [timeout, setTimeout] = useState(initialTimeout ?? 600);
-  const [defaultAgent, setDefaultAgent] = useState(initialDefaultAgent ?? "claude");
+  const [timeout, setTimeout] = useState(initialTimeout ?? DEFAULT_TIMEOUT_SECONDS);
+  const [defaultAgent, setDefaultAgent] = useState(initialDefaultAgent ?? DEFAULT_AGENT);
   const [skillEnabled, setSkillEnabled] = useState(false);
-  const [skillSweepAgent, setSkillSweepAgent] = useState("claude");
+  const [skillSweepAgent, setSkillSweepAgent] = useState(DEFAULT_AGENT);
   const [skillSweepCron, setSkillSweepCron] = useState("0 3 * * *");
   const [feishu, setFeishu] = useState({
     feishu_app_id: "",
@@ -3488,13 +3490,13 @@ function SettingsModal({
 
   const handleSaveGeneral = async () => {
     await updateSettings({
-      timeout: parseInt(timeout) || 600,
+      timeout: parseInt(timeout) || DEFAULT_TIMEOUT_SECONDS,
       default_agent: defaultAgent,
       skill_library_enabled: skillEnabled ? "1" : "0",
       skill_sweep_agent: skillSweepAgent,
       skill_sweep_cron: skillSweepCron,
     });
-    onSave(parseInt(timeout) || 600, defaultAgent);
+    onSave(parseInt(timeout) || DEFAULT_TIMEOUT_SECONDS, defaultAgent);
     onClose();
   };
 
@@ -3644,7 +3646,7 @@ function SettingsModal({
                 style={fieldStyle}
               />
               <div style={hintStyle}>
-                Default: 600s (10 min). Max time before a running task is killed.
+                Default: 12000s (200 min). Max time before a running task is killed.
               </div>
             </div>
             <div style={{ marginBottom: 20 }}>
@@ -5406,8 +5408,8 @@ export default function App() {
   const [heartbeatDetail, setHeartbeatDetail] = useState(null);
   const [connected, setConnected] = useState(false);
   const [filter, setFilter] = useState("");
-  const [taskTimeout, setTaskTimeout] = useState(600);
-  const [defaultAgent, setDefaultAgent] = useState("claude");
+  const [taskTimeout, setTaskTimeout] = useState(DEFAULT_TIMEOUT_SECONDS);
+  const [defaultAgent, setDefaultAgent] = useState(DEFAULT_AGENT);
   const [feishuSettings, setFeishuSettings] = useState({});
   const [channelsStatus, setChannelsStatus] = useState({});
   const [backendReady, setBackendReady] = useState(false);

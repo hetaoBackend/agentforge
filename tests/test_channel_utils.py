@@ -80,6 +80,10 @@ def test_handle_agent_command_persists_default_agent():
     assert resolve_agent("telegram", db) == "codex"
 
 
+def test_resolve_agent_defaults_to_codex():
+    assert resolve_agent("telegram", StubDB()) == "codex"
+
+
 def test_get_env_prepends_common_tool_paths(monkeypatch):
     monkeypatch.setenv("PATH", "/usr/bin:/bin")
     monkeypatch.setattr(os.path, "expanduser", lambda path: path.replace("~", "/Users/tester"))

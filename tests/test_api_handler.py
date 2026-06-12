@@ -207,8 +207,8 @@ def test_get_settings_defaults(api):
     client, _, _ = api
     status, data = client.get("/api/settings")
     assert status == 200
-    assert data["default_agent"] == "claude"
-    assert data["timeout"] == 600
+    assert data["default_agent"] == "codex"
+    assert data["timeout"] == 12000
     assert data["skill_library_enabled"] is False
 
 
@@ -871,7 +871,7 @@ def test_csrf_rejected_with_bad_token(api):
     )
     assert status == 403
     # State change must not have been applied.
-    assert db.get_setting("default_agent", "claude") == "claude"
+    assert db.get_setting("default_agent", "codex") == "codex"
 
 
 def test_csrf_accepted_with_valid_token(api):

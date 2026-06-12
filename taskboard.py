@@ -48,6 +48,8 @@ CLAUDE_STREAM_JSON_ARGS = [
     "--permission-mode",
     "bypassPermissions",
 ]
+DEFAULT_AGENT = "codex"
+DEFAULT_TIMEOUT_SECONDS = 12000
 
 LIVE_OUTPUT_EVENT_TYPES = {
     "assistant",
@@ -237,10 +239,10 @@ class Task:
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
     tags: str = ""  # comma-separated
-    agent: str = "claude"
+    agent: str = DEFAULT_AGENT
     question: Optional[str] = None  # question the agent asked
     answer: Optional[str] = None  # user's answer
-    session_id: Optional[str] = None  # claude session id for --resume
+    session_id: Optional[str] = None  # agent session/thread id for resume
     prompt_images: list = field(default_factory=list)  # [{media_type, data, name}]
     image_paths: list = field(default_factory=list)  # list of local image file paths
     dag_id: Optional[str] = None  # optional DAG workflow group label
@@ -258,7 +260,7 @@ class Heartbeat:
     interval_seconds: Optional[int] = None
     check_prompt: str = ""
     action_prompt_template: str = ""
-    default_agent: str = "claude"
+    default_agent: str = DEFAULT_AGENT
     cooldown_seconds: int = 0
     next_run_at: Optional[str] = None
     last_tick_at: Optional[str] = None
@@ -302,14 +304,14 @@ class TaskDB:
                 created_at TEXT DEFAULT (datetime('now')),
                 updated_at TEXT DEFAULT (datetime('now')),
                 tags TEXT DEFAULT '',
-                agent TEXT DEFAULT 'claude',
+                agent TEXT DEFAULT 'codex',
                 question TEXT,
                 answer TEXT
             )
         """)
         # Migration: add agent column if it doesn't exist (for existing DBs)
         try:
-            self.conn.execute("ALTER TABLE tasks ADD COLUMN agent TEXT DEFAULT 'claude'")
+            self.conn.execute("ALTER TABLE tasks ADD COLUMN agent TEXT DEFAULT 'codex'")
             self.conn.commit()
         except sqlite3.OperationalError:
             pass  # Column already exists
@@ -387,7 +389,7 @@ class TaskDB:
                 interval_seconds INTEGER,
                 check_prompt TEXT NOT NULL,
                 action_prompt_template TEXT DEFAULT '',
-                default_agent TEXT DEFAULT 'claude',
+                default_agent TEXT DEFAULT 'codex',
                 cooldown_seconds INTEGER DEFAULT 0,
                 next_run_at TEXT,
                 last_tick_at TEXT,
@@ -1597,7 +1599,10 @@ class AgentExecutor:
 
     @staticmethod
     def run(
-        prompt: str, working_dir: str = ".", timeout: int = 600, image_paths: list[str] = None
+        prompt: str,
+        working_dir: str = ".",
+        timeout: int = DEFAULT_TIMEOUT_SECONDS,
+        image_paths: list[str] = None,
     ) -> tuple[bool, str]:
         """
         Run a prompt through Claude Code CLI.
@@ -2021,7 +2026,7 @@ class TaskScheduler(BusAwareSchedulerMixin):
         agent = (
             agent
             or self.db.get_setting("skill_sweep_agent", None)
-            or self.db.get_setting("default_agent", "claude")
+            or self.db.get_setting("default_agent", DEFAULT_AGENT)
         )
         watermark = self.db.get_setting("skill_sweep_watermark", "") or ""
         if full:
@@ -2196,7 +2201,7 @@ class TaskScheduler(BusAwareSchedulerMixin):
         agent = (
             agent
             or self.db.get_setting("skill_sweep_agent", None)
-            or self.db.get_setting("default_agent", "claude")
+            or self.db.get_setting("default_agent", DEFAULT_AGENT)
         )
         try:
             tids = json.loads(pattern["contributing_task_ids"]) or []
@@ -2426,7 +2431,7 @@ class TaskScheduler(BusAwareSchedulerMixin):
             return False, f"{agent} CLI not found"
         except OSError as e:
             return False, str(e)
-        timeout_secs = int(self.db.get_setting("timeout", "600"))
+        timeout_secs = int(self.db.get_setting("timeout", str(DEFAULT_TIMEOUT_SECONDS)))
         stdout_chunks = []
         stderr_chunks = []
 
@@ -2549,7 +2554,7 @@ class TaskScheduler(BusAwareSchedulerMixin):
                 interval_seconds=heartbeat.get("interval_seconds"),
                 check_prompt=heartbeat["check_prompt"],
                 action_prompt_template=heartbeat.get("action_prompt_template") or "",
-                default_agent=heartbeat.get("default_agent") or "claude",
+                default_agent=heartbeat.get("default_agent") or DEFAULT_AGENT,
                 cooldown_seconds=int(heartbeat.get("cooldown_seconds") or 0),
             ),
             now,
@@ -2560,7 +2565,7 @@ class TaskScheduler(BusAwareSchedulerMixin):
                 output_chunks.append(line)
                 self._live_heartbeat_output[tick_id] = "".join(output_chunks)
 
-            agent = heartbeat.get("default_agent") or "claude"
+            agent = heartbeat.get("default_agent") or DEFAULT_AGENT
             prompt = self._render_heartbeat_check_prompt(heartbeat)
             working_dir_expanded = os.path.expanduser(heartbeat["working_dir"])
             if agent == "codex":
@@ -2616,7 +2621,7 @@ class TaskScheduler(BusAwareSchedulerMixin):
                         prompt=task_prompt,
                         working_dir=heartbeat["working_dir"],
                         schedule_type=ScheduleType.IMMEDIATE,
-                        agent=heartbeat.get("default_agent") or "claude",
+                        agent=heartbeat.get("default_agent") or DEFAULT_AGENT,
                         tags="heartbeat",
                     )
                     task_id = self.submit_task(task)
@@ -3237,7 +3242,7 @@ class TaskScheduler(BusAwareSchedulerMixin):
                 except Exception as e:
                     logger.error(f"Task {tid}: Failed to load image {img_path}: {e}")
 
-        agent = task.get("agent", "claude")
+        agent = task.get("agent") or DEFAULT_AGENT
         use_stdin = bool(prompt_images) and agent == "claude"
 
         if agent == "codex":
@@ -3285,7 +3290,7 @@ class TaskScheduler(BusAwareSchedulerMixin):
         # Popen itself raises (e.g. CLI not found) before the timer is armed.
         timed_out = [False]
         try:
-            timeout_secs = int(self.db.get_setting("timeout", "600"))
+            timeout_secs = int(self.db.get_setting("timeout", str(DEFAULT_TIMEOUT_SECONDS)))
             start_time = time.time()
             proc = subprocess.Popen(
                 cmd,
@@ -3771,7 +3776,7 @@ class TaskScheduler(BusAwareSchedulerMixin):
                 interval_seconds=heartbeat.get("interval_seconds"),
                 check_prompt=heartbeat["check_prompt"],
                 action_prompt_template=heartbeat.get("action_prompt_template") or "",
-                default_agent=heartbeat.get("default_agent") or "claude",
+                default_agent=heartbeat.get("default_agent") or DEFAULT_AGENT,
                 cooldown_seconds=int(heartbeat.get("cooldown_seconds") or 0),
             ),
             datetime.now(),
@@ -3936,7 +3941,7 @@ class TaskAPIHandler(BaseHTTPRequestHandler):
                     "default_agent",
                     existing.get("default_agent")
                     if existing
-                    else self.db.get_setting("default_agent", "claude"),
+                    else self.db.get_setting("default_agent", DEFAULT_AGENT),
                 )
             ),
             cooldown_seconds=cooldown_seconds,
@@ -4112,11 +4117,11 @@ class TaskAPIHandler(BaseHTTPRequestHandler):
         elif path == "/api/settings":
             self._json_response(
                 {
-                    "default_agent": self.db.get_setting("default_agent", "claude"),
-                    "timeout": int(self.db.get_setting("timeout", "600")),
+                    "default_agent": self.db.get_setting("default_agent", DEFAULT_AGENT),
+                    "timeout": int(self.db.get_setting("timeout", str(DEFAULT_TIMEOUT_SECONDS))),
                     "skill_library_enabled": self.db.get_setting("skill_library_enabled", "0")
                     == "1",
-                    "skill_sweep_agent": self.db.get_setting("skill_sweep_agent", "claude"),
+                    "skill_sweep_agent": self.db.get_setting("skill_sweep_agent", DEFAULT_AGENT),
                     "skill_sweep_cron": self.db.get_setting("skill_sweep_cron", "0 3 * * *"),
                 }
             )
@@ -4361,7 +4366,7 @@ class TaskAPIHandler(BaseHTTPRequestHandler):
                 next_run_at=body.get("next_run_at"),  # Allow setting next_run_at directly
                 max_runs=body.get("max_runs"),
                 tags=body.get("tags", ""),
-                agent=body.get("agent") or self.db.get_setting("default_agent", "claude"),
+                agent=body.get("agent") or self.db.get_setting("default_agent", DEFAULT_AGENT),
                 prompt_images=prompt_images,
                 image_paths=image_paths,
                 dag_id=body.get("dag_id"),
@@ -4596,7 +4601,7 @@ class TaskAPIHandler(BaseHTTPRequestHandler):
                     next_run_at=tdef.get("next_run_at"),
                     max_runs=tdef.get("max_runs"),
                     tags=tdef.get("tags", ""),
-                    agent=tdef.get("agent") or self.db.get_setting("default_agent", "claude"),
+                    agent=tdef.get("agent") or self.db.get_setting("default_agent", DEFAULT_AGENT),
                     prompt_images=prompt_images,
                     dag_id=dag_id,
                 )
@@ -4945,15 +4950,15 @@ class TaskAPIHandler(BaseHTTPRequestHandler):
 
     MAX_BODY_SIZE = 10 * 1024 * 1024  # 10 MB
 
-    def _drain_body(self):
-        """Consume and discard the request body (capped) so an early rejection
-        doesn't desync the keep-alive connection and surface to the client as a
+    def _drain_body(self, length: Optional[int] = None):
+        """Consume and discard the request body so an early rejection doesn't
+        desync the keep-alive connection and surface to the client as a
         connection reset instead of the intended response."""
         try:
-            length = int(self.headers.get("Content-Length", 0))
+            length = int(self.headers.get("Content-Length", 0)) if length is None else length
         except (TypeError, ValueError):
             return
-        remaining = min(length, self.MAX_BODY_SIZE)
+        remaining = max(length, 0)
         while remaining > 0:
             chunk = self.rfile.read(min(remaining, 65536))
             if not chunk:
@@ -4973,6 +4978,7 @@ class TaskAPIHandler(BaseHTTPRequestHandler):
         except (TypeError, ValueError):
             length = 0
         if length > self.MAX_BODY_SIZE:
+            self._drain_body(length)
             self._json_response({"error": "request body too large"}, 413)
             return None
         raw = self.rfile.read(length) if length > 0 else b""

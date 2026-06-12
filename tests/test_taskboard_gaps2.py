@@ -24,6 +24,7 @@ Distinct from the existing files; targeted areas:
   request-body-too-large 413.
 """
 
+import io
 import json
 import os
 import tempfile
@@ -774,3 +775,18 @@ def test_post_body_too_large_returns_413(api, monkeypatch):
     status, data = client.post("/api/tasks", {"prompt": "x" * 200, "schedule_type": "immediate"})
     assert status == 413
     assert "too large" in data["error"]
+
+
+def test_read_body_too_large_drains_declared_body(monkeypatch):
+    handler = object.__new__(TaskAPIHandler)
+    handler.headers = {"Content-Length": "32"}
+    handler.rfile = io.BytesIO(b"x" * 32)
+    handler.MAX_BODY_SIZE = 16
+    responses = []
+    monkeypatch.setattr(
+        handler, "_json_response", lambda data, status=200: responses.append((data, status))
+    )
+
+    assert handler._read_body() is None
+    assert handler.rfile.read() == b""
+    assert responses == [({"error": "request body too large"}, 413)]
