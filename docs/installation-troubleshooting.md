@@ -4,13 +4,13 @@ This guide covers the most common issues when installing AgentForge's Electron f
 
 ---
 
-## `npm install` hangs or freezes
+## `bun install` hangs or freezes
 
 This is the most common issue. The terminal appears stuck after a few lines of output, with no error message.
 
 ### Why this happens
 
-`npm install` in `taskboard-electron/` triggers two heavy operations:
+`bun install` in `taskboard-electron/` triggers two heavy operations:
 
 1. **Electron binary download** — Electron 40 is ~100MB, downloaded from GitHub releases. This is the most common culprit, especially in China or on slow connections.
 2. **Native module compilation** — Some packages use `node-gyp` to compile C++ code. This requires build tools and can silently stall if they are missing.
@@ -25,11 +25,11 @@ If this is your first install, give it **3–5 minutes**. The download may still
 
 ## Step 2: Diagnose the hang
 
-Open a second terminal while `npm install` is running:
+Open a second terminal while `bun install` is running:
 
 ```bash
-# Check if node is actively doing network I/O
-lsof -p $(pgrep -f "node.*npm") 2>/dev/null | grep -i net
+# Check if bun is actively doing network I/O
+lsof -p $(pgrep -f "bun") 2>/dev/null | grep -i net
 ```
 
 - If you see active connections → it's downloading, just slow. Use the mirror fix below.
@@ -45,13 +45,13 @@ Set mirrors before installing:
 
 ```bash
 # npm registry mirror
-npm config set registry https://registry.npmmirror.com
+bun install --registry https://registry.npmmirror.com
 
 # Electron binary mirror (critical — this is what usually hangs)
 export ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/
 
 cd taskboard-electron
-npm install
+bun install
 ```
 
 To make the Electron mirror permanent:
@@ -68,7 +68,7 @@ Use a VPN, or set a custom Electron mirror:
 ```bash
 export ELECTRON_MIRROR=https://github.com/electron/electron/releases/download/
 cd taskboard-electron
-npm install
+bun install
 ```
 
 ---
@@ -81,15 +81,15 @@ If a previous interrupted install left corrupted cache:
 cd taskboard-electron
 rm -rf node_modules
 rm -f package-lock.json
-npm cache clean --force
-npm install
+bun pm cache rm
+bun install
 ```
 
 ---
 
 ## Fix C: Missing build tools (native module compilation fails)
 
-Some packages require platform-specific compilers. Install them before running `npm install`.
+Some packages require platform-specific compilers. Install them before running `bun install`.
 
 ### macOS
 
@@ -114,7 +114,7 @@ sudo apt-get install build-essential python3
 Run in an **Administrator** PowerShell:
 
 ```powershell
-npm install --global windows-build-tools
+bun install --global windows-build-tools
 ```
 
 Or install manually:
@@ -123,21 +123,19 @@ Or install manually:
 
 ---
 
-## Fix D: Node.js version mismatch
+## Fix D: Bun version mismatch
 
-AgentForge requires **Node.js 18 or later**. Check your version:
+AgentForge requires **Bun 1.3 or later**. Check your version:
 
 ```bash
-node -v   # Should be v18.x or higher
-npm -v    # Should be 9.x or higher
+bun -v   # Should be 1.3.x or higher
 ```
 
-If outdated, install the latest LTS from [nodejs.org](https://nodejs.org/) or use a version manager:
+If outdated or missing, install/upgrade from [bun.sh](https://bun.sh/):
 
 ```bash
-# Using nvm
-nvm install --lts
-nvm use --lts
+curl -fsSL https://bun.sh/install | bash   # install
+bun upgrade                                # or upgrade in place
 ```
 
 ---
@@ -148,23 +146,23 @@ nvm use --lts
 cd taskboard-electron
 
 # Clean everything
-rm -rf node_modules .vite
-rm -f package-lock.json
+rm -rf node_modules .bun
+rm -f bun.lock
 
 # Set mirrors
-npm config set registry https://registry.npmmirror.com
+bun install --registry https://registry.npmmirror.com
 echo 'electron_mirror=https://npmmirror.com/mirrors/electron/' >> ~/.npmrc
 
 # Reinstall
-npm cache clean --force
-npm install
+bun pm cache rm
+bun install
 ```
 
 ---
 
 ## Verify installation succeeded
 
-After `npm install` completes, confirm Electron was downloaded:
+After `bun install` completes, confirm Electron was downloaded:
 
 ```bash
 ls taskboard-electron/node_modules/electron/dist/
@@ -175,7 +173,7 @@ Then start the app:
 
 ```bash
 cd taskboard-electron
-npm start
+bun run start
 ```
 
 ---
@@ -185,11 +183,9 @@ npm start
 Collect this information when reporting an issue:
 
 ```bash
-node -v
-npm -v
+bun -v
 uname -a          # macOS/Linux
-npm config get registry
-cat ~/.npmrc
+cat ~/.npmrc      # electron mirror config, if any
 ```
 
 Open an issue at: https://github.com/anthropics/agentforge/issues

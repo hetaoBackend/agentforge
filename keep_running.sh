@@ -13,4 +13,4 @@ sudo pmset -c displaysleep 10 # 显示器可睡眠10分钟
 
 # 2. 启动关键进程并保持唤醒
 echo "[INFO] 启动进程并保持唤醒..."
-caffeinate -dimsu bash -c "cd taskboard-electron && npm start"
+caffeinate -dimsu bash -c "cd taskboard-electron && bun run start"
