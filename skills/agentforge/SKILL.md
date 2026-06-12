@@ -16,17 +16,17 @@ Interact with AgentForge, a task orchestration system for AI coding agents.
 
 ## Script Path
 
-The CLI script is located at `$SKILL_DIR/scripts/agentforge_api.py` relative to this skill's installation directory.
+The CLI script is located at `$SKILL_DIR/scripts/agentforge_api.ts` relative to this skill's installation directory.
 
 Resolve the absolute path before invoking:
 ```bash
 SKILL_DIR="$(cd "$(dirname "$0")" && pwd)"
-python "$SKILL_DIR/scripts/agentforge_api.py" --method health
+bun "$SKILL_DIR/scripts/agentforge_api.ts" --method health
 ```
 
 In practice, use the full absolute path when calling the script, e.g.:
 ```bash
-python /path/to/skills/agentforge/scripts/agentforge_api.py --method list
+bun /path/to/skills/agentforge/scripts/agentforge_api.ts --method list
 ```
 
 **No external dependencies required** — the script uses only Python standard library (`urllib`, `json`, `argparse`).
@@ -37,26 +37,26 @@ Use the CLI script with explicit `--method` parameter:
 
 ```bash
 # Create an immediate task
-python scripts/agentforge_api.py --method create \
+bun scripts/agentforge_api.ts --method create \
   --prompt "Run the test suite" --title "Run tests" --dir /path/to/project
 
 # List all tasks
-python scripts/agentforge_api.py --method list
+bun scripts/agentforge_api.ts --method list
 
 # Get task details
-python scripts/agentforge_api.py --method get --task-id 5
+bun scripts/agentforge_api.ts --method get --task-id 5
 
 # View live output
-python scripts/agentforge_api.py --method output --task-id 5
+bun scripts/agentforge_api.ts --method output --task-id 5
 
 # Retry a failed task
-python scripts/agentforge_api.py --method retry --task-id 5
+bun scripts/agentforge_api.ts --method retry --task-id 5
 
 # Delete a task
-python scripts/agentforge_api.py --method delete --task-id 5
+bun scripts/agentforge_api.ts --method delete --task-id 5
 
 # Cancel a task
-python scripts/agentforge_api.py --method cancel --task-id 5
+bun scripts/agentforge_api.ts --method cancel --task-id 5
 ```
 
 ## Core Operations
@@ -67,35 +67,35 @@ Create tasks using `--method create` with explicit parameters:
 
 **Immediate execution:**
 ```bash
-python scripts/agentforge_api.py --method create \
+bun scripts/agentforge_api.ts --method create \
   --prompt "Fix the bug in login.py" \
   --title "Fix login bug" --dir ~/my-project
 ```
 
 **Delayed execution:**
 ```bash
-python scripts/agentforge_api.py --method create \
+bun scripts/agentforge_api.ts --method create \
   --prompt "Send status report" --title "Status report" \
   --schedule delayed --delay 300
 ```
 
 **At specific time (one-time execution):**
 ```bash
-python scripts/agentforge_api.py --method create \
+bun scripts/agentforge_api.ts --method create \
   --prompt "Deploy to production" --title "Production deploy" \
   --schedule scheduled_at --at "2026-02-15 14:30:00"
 ```
 
 **Recurring cron schedule:**
 ```bash
-python scripts/agentforge_api.py --method create \
+bun scripts/agentforge_api.ts --method create \
   --prompt "Run daily backup" --title "Daily backup" \
   --schedule cron --cron "0 2 * * *" --max-runs 30
 ```
 
 **With image attachments:**
 ```bash
-python scripts/agentforge_api.py --method create \
+bun scripts/agentforge_api.ts --method create \
   --prompt "Analyze this screenshot" --title "Screenshot analysis" \
   --image-paths "/path/to/image1.png,/path/to/image2.jpg"
 ```
@@ -110,7 +110,7 @@ python scripts/agentforge_api.py --method create \
 
 **List all tasks:**
 ```bash
-python scripts/agentforge_api.py --method list
+bun scripts/agentforge_api.ts --method list
 # Output: 🕐 #1: My task (pending)
 #         ⏳ #2: Running task (running)
 #         ✅ #3: Done task (completed)
@@ -118,13 +118,13 @@ python scripts/agentforge_api.py --method list
 
 **List with status filter:**
 ```bash
-python scripts/agentforge_api.py --method list --status running
-python scripts/agentforge_api.py --method list --status completed --json
+bun scripts/agentforge_api.ts --method list --status running
+bun scripts/agentforge_api.ts --method list --status completed --json
 ```
 
 **Get specific task:**
 ```bash
-python scripts/agentforge_api.py --method get --task-id 5
+bun scripts/agentforge_api.ts --method get --task-id 5
 # Returns full JSON with status, result, error, etc.
 ```
 
@@ -141,7 +141,7 @@ python scripts/agentforge_api.py --method get --task-id 5
 
 **Retry a failed task (re-enqueue for execution):**
 ```bash
-python scripts/agentforge_api.py --method retry --task-id 5
+bun scripts/agentforge_api.ts --method retry --task-id 5
 # Returns: {"status": "pending"}
 ```
 
@@ -152,7 +152,7 @@ python scripts/agentforge_api.py --method retry --task-id 5
 
 **Permanently delete a task:**
 ```bash
-python scripts/agentforge_api.py --method delete --task-id 5
+bun scripts/agentforge_api.ts --method delete --task-id 5
 # Returns: {"status": "deleted"}
 ```
 
@@ -163,7 +163,7 @@ python scripts/agentforge_api.py --method delete --task-id 5
 
 **Cancel a running or pending task:**
 ```bash
-python scripts/agentforge_api.py --method cancel --task-id 5
+bun scripts/agentforge_api.ts --method cancel --task-id 5
 # Returns: {"status": "cancelled"}
 ```
 
@@ -175,19 +175,19 @@ python scripts/agentforge_api.py --method cancel --task-id 5
 
 **Get run history:**
 ```bash
-python scripts/agentforge_api.py --method runs --task-id 5
+bun scripts/agentforge_api.ts --method runs --task-id 5
 ```
 
 **Get live output for running task:**
 ```bash
-python scripts/agentforge_api.py --method output --task-id 5
+bun scripts/agentforge_api.ts --method output --task-id 5
 # Shows: Status: Running
 #        Output: [live accumulated output]
 ```
 
 **Get structured events:**
 ```bash
-python scripts/agentforge_api.py --method events --task-id 5 --limit 100
+bun scripts/agentforge_api.ts --method events --task-id 5 --limit 100
 ```
 
 ## Response Formatting
@@ -209,19 +209,19 @@ Create workflows where tasks automatically trigger downstream tasks upon complet
 **Create a task with upstream dependencies:**
 ```bash
 # Task #12 will be BLOCKED until tasks #10 and #11 complete
-python scripts/agentforge_api.py --method create \
+bun scripts/agentforge_api.ts --method create \
   --prompt "Analyze results" --title "Analysis" --dir ~/project \
   --depends-on 10,11 --dag-id my-pipeline
 
 # Inject upstream results into the prompt automatically
-python scripts/agentforge_api.py --method create \
+bun scripts/agentforge_api.ts --method create \
   --prompt "Summarize the findings" --title "Summary" --dir ~/project \
   --depends-on 12 --inject-result --dag-id my-pipeline
 ```
 
 **View a full DAG pipeline:**
 ```bash
-python scripts/agentforge_api.py --method dag --dag-id my-pipeline
+bun scripts/agentforge_api.ts --method dag --dag-id my-pipeline
 # Output:
 #   DAG: my-pipeline (3 tasks)
 #   ✅ #10: Build (completed)
@@ -245,7 +245,7 @@ The CLI provides specific error messages:
 
 ## Implementation Notes
 
-- The CLI script (`scripts/agentforge_api.py`) handles all HTTP communication
+- The CLI script (`scripts/agentforge_api.ts`) handles all HTTP communication
 - Uses only Python standard library (no `pip install` needed)
 - Default API endpoint: `http://127.0.0.1:9712/api`
 - AgentForge must be running locally for this skill to work
