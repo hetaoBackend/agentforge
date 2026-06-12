@@ -1,15 +1,12 @@
 import { app, BrowserWindow, dialog, ipcMain, powerSaveBlocker } from "electron";
 import path from "node:path";
+import os from "node:os";
 import http from "node:http";
 import { spawn, type ChildProcess } from "node:child_process";
 import started from "electron-squirrel-startup";
 import chokidar, { type FSWatcher } from "chokidar";
 
-// Injected by the electron-forge Vite plugin at build time.
-declare const MAIN_WINDOW_VITE_DEV_SERVER_URL: string | undefined;
-declare const MAIN_WINDOW_VITE_NAME: string;
-
-interface PythonCommand {
+interface BackendCommand {
   cmd: string;
   args: string[];
   cwd: string | undefined;
@@ -19,18 +16,21 @@ if (started) {
   app.quit();
 }
 
-let pythonProcess: ChildProcess | null = null;
-let pythonWatcher: FSWatcher | undefined;
+let backendProcess: ChildProcess | null = null;
+let backendWatcher: FSWatcher | undefined;
+let rendererWatcher: FSWatcher | undefined;
 
-function getPythonCommand(): PythonCommand {
+function getBackendCommand(): BackendCommand {
   if (app.isPackaged) {
+    // Single-file binary produced by `bun build --compile`.
     const binaryPath = path.join(process.resourcesPath, "taskboard");
     return { cmd: binaryPath, args: [], cwd: undefined };
   } else {
-    // In dev mode, app.getAppPath() returns taskboard-electron/ dir
-    // The Python project root is one level up
+    // In dev mode, app.getAppPath() returns taskboard-electron/ dir;
+    // the project root (containing backend/) is one level up. Keep cwd at
+    // the project root so backend relative paths match packaged behavior.
     const projectRoot = path.join(app.getAppPath(), "..");
-    return { cmd: "uv", args: ["run", "taskboard.py"], cwd: projectRoot };
+    return { cmd: "bun", args: [path.join("backend", "taskboard.ts")], cwd: projectRoot };
   }
 }
 
@@ -81,42 +81,48 @@ function killPortSync(port: number): void {
   }
 }
 
-// macOS apps launched from Finder/Dock inherit a minimal PATH (no Homebrew),
-// so the Python backend can't find tools like `node` (needed by the Weixin
-// bridge). Prepend the common install dirs so child processes resolve them.
+// macOS apps launched from Finder/Dock inherit a minimal PATH (no Homebrew,
+// no ~/.bun), so child processes can't find tools like `bun`, `node`, or the
+// agent CLIs. Prepend the common install dirs so they resolve.
 function augmentedPath(): string {
-  const extra = ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin"];
+  const extra = [
+    path.join(os.homedir(), ".bun", "bin"),
+    "/opt/homebrew/bin",
+    "/usr/local/bin",
+    "/usr/bin",
+    "/bin",
+  ];
   const current = process.env.PATH || "";
   const merged = [...extra, ...current.split(":")].filter(Boolean);
   return [...new Set(merged)].join(":");
 }
 
-function startPythonBackend(): Promise<void> {
+function startBackend(): Promise<void> {
   killPortSync(9712);
-  const { cmd, args, cwd } = getPythonCommand();
-  pythonProcess = spawn(cmd, args, {
+  const { cmd, args, cwd } = getBackendCommand();
+  backendProcess = spawn(cmd, args, {
     stdio: ["ignore", "pipe", "pipe"],
     env: { ...process.env, PATH: augmentedPath() },
     ...(cwd ? { cwd } : {}),
   });
 
-  pythonProcess.stdout.on("data", (data) => {
-    console.log("[Python]", data.toString().trim());
+  backendProcess.stdout.on("data", (data) => {
+    console.log("[Backend]", data.toString().trim());
   });
-  pythonProcess.stderr.on("data", (data) => {
-    console.error("[Python stderr]", data.toString().trim());
+  backendProcess.stderr.on("data", (data) => {
+    console.error("[Backend stderr]", data.toString().trim());
   });
-  pythonProcess.on("error", (err) => {
-    console.error("[Python] Failed to start:", err);
+  backendProcess.on("error", (err) => {
+    console.error("[Backend] Failed to start:", err);
   });
 
   return waitForBackend(9712, 15000);
 }
 
-function stopPythonBackend(): void {
-  if (!pythonProcess) return;
-  const proc = pythonProcess;
-  pythonProcess = null;
+function stopBackend(): void {
+  if (!backendProcess) return;
+  const proc = backendProcess;
+  backendProcess = null;
   try {
     proc.kill("SIGTERM");
   } catch (_) {
@@ -124,7 +130,7 @@ function stopPythonBackend(): void {
   }
 }
 
-function setupPythonHotReload(): FSWatcher | undefined {
+function setupBackendHotReload(): FSWatcher | undefined {
   if (app.isPackaged) return; // 生产环境不启用热重载
 
   const projectRoot = path.resolve(path.join(app.getAppPath(), ".."));
@@ -144,18 +150,16 @@ function setupPythonHotReload(): FSWatcher | undefined {
   let isRestarting = false; // 重启锁
 
   const scheduleRestart = (filePath: string, eventType: string) => {
-    // Restart for .py/.toml files in the project root or in the channels/ directory.
-    // Files in other subdirectories are ignored to avoid restarting when a running
-    // task modifies files (e.g. README.md, todo.md in working directories).
+    // Restart for backend TypeScript sources only (backend/**/*.ts). Files in
+    // other directories are ignored to avoid restarting when a running task
+    // modifies files (e.g. README.md, todo.md in working directories).
     const ext = path.extname(filePath).toLowerCase();
-    if (![".py", ".toml"].includes(ext)) {
+    if (ext !== ".ts") {
       return;
     }
-    // Allow root-level files and files under channels/
-    const isRootLevel = !filePath.includes("/") && !filePath.includes(path.sep);
-    const isChannelsDir =
-      filePath.startsWith("channels/") || filePath.startsWith(`channels${path.sep}`);
-    if (!isRootLevel && !isChannelsDir) {
+    const isBackendDir =
+      filePath.startsWith("backend/") || filePath.startsWith(`backend${path.sep}`);
+    if (!isBackendDir) {
       return;
     }
 
@@ -174,13 +178,13 @@ function setupPythonHotReload(): FSWatcher | undefined {
       }
 
       isRestarting = true;
-      console.log("[Hot Reload] Restarting Python backend...");
+      console.log("[Hot Reload] Restarting backend...");
       try {
-        stopPythonBackend();
-        await startPythonBackend();
-        console.log("[Hot Reload] Python backend restarted successfully");
+        stopBackend();
+        await startBackend();
+        console.log("[Hot Reload] Backend restarted successfully");
       } catch (error) {
-        console.error("[Hot Reload] Failed to restart Python backend:", error);
+        console.error("[Hot Reload] Failed to restart backend:", error);
       } finally {
         isRestarting = false;
       }
@@ -195,17 +199,36 @@ function setupPythonHotReload(): FSWatcher | undefined {
     console.error("[Hot Reload] File watcher error:", error);
   });
 
-  console.log("[Hot Reload] Python backend hot reload enabled");
+  console.log("[Hot Reload] Backend hot reload enabled");
+  return watcher;
+}
+
+// In dev, scripts/dev.ts rebuilds the renderer bundle on source changes;
+// reload the window whenever the built output updates.
+function setupRendererReload(win: BrowserWindow): FSWatcher | undefined {
+  if (app.isPackaged) return;
+  const rendererOut = path.join(app.getAppPath(), ".bun", "renderer");
+  let reloadTimeout: NodeJS.Timeout | null = null;
+  const watcher = chokidar.watch(rendererOut, { ignoreInitial: true });
+  watcher.on("all", () => {
+    if (reloadTimeout) clearTimeout(reloadTimeout);
+    reloadTimeout = setTimeout(() => {
+      if (!win.isDestroyed()) {
+        console.log("[Hot Reload] Renderer bundle changed, reloading window");
+        win.webContents.reloadIgnoringCache();
+      }
+    }, 150);
+  });
   return watcher;
 }
 
 // Handle terminal Ctrl+C and kill signals so the backend is cleaned up
 process.on("SIGINT", () => {
-  stopPythonBackend();
+  stopBackend();
   process.exit(0);
 });
 process.on("SIGTERM", () => {
-  stopPythonBackend();
+  stopBackend();
   process.exit(0);
 });
 
@@ -223,11 +246,8 @@ const createWindow = () => {
     },
   });
 
-  if (MAIN_WINDOW_VITE_DEV_SERVER_URL) {
-    mainWindow.loadURL(MAIN_WINDOW_VITE_DEV_SERVER_URL);
-  } else {
-    mainWindow.loadFile(path.join(__dirname, `../renderer/${MAIN_WINDOW_VITE_NAME}/index.html`));
-  }
+  // Renderer bundle produced by scripts/build.ts (Bun.build).
+  mainWindow.loadFile(path.join(app.getAppPath(), ".bun", "renderer", "index.html"));
 
   return mainWindow;
 };
@@ -242,16 +262,17 @@ ipcMain.handle("select-directory", async () => {
 
 app.whenReady().then(() => {
   powerSaveBlocker.start("prevent-app-suspension");
-  createWindow();
+  const mainWindow = createWindow();
 
-  // 设置Python后端热重载
+  // 设置后端与渲染层热重载
   if (!app.isPackaged) {
-    pythonWatcher = setupPythonHotReload();
+    backendWatcher = setupBackendHotReload();
+    rendererWatcher = setupRendererReload(mainWindow);
   }
 
-  startPythonBackend()
-    .then(() => console.log("[Python] Backend is ready on port 9712"))
-    .catch((err) => console.error("[Python] Backend failed:", err));
+  startBackend()
+    .then(() => console.log("[Backend] Ready on port 9712"))
+    .catch((err) => console.error("[Backend] Failed:", err));
 });
 
 app.on("activate", () => {
@@ -261,13 +282,16 @@ app.on("activate", () => {
 });
 
 app.on("window-all-closed", () => {
-  stopPythonBackend();
+  stopBackend();
   app.quit();
 });
 
 app.on("before-quit", () => {
-  stopPythonBackend();
-  if (pythonWatcher) {
-    pythonWatcher.close();
+  stopBackend();
+  if (backendWatcher) {
+    backendWatcher.close();
+  }
+  if (rendererWatcher) {
+    rendererWatcher.close();
   }
 });

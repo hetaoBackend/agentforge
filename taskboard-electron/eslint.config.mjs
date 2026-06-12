@@ -8,22 +8,21 @@ import prettier from "eslint-config-prettier";
 export default tseslint.config(
   {
     ignores: [
-      ".vite/**",
+      ".bun/**",
       "out/**",
       "node_modules/**",
       "resources/**",
       "dist/**",
       // Throwaway manual hot-reload probe, not part of the app or test suite.
-      "test_hot_reload.mjs",
     ],
   },
 
   js.configs.recommended,
 
-  // TypeScript sources (main, preload, renderer, tests).
+  // TypeScript sources (main, preload, renderer, tests, build scripts).
   ...tseslint.configs.recommended.map((config) => ({
     ...config,
-    files: ["src/**/*.{ts,tsx}"],
+    files: ["src/**/*.{ts,tsx}", "scripts/**/*.ts"],
   })),
 
   // Project-wide tweaks: allow `_`-prefixed throwaways and intentional empty
@@ -64,23 +63,15 @@ export default tseslint.config(
     },
   },
 
-  // Node-side code: Electron main/preload, build scripts, Forge/Vite configs.
+  // Node-side code: Electron main/preload, build scripts, Forge config.
   {
-    files: [
-      "src/main.ts",
-      "src/preload.ts",
-      "scripts/**/*.mjs",
-      "forge.config.js",
-      "*.config.js",
-      "vite.*.config.mjs",
-    ],
+    files: ["src/main.ts", "src/preload.ts", "scripts/**/*.ts", "forge.config.js", "*.config.js"],
     languageOptions: {
       ecmaVersion: 2024,
       globals: {
         ...globals.node,
-        // Injected by the electron-forge Vite plugin at build time.
-        MAIN_WINDOW_VITE_DEV_SERVER_URL: "readonly",
-        MAIN_WINDOW_VITE_NAME: "readonly",
+        // Bun runtime globals used by the build scripts (run with `bun`).
+        Bun: "readonly",
       },
     },
   },
@@ -96,7 +87,7 @@ export default tseslint.config(
 
   // Renderer code: browser context + React/JSX.
   {
-    files: ["src/renderer.ts", "src/renderer/**/*.{ts,tsx}"],
+    files: ["src/renderer/**/*.{ts,tsx}"],
     plugins: { react, "react-hooks": reactHooks },
     languageOptions: {
       ecmaVersion: 2024,

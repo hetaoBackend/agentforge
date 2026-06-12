@@ -7,6 +7,20 @@ module.exports = {
     name: "AgentForge",
     appBundleId: "com.agentforge.app",
     extraResource: ["./resources/taskboard"],
+    // Bun builds the app into .bun/ (see scripts/build.ts); ship only the
+    // built output, package.json, and pruned node_modules.
+    ignore: [
+      /^\/src/,
+      /^\/scripts/,
+      /^\/resources/,
+      /^\/index\.html$/,
+      /^\/tsconfig.*\.json$/,
+      /^\/eslint\.config\.mjs$/,
+      /^\/bun\.lock$/,
+      /^\/package-lock\.json$/,
+      /^\/\.vite/,
+      /^\/out/,
+    ],
     osxSign: {
       // "-" is codesign's ad-hoc identity, not a keychain certificate name.
       identity: "-",
@@ -31,29 +45,6 @@ module.exports = {
     },
   ],
   plugins: [
-    {
-      name: "@electron-forge/plugin-vite",
-      config: {
-        build: [
-          {
-            entry: "src/main.ts",
-            config: "vite.main.config.mjs",
-            target: "main",
-          },
-          {
-            entry: "src/preload.ts",
-            config: "vite.preload.config.mjs",
-            target: "preload",
-          },
-        ],
-        renderer: [
-          {
-            name: "main_window",
-            config: "vite.renderer.config.mjs",
-          },
-        ],
-      },
-    },
     new FusesPlugin({
       version: FuseVersion.V1,
       [FuseV1Options.RunAsNode]: false,
