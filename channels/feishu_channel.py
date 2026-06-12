@@ -12,6 +12,7 @@ Configure via settings API:
     feishu_default_working_dir  (working directory for tasks created from bot)
 """
 
+import asyncio
 import base64
 import json
 import logging
@@ -31,6 +32,7 @@ if TYPE_CHECKING:
 # Lazy-load lark SDK
 try:
     import lark_oapi as lark
+    import lark_oapi.ws.client as lark_ws_client
     from lark_oapi.api.im.v1 import (
         CreateImageRequest,
         CreateImageRequestBody,
@@ -50,6 +52,7 @@ try:
 except ImportError:
     FEISHU_AVAILABLE = False
     lark = None
+    lark_ws_client = None
     Emoji = None
 
 
@@ -344,6 +347,7 @@ class FeishuChannel(Channel):
         self._client = None
         self._ws_client = None
         self._ws_thread: Optional[threading.Thread] = None
+        self._ws_loop: Optional[asyncio.AbstractEventLoop] = None
 
         # task_id -> (reply_to_chat_id, root_message_id, reaction_message_id) for thread-style replies
         # root_message_id: used for replying in thread
@@ -441,30 +445,123 @@ class FeishuChannel(Channel):
         print("[Feishu] Stopping WebSocket bot...")
         self._running = False
         self.bus.unsubscribe_outbound(self._on_outbound)
-        self._client = None
-        if self._ws_client:
+        if (
+            self._ws_thread
+            and self._ws_thread.is_alive()
+            and self._ws_loop is None
+            and self._ws_thread is not threading.current_thread()
+        ):
+            deadline = time.time() + 1
+            while self._ws_loop is None and time.time() < deadline:
+                time.sleep(0.01)
+
+        ws_client = self._ws_client
+        ws_loop = self._ws_loop
+        if ws_client:
             try:
-                print("[Feishu] Calling ws_client.stop()...")
-                self._ws_client.stop()
-                print("[Feishu] ws_client.stop() completed")
+                stop_fn = getattr(ws_client, "stop", None)
+                if callable(stop_fn):
+                    print("[Feishu] Calling ws_client.stop()...")
+                    stop_fn()
+                    print("[Feishu] ws_client.stop() completed")
+                else:
+                    self._stop_ws_loop(ws_client, ws_loop)
             except Exception as e:
                 print(f"[Feishu] Error stopping ws_client: {e}")
+
+        if (
+            self._ws_thread
+            and self._ws_thread.is_alive()
+            and self._ws_thread is not threading.current_thread()
+        ):
+            self._ws_thread.join(timeout=10)
+            if self._ws_thread.is_alive():
+                print("[Feishu] WebSocket thread did not stop within timeout")
+
+        self._client = None
         self._ws_client = None
+        self._ws_loop = None
+        self._ws_thread = None
         print("[Feishu] Bot stopped")
 
     def _run_ws(self):
         print("[Feishu] WebSocket thread starting...")
+        ws_loop = asyncio.new_event_loop()
+        self._ws_loop = ws_loop
+        asyncio.set_event_loop(ws_loop)
+        previous_sdk_loop = None
+        if lark_ws_client is not None:
+            previous_sdk_loop = getattr(lark_ws_client, "loop", None)
+            lark_ws_client.loop = ws_loop
         try:
+            if not self._running:
+                print("[Feishu] WebSocket start skipped; channel already stopped")
+                return
+            if not self._ws_client:
+                print("[Feishu] WebSocket client missing; cannot start")
+                return
             print("[Feishu] Calling ws_client.start()...")
             self._ws_client.start()
             print("[Feishu] ws_client.start() returned (connection ended)")
+        except RuntimeError as e:
+            if not self._running and "Event loop stopped before Future completed" in str(e):
+                print("[Feishu] WebSocket loop stopped")
+            else:
+                print(f"[Feishu] WebSocket error: {e}")
+                import traceback
+
+                traceback.print_exc()
         except Exception as e:
             print(f"[Feishu] WebSocket error: {e}")
             import traceback
 
             traceback.print_exc()
         finally:
+            self._running = False
+            if lark_ws_client is not None and getattr(lark_ws_client, "loop", None) is ws_loop:
+                lark_ws_client.loop = previous_sdk_loop
+            self._close_ws_loop(ws_loop)
+            if self._ws_loop is ws_loop:
+                self._ws_loop = None
             print("[Feishu] WebSocket thread exiting")
+
+    def _stop_ws_loop(self, ws_client: Any, ws_loop: Optional[asyncio.AbstractEventLoop]) -> None:
+        """Stop lark-oapi versions that expose no public ws_client.stop()."""
+        if not ws_loop or ws_loop.is_closed():
+            return
+
+        disconnect = getattr(ws_client, "_disconnect", None)
+        if ws_loop.is_running():
+            if callable(disconnect):
+                future = asyncio.run_coroutine_threadsafe(disconnect(), ws_loop)
+                try:
+                    future.result(timeout=5)
+                except Exception as e:
+                    print(f"[Feishu] Error disconnecting ws_client: {e}")
+            ws_loop.call_soon_threadsafe(ws_loop.stop)
+            return
+
+        if callable(disconnect):
+            try:
+                ws_loop.run_until_complete(disconnect())
+            except Exception as e:
+                print(f"[Feishu] Error disconnecting ws_client: {e}")
+        ws_loop.stop()
+
+    def _close_ws_loop(self, ws_loop: asyncio.AbstractEventLoop) -> None:
+        if ws_loop.is_closed():
+            return
+        try:
+            pending = [task for task in asyncio.all_tasks(ws_loop) if not task.done()]
+            for task in pending:
+                task.cancel()
+            if pending:
+                ws_loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+            ws_loop.run_until_complete(ws_loop.shutdown_asyncgens())
+        except Exception as e:
+            print(f"[Feishu] Error closing WebSocket event loop: {e}")
+        finally:
+            ws_loop.close()
 
     # ── Channel ABC: send outbound message ───────────────────────
 
@@ -877,6 +974,9 @@ class FeishuChannel(Channel):
         return None
 
     def _create_reply(self, parent_message_id: str, card: dict[str, Any]) -> Optional[str]:
+        if not self._client or not FEISHU_AVAILABLE:
+            print("[Feishu] Client not initialized in _create_reply")
+            return None
         request = (
             ReplyMessageRequest.builder()
             .message_id(parent_message_id)
@@ -1459,6 +1559,9 @@ class FeishuChannel(Channel):
     def _on_message_sync(self, data) -> None:
         """Called from the WebSocket thread; runs handler synchronously."""
         print(f"[Feishu] _on_message_sync called, data type: {type(data)}")
+        if not self._running:
+            print("[Feishu] Ignoring inbound message after channel stopped")
+            return
         try:
             self._handle_inbound(data)
             print("[Feishu] Message handled successfully")

@@ -6,8 +6,11 @@ These complement (and intentionally do not duplicate) the assertions in
 tests/test_feishu_message_rendering.py and tests/test_feishu_forwarded_messages.py.
 """
 
+import asyncio
 import json
+import threading
 import time
+from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 import pytest
@@ -238,6 +241,7 @@ class TestLifecycle:
     def test_run_ws_calls_start_and_swallows_errors(self, channel):
         ws_client = Mock()
         channel._ws_client = ws_client
+        channel._running = True
         channel._run_ws()
         ws_client.start.assert_called_once()
 
@@ -245,9 +249,84 @@ class TestLifecycle:
         ws_client = Mock()
         ws_client.start.side_effect = RuntimeError("connection refused")
         channel._ws_client = ws_client
+        channel._running = True
         # Must not propagate.
         channel._run_ws()
         ws_client.start.assert_called_once()
+
+    def test_run_ws_suppresses_expected_stop_exception(self, channel):
+        def _start():
+            channel._running = False
+            raise RuntimeError("Event loop stopped before Future completed.")
+
+        ws_client = Mock()
+        ws_client.start.side_effect = _start
+        channel._ws_client = ws_client
+        channel._running = True
+
+        with patch("traceback.print_exc") as print_exc:
+            channel._run_ws()
+
+        ws_client.start.assert_called_once()
+        print_exc.assert_not_called()
+
+    def test_run_ws_installs_private_sdk_loop(self, channel):
+        old_loop = asyncio.new_event_loop()
+        fake_ws_module = SimpleNamespace(loop=old_loop)
+        captured = {}
+
+        class _WsClient:
+            def start(self):
+                captured["loop"] = fake_ws_module.loop
+                assert asyncio.get_event_loop() is fake_ws_module.loop
+
+        channel._ws_client = _WsClient()
+        channel._running = True
+        with patch("channels.feishu_channel.lark_ws_client", fake_ws_module, create=True):
+            channel._run_ws()
+
+        assert captured["loop"] is not old_loop
+        assert captured["loop"].is_closed()
+        assert channel._ws_loop is None
+        old_loop.close()
+
+    def test_stop_stops_sdk_loop_without_stop_method(self, channel):
+        loop = asyncio.new_event_loop()
+
+        class _WsClientWithoutStop:
+            def __init__(self):
+                self.disconnected = False
+
+            async def _disconnect(self):
+                self.disconnected = True
+
+        ws_client = _WsClientWithoutStop()
+
+        def _run_loop():
+            asyncio.set_event_loop(loop)
+            loop.run_forever()
+
+        thread = threading.Thread(target=_run_loop, daemon=True)
+        thread.start()
+        channel._ws_client = ws_client
+        channel._ws_loop = loop
+        channel._ws_thread = thread
+        channel._running = True
+
+        try:
+            channel.stop()
+
+            assert ws_client.disconnected is True
+            assert thread.is_alive() is False
+            assert channel._client is None
+            assert channel._ws_client is None
+            assert channel._ws_loop is None
+        finally:
+            if thread.is_alive():
+                loop.call_soon_threadsafe(loop.stop)
+                thread.join(timeout=2)
+            if not loop.is_closed():
+                loop.close()
 
 
 # ── _FeishuStreamWriter plumbing ────────────────────────────────────

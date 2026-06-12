@@ -278,6 +278,10 @@ class TestCreateReply:
         )
         assert channel._create_reply("om_parent", {"a": 1}) is None
 
+    def test_create_reply_no_client_returns_none(self, channel):
+        channel._client = None
+        assert channel._create_reply("om_parent", {"a": 1}) is None
+
 
 class TestSendMessage:
     def test_send_message_returns_id_on_success(self, channel):

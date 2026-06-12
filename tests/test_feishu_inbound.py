@@ -25,6 +25,7 @@ def mock_feishu_channel():
 
         channel = FeishuChannel(Mock(), Mock(), Mock())
         channel._client = Mock()
+        channel._running = True
 
         # Stub every outbound helper so dispatch logic is isolated.
         channel._send_message = Mock(return_value="om_sent")
@@ -116,6 +117,14 @@ class TestSimpleHandlers:
         mock_feishu_channel._handle_inbound = Mock(side_effect=RuntimeError("boom"))
         # Should not propagate.
         mock_feishu_channel._on_message_sync(object())
+
+    def test_on_message_sync_ignores_after_stop(self, mock_feishu_channel):
+        mock_feishu_channel._running = False
+        mock_feishu_channel._handle_inbound = Mock()
+
+        mock_feishu_channel._on_message_sync(object())
+
+        mock_feishu_channel._handle_inbound.assert_not_called()
 
 
 # ───────────────────────── message parsing ──────────────────────────
