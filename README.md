@@ -4,7 +4,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Platform: macOS](https://img.shields.io/badge/Platform-macOS%2012%2B-lightgrey?logo=apple)](https://github.com/releases)
-[![Python 3.12+](https://img.shields.io/badge/Python-3.12%2B-blue?logo=python)](https://python.org)
+[![Bun 1.3+](https://img.shields.io/badge/Bun-1.3%2B-black?logo=bun)](https://bun.sh) [![TypeScript](https://img.shields.io/badge/TypeScript-5-blue?logo=typescript)](https://www.typescriptlang.org)
 [![Claude Code](https://img.shields.io/badge/Powered%20by-Claude%20Code-orange)](https://docs.anthropic.com/en/docs/claude-code)
 
 **Website**: https://agentforge-landing-weld.vercel.app/
@@ -64,8 +64,7 @@ Distilled skills are standard Claude Code `SKILL.md` files (canonical copy in `~
 ## Requirements
 
 - macOS 12.0+ (Apple Silicon or Intel)
-- Python 3.12+
-- Node.js 18+
+- [Bun](https://bun.sh) 1.3+
 - [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) installed and on `PATH` (default agent)
 - [OpenAI Codex CLI](https://github.com/openai/codex) on `PATH` — optional, required only if using Codex as agent backend (`npm install -g @openai/codex`)
 
@@ -99,30 +98,25 @@ make package-dmg
 git clone https://github.com/your-org/agentforge.git
 cd agentforge
 
-uv sync
-cd taskboard-electron && npm install && cd ..
+make install-deps  # bun install in backend/ and taskboard-electron/
 
-# Terminal 1: start Python backend
-uv run taskboard.py
-
-# Terminal 2: start Electron + Vite dev server
-cd taskboard-electron && npm start
+# Start Electron + backend (Bun builds, watches, and spawns the backend)
+cd taskboard-electron && bun run start
 ```
 
 ---
 
 ## Troubleshooting
 
-### `npm install` hangs or freezes
+### `bun install` hangs or freezes
 
 This is the most common setup issue. The Electron binary (~100 MB) is downloaded from GitHub and may stall on slow connections or in China.
 
 **Quick fix — use mirrors:**
 
 ```bash
-npm config set registry https://registry.npmmirror.com
 export ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/
-cd taskboard-electron && npm install
+cd taskboard-electron && bun install --registry https://registry.npmmirror.com
 ```
 
 **Full guide:** [docs/installation-troubleshooting.md](docs/installation-troubleshooting.md) covers:
@@ -419,9 +413,8 @@ To keep the backend running persistently without the desktop app:
     <string>com.agentforge.taskboard</string>
     <key>ProgramArguments</key>
     <array>
-        <string>/usr/local/bin/uv</string>
-        <string>run</string>
-        <string>/path/to/agentforge/taskboard.py</string>
+        <string>/usr/local/bin/bun</string>
+        <string>/path/to/agentforge/backend/taskboard.ts</string>
     </array>
     <key>WorkingDirectory</key>
     <string>/path/to/agentforge</string>
@@ -447,7 +440,7 @@ launchctl load ~/Library/LaunchAgents/com.agentforge.taskboard.plist
 
 ```
 ┌──────────────────┐     HTTP/JSON      ┌──────────────────┐
-│   React Frontend │ <────────────────> │  Python Backend  │
+│   React Frontend │ <────────────────> │  Bun/TS Backend  │
 │   (Kanban UI)    │   localhost:9712   │  (Scheduler+API) │
 └──────────────────┘                   └───────┬──────────┘
                                                |
@@ -456,9 +449,9 @@ launchctl load ~/Library/LaunchAgents/com.agentforge.taskboard.plist
                          [ SQLite DB ]   [ Scheduler ]   [ Claude CLI ]
 ```
 
-- **Python backend** (`taskboard.py`) — single-file `BaseHTTPRequestHandler` server. Manages tasks in SQLite (`~/.agentforge/tasks.db`), runs `claude` or `codex` CLI via `AgentExecutor`, and schedules work with `TaskScheduler` (polls every 2 s, supports cron via `croniter`).
-- **Electron shell** (`taskboard-electron/`) — spawns the Python backend on start, kills it on quit. Loads React renderer from Vite dev server (dev) or bundled assets (prod).
-- **React frontend** (`App.jsx`) — single-component kanban board that polls the REST API and renders colorized streaming output.
+- **Bun/TypeScript backend** (`backend/`) — `Bun.serve` HTTP server. Manages tasks in SQLite via `bun:sqlite` (`~/.agentforge/tasks.db`), runs `claude` or `codex` CLI via `AgentExecutor`, and schedules work with `TaskScheduler` (polls every 2 s, supports cron via `cron-parser`).
+- **Electron shell** (`taskboard-electron/`) — spawns the backend on start, kills it on quit. Renderer/main/preload are bundled with `Bun.build` (`scripts/build.ts`); in dev `bun run start` watches and reloads.
+- **React frontend** (`App.tsx`) — single-component kanban board that polls the REST API and renders colorized streaming output.
 
 ---
 
@@ -472,9 +465,9 @@ Contributions are welcome! Here's how to get started:
 4. Open a pull request with a clear description of the change.
 
 **Key files:**
-- `taskboard.py` — entire Python backend (DB, scheduler, executor, HTTP handlers)
-- `taskboard-electron/src/main.js` — Electron main process
-- `taskboard-electron/src/renderer/App.jsx` — React frontend (~1500 lines)
+- `backend/` — entire TypeScript backend (DB, scheduler, executor, HTTP API, channels)
+- `taskboard-electron/src/main.ts` — Electron main process
+- `taskboard-electron/src/renderer/App.tsx` — React frontend
 - `channels/` — pluggable chat channel adapters (Telegram, Slack, Feishu, WeChat)
 - `skills/agentforge/` — Claude Code skill for agent-to-agent delegation
 
