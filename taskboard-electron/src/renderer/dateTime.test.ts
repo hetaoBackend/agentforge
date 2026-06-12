@@ -1,26 +1,25 @@
-import test from "node:test";
-import assert from "node:assert/strict";
+import { test, expect } from "bun:test";
 
 import {
   formatDateTimeLocalInput,
   parseTaskDateTime,
   serializeDateTimeLocalInput,
-} from "./dateTime.mjs";
+} from "./dateTime.ts";
 
 test("parseTaskDateTime keeps naive timestamps in local wall time", () => {
   const parsed = parseTaskDateTime("2026-03-19T18:04:00");
 
-  assert.equal(parsed.getFullYear(), 2026);
-  assert.equal(parsed.getMonth(), 2);
-  assert.equal(parsed.getDate(), 19);
-  assert.equal(parsed.getHours(), 18);
-  assert.equal(parsed.getMinutes(), 4);
+  expect(parsed.getFullYear()).toBe(2026);
+  expect(parsed.getMonth()).toBe(2);
+  expect(parsed.getDate()).toBe(19);
+  expect(parsed.getHours()).toBe(18);
+  expect(parsed.getMinutes()).toBe(4);
 });
 
 test("formatDateTimeLocalInput converts aware timestamps into local datetime-local values", () => {
-  assert.equal(formatDateTimeLocalInput("2026-03-19T10:04:00+00:00"), "2026-03-19T18:04");
+  expect(formatDateTimeLocalInput("2026-03-19T10:04:00+00:00")).toBe("2026-03-19T18:04");
 });
 
 test("serializeDateTimeLocalInput preserves local wall time without forcing UTC", () => {
-  assert.equal(serializeDateTimeLocalInput("2026-03-19T18:04"), "2026-03-19T18:04:00");
+  expect(serializeDateTimeLocalInput("2026-03-19T18:04")).toBe("2026-03-19T18:04:00");
 });

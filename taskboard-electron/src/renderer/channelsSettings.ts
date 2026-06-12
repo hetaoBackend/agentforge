@@ -1,4 +1,68 @@
-const DEFAULT_CHANNELS_STATE = {
+export interface TelegramChannelState {
+  enabled: boolean;
+  configured: boolean;
+  running: boolean;
+  default_working_dir: string;
+  default_chat_id: string;
+  bot_token: string;
+  allowed_users: string;
+}
+
+export interface SlackChannelState {
+  enabled: boolean;
+  configured: boolean;
+  running: boolean;
+  default_working_dir: string;
+  default_channel: string;
+  default_user: string;
+  bot_token: string;
+  app_token: string;
+}
+
+export interface WeixinChannelState {
+  enabled: boolean;
+  configured: boolean;
+  running: boolean;
+  default_working_dir: string;
+  base_url: string;
+  account_id: string;
+  login_status: string;
+  qr_code_url: string;
+  last_error: string;
+  user_id: string;
+}
+
+export interface ChannelsState {
+  telegram: TelegramChannelState;
+  slack: SlackChannelState;
+  weixin: WeixinChannelState;
+}
+
+export interface ChannelsStatusUpdate {
+  telegram?: Partial<TelegramChannelState>;
+  slack?: Partial<SlackChannelState>;
+  weixin?: Partial<WeixinChannelState>;
+}
+
+export interface ChannelsSavePayload {
+  telegram_enabled: string;
+  telegram_bot_token: string;
+  telegram_allowed_users: string;
+  telegram_default_working_dir: string;
+  telegram_default_chat_id: string;
+  slack_enabled: string;
+  slack_bot_token: string;
+  slack_app_token: string;
+  slack_default_working_dir: string;
+  slack_default_channel: string;
+  slack_default_user: string;
+  weixin_enabled: string;
+  weixin_default_working_dir: string;
+  weixin_base_url: string;
+  weixin_account_id: string;
+}
+
+const DEFAULT_CHANNELS_STATE: ChannelsState = {
   telegram: {
     enabled: false,
     configured: false,
@@ -32,7 +96,7 @@ const DEFAULT_CHANNELS_STATE = {
   },
 };
 
-function cloneState(state) {
+function cloneState(state: ChannelsState): ChannelsState {
   return {
     telegram: { ...state.telegram },
     slack: { ...state.slack },
@@ -40,12 +104,15 @@ function cloneState(state) {
   };
 }
 
-export function createInitialChannelsState(initial = {}) {
+export function createInitialChannelsState(initial: ChannelsStatusUpdate = {}): ChannelsState {
   const base = cloneState(DEFAULT_CHANNELS_STATE);
   return mergeChannelsStatus(base, initial);
 }
 
-export function mergeChannelsStatus(current, status = {}) {
+export function mergeChannelsStatus(
+  current: ChannelsState,
+  status: ChannelsStatusUpdate = {},
+): ChannelsState {
   return {
     telegram: { ...current.telegram, ...(status.telegram || {}) },
     slack: { ...current.slack, ...(status.slack || {}) },
@@ -53,7 +120,7 @@ export function mergeChannelsStatus(current, status = {}) {
   };
 }
 
-export function buildChannelsSavePayload(channels) {
+export function buildChannelsSavePayload(channels: ChannelsState): ChannelsSavePayload {
   return {
     telegram_enabled: channels.telegram.enabled ? "true" : "false",
     telegram_bot_token: channels.telegram.bot_token,
@@ -73,7 +140,7 @@ export function buildChannelsSavePayload(channels) {
   };
 }
 
-export function isWeixinQrImageSource(value) {
+export function isWeixinQrImageSource(value: string | null | undefined): boolean {
   const normalized = (value || "").trim();
   if (!normalized) return false;
   if (normalized.startsWith("data:image/")) return true;

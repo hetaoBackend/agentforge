@@ -1,18 +1,28 @@
 import { app, BrowserWindow, dialog, ipcMain, powerSaveBlocker } from "electron";
 import path from "node:path";
 import http from "node:http";
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import started from "electron-squirrel-startup";
-import chokidar from "chokidar";
+import chokidar, { type FSWatcher } from "chokidar";
+
+// Injected by the electron-forge Vite plugin at build time.
+declare const MAIN_WINDOW_VITE_DEV_SERVER_URL: string | undefined;
+declare const MAIN_WINDOW_VITE_NAME: string;
+
+interface PythonCommand {
+  cmd: string;
+  args: string[];
+  cwd: string | undefined;
+}
 
 if (started) {
   app.quit();
 }
 
-let pythonProcess = null;
-let pythonWatcher = null;
+let pythonProcess: ChildProcess | null = null;
+let pythonWatcher: FSWatcher | undefined;
 
-function getPythonCommand() {
+function getPythonCommand(): PythonCommand {
   if (app.isPackaged) {
     const binaryPath = path.join(process.resourcesPath, "taskboard");
     return { cmd: binaryPath, args: [], cwd: undefined };
@@ -24,8 +34,8 @@ function getPythonCommand() {
   }
 }
 
-function waitForBackend(port, timeoutMs) {
-  return new Promise((resolve, reject) => {
+function waitForBackend(port: number, timeoutMs: number): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
     const start = Date.now();
     const check = () => {
       const req = http.get(`http://127.0.0.1:${port}/api/health`, (res) => {
@@ -54,13 +64,13 @@ function waitForBackend(port, timeoutMs) {
   });
 }
 
-function killPortSync(port) {
+function killPortSync(port: number): void {
   // Best-effort: kill any process already holding the port before we spawn
   try {
     const { execSync } = require("node:child_process");
     const out = execSync(`lsof -ti :${port}`, { encoding: "utf8" }).trim();
     if (out) {
-      out.split("\n").forEach((pid) => {
+      out.split("\n").forEach((pid: string) => {
         try {
           process.kill(Number(pid), "SIGKILL");
         } catch (_) {}
@@ -74,14 +84,14 @@ function killPortSync(port) {
 // macOS apps launched from Finder/Dock inherit a minimal PATH (no Homebrew),
 // so the Python backend can't find tools like `node` (needed by the Weixin
 // bridge). Prepend the common install dirs so child processes resolve them.
-function augmentedPath() {
+function augmentedPath(): string {
   const extra = ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin"];
   const current = process.env.PATH || "";
   const merged = [...extra, ...current.split(":")].filter(Boolean);
   return [...new Set(merged)].join(":");
 }
 
-function startPythonBackend() {
+function startPythonBackend(): Promise<void> {
   killPortSync(9712);
   const { cmd, args, cwd } = getPythonCommand();
   pythonProcess = spawn(cmd, args, {
@@ -103,7 +113,7 @@ function startPythonBackend() {
   return waitForBackend(9712, 15000);
 }
 
-function stopPythonBackend() {
+function stopPythonBackend(): void {
   if (!pythonProcess) return;
   const proc = pythonProcess;
   pythonProcess = null;
@@ -114,7 +124,7 @@ function stopPythonBackend() {
   }
 }
 
-function setupPythonHotReload() {
+function setupPythonHotReload(): FSWatcher | undefined {
   if (app.isPackaged) return; // 生产环境不启用热重载
 
   const projectRoot = path.resolve(path.join(app.getAppPath(), ".."));
@@ -130,10 +140,10 @@ function setupPythonHotReload() {
       console.log("[Hot Reload] Watcher ready, monitoring:", projectRoot);
     });
 
-  let restartTimeout = null;
+  let restartTimeout: NodeJS.Timeout | null = null;
   let isRestarting = false; // 重启锁
 
-  const scheduleRestart = (filePath, eventType) => {
+  const scheduleRestart = (filePath: string, eventType: string) => {
     // Restart for .py/.toml files in the project root or in the channels/ directory.
     // Files in other subdirectories are ignored to avoid restarting when a running
     // task modifies files (e.g. README.md, todo.md in working directories).
@@ -177,11 +187,11 @@ function setupPythonHotReload() {
     }, 500); // 500ms 延迟，避免文件保存时的多次触发
   };
 
-  watcher.on("change", (filePath) => scheduleRestart(filePath, "changed"));
-  watcher.on("add", (filePath) => scheduleRestart(filePath, "added"));
-  watcher.on("unlink", (filePath) => scheduleRestart(filePath, "removed"));
+  watcher.on("change", (filePath: string) => scheduleRestart(filePath, "changed"));
+  watcher.on("add", (filePath: string) => scheduleRestart(filePath, "added"));
+  watcher.on("unlink", (filePath: string) => scheduleRestart(filePath, "removed"));
 
-  watcher.on("error", (error) => {
+  watcher.on("error", (error: unknown) => {
     console.error("[Hot Reload] File watcher error:", error);
   });
 

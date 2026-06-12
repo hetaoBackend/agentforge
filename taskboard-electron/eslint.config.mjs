@@ -1,10 +1,11 @@
 import js from "@eslint/js";
 import globals from "globals";
+import tseslint from "typescript-eslint";
 import react from "eslint-plugin-react";
 import reactHooks from "eslint-plugin-react-hooks";
 import prettier from "eslint-config-prettier";
 
-export default [
+export default tseslint.config(
   {
     ignores: [
       ".vite/**",
@@ -18,6 +19,12 @@ export default [
   },
 
   js.configs.recommended,
+
+  // TypeScript sources (main, preload, renderer, tests).
+  ...tseslint.configs.recommended.map((config) => ({
+    ...config,
+    files: ["src/**/*.{ts,tsx}"],
+  })),
 
   // Project-wide tweaks: allow `_`-prefixed throwaways and intentional empty
   // catches; permit full-width spaces inside Chinese JSX copy.
@@ -39,11 +46,29 @@ export default [
     },
   },
 
+  // Pragmatic migration posture: the codebase leans on `any` while strict
+  // typing is layered in incrementally.
+  {
+    files: ["src/**/*.{ts,tsx}"],
+    rules: {
+      "@typescript-eslint/no-explicit-any": "off",
+      "no-unused-vars": "off",
+      "@typescript-eslint/no-unused-vars": [
+        "error",
+        {
+          argsIgnorePattern: "^_",
+          varsIgnorePattern: "^_",
+          caughtErrorsIgnorePattern: "^_",
+        },
+      ],
+    },
+  },
+
   // Node-side code: Electron main/preload, build scripts, Forge/Vite configs.
   {
     files: [
-      "src/main.js",
-      "src/preload.js",
+      "src/main.ts",
+      "src/preload.ts",
       "scripts/**/*.mjs",
       "forge.config.js",
       "*.config.js",
@@ -60,9 +85,18 @@ export default [
     },
   },
 
+  // The preload script intentionally uses CommonJS `require` (Electron preload
+  // context); main.ts keeps a lazy `require` for a synchronous child_process call.
+  {
+    files: ["src/main.ts", "src/preload.ts"],
+    rules: {
+      "@typescript-eslint/no-require-imports": "off",
+    },
+  },
+
   // Renderer code: browser context + React/JSX.
   {
-    files: ["src/renderer.js", "src/renderer/**/*.{js,jsx,mjs}"],
+    files: ["src/renderer.ts", "src/renderer/**/*.{ts,tsx}"],
     plugins: { react, "react-hooks": reactHooks },
     languageOptions: {
       ecmaVersion: 2024,
@@ -82,9 +116,9 @@ export default [
     },
   },
 
-  // Renderer unit tests run under `node --test`, so they need Node globals too.
+  // Renderer unit tests run under `bun test`, so they need Node globals too.
   {
-    files: ["src/renderer/**/*.test.mjs"],
+    files: ["src/renderer/**/*.test.ts"],
     languageOptions: {
       globals: { ...globals.node },
     },
@@ -92,4 +126,4 @@ export default [
 
   // Keep ESLint clear of anything Prettier owns (formatting).
   prettier,
-];
+);

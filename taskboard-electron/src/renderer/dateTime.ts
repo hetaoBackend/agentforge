@@ -1,12 +1,21 @@
-function pad(value) {
+interface LocalDateTimeParts {
+  year: number;
+  month: number;
+  day: number;
+  hour: number;
+  minute: number;
+  second: number;
+}
+
+function pad(value: number | string): string {
   return String(value).padStart(2, "0");
 }
 
-function hasExplicitTimezone(value) {
+function hasExplicitTimezone(value: string): boolean {
   return /(?:Z|[+-]\d{2}:\d{2})$/i.test(value);
 }
 
-function parseLocalDateTimeParts(value) {
+function parseLocalDateTimeParts(value: unknown): LocalDateTimeParts | null {
   const match = String(value)
     .trim()
     .match(/^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})(?::(\d{2})(?:\.\d+)?)?$/);
@@ -22,7 +31,7 @@ function parseLocalDateTimeParts(value) {
   };
 }
 
-export function parseTaskDateTime(value) {
+export function parseTaskDateTime(value: unknown): Date | null {
   if (!value) return null;
   const raw = String(value).trim();
   if (!raw) return null;
@@ -49,17 +58,17 @@ export function parseTaskDateTime(value) {
   return Number.isNaN(fallback.getTime()) ? null : fallback;
 }
 
-export function formatTaskDateTime(value, options) {
+export function formatTaskDateTime(value: unknown, options?: Intl.DateTimeFormatOptions): string {
   const date = parseTaskDateTime(value);
   return date ? date.toLocaleString(undefined, options) : "";
 }
 
-export function formatTaskTime(value, options) {
+export function formatTaskTime(value: unknown, options?: Intl.DateTimeFormatOptions): string {
   const date = parseTaskDateTime(value);
   return date ? date.toLocaleTimeString(undefined, options) : "";
 }
 
-export function formatDateTimeLocalInput(value) {
+export function formatDateTimeLocalInput(value: unknown): string {
   const date = parseTaskDateTime(value);
   if (!date) return "";
   return [
@@ -75,7 +84,7 @@ export function formatDateTimeLocalInput(value) {
   ].join("");
 }
 
-export function serializeDateTimeLocalInput(value) {
+export function serializeDateTimeLocalInput(value: unknown): string | null {
   const parts = parseLocalDateTimeParts(value);
   if (!parts) return null;
   return [

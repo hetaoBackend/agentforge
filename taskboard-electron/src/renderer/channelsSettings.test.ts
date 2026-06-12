@@ -1,17 +1,17 @@
-import test from "node:test";
-import assert from "node:assert/strict";
+import { test, expect } from "bun:test";
 
 import {
   buildChannelsSavePayload,
   createInitialChannelsState,
   mergeChannelsStatus,
   isWeixinQrImageSource,
-} from "./channelsSettings.mjs";
+  type WeixinChannelState,
+} from "./channelsSettings.ts";
 
 test("createInitialChannelsState includes weixin defaults", () => {
   const state = createInitialChannelsState();
 
-  assert.deepEqual(state.weixin, {
+  expect(state.weixin).toEqual({
     enabled: false,
     configured: false,
     running: false,
@@ -37,11 +37,11 @@ test("mergeChannelsStatus overlays weixin status onto existing state", () => {
     },
   });
 
-  assert.equal(merged.weixin.enabled, true);
-  assert.equal(merged.weixin.running, true);
-  assert.equal(merged.weixin.default_working_dir, "/tmp/repo");
-  assert.equal(merged.weixin.base_url, "https://example.test");
-  assert.equal(merged.weixin.account_id, "wx-demo");
+  expect(merged.weixin.enabled).toBe(true);
+  expect(merged.weixin.running).toBe(true);
+  expect(merged.weixin.default_working_dir).toBe("/tmp/repo");
+  expect(merged.weixin.base_url).toBe("https://example.test");
+  expect(merged.weixin.account_id).toBe("wx-demo");
 });
 
 test("buildChannelsSavePayload serializes weixin settings for the API", () => {
@@ -54,24 +54,23 @@ test("buildChannelsSavePayload serializes weixin settings for the API", () => {
       default_working_dir: "~/workspace/agentforge",
       base_url: "https://ilinkai.weixin.qq.com",
       account_id: "wx-primary",
-    },
+    } as WeixinChannelState,
   });
 
-  assert.equal(payload.weixin_enabled, "true");
-  assert.equal(payload.weixin_default_working_dir, "~/workspace/agentforge");
-  assert.equal(payload.weixin_base_url, "https://ilinkai.weixin.qq.com");
-  assert.equal(payload.weixin_account_id, "wx-primary");
+  expect(payload.weixin_enabled).toBe("true");
+  expect(payload.weixin_default_working_dir).toBe("~/workspace/agentforge");
+  expect(payload.weixin_base_url).toBe("https://ilinkai.weixin.qq.com");
+  expect(payload.weixin_account_id).toBe("wx-primary");
 });
 
 test("isWeixinQrImageSource recognizes real image sources only", () => {
-  assert.equal(isWeixinQrImageSource("data:image/png;base64,abc"), true);
-  assert.equal(isWeixinQrImageSource("https://example.test/qr.png"), true);
-  assert.equal(
+  expect(isWeixinQrImageSource("data:image/png;base64,abc")).toBe(true);
+  expect(isWeixinQrImageSource("https://example.test/qr.png")).toBe(true);
+  expect(
     isWeixinQrImageSource(
       "https://liteapp.weixin.qq.com/q/7GiQu1?qrcode=7a9bf9b71b5bc24cac576b5098adb5b4&b",
     ),
-    false,
-  );
-  assert.equal(isWeixinQrImageSource("otpauth://totp/example"), false);
-  assert.equal(isWeixinQrImageSource("wxp://some-qr-payload"), false);
+  ).toBe(false);
+  expect(isWeixinQrImageSource("otpauth://totp/example")).toBe(false);
+  expect(isWeixinQrImageSource("wxp://some-qr-payload")).toBe(false);
 });

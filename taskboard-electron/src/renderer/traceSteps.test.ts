@@ -1,7 +1,6 @@
-import test from "node:test";
-import assert from "node:assert/strict";
+import { test, expect } from "bun:test";
 
-import { buildExecutionSteps } from "./traceSteps.mjs";
+import { buildExecutionSteps } from "./traceSteps.ts";
 
 test("buildExecutionSteps sorts events oldest first and merges adjacent thinking chunks", () => {
   const steps = buildExecutionSteps([
@@ -25,12 +24,12 @@ test("buildExecutionSteps sorts events oldest first and merges adjacent thinking
     },
   ]);
 
-  assert.equal(steps.length, 2);
-  assert.equal(steps[0].type, "thinking");
-  assert.equal(steps[0].title, "Reading context");
-  assert.equal(steps[0].detail, "Reading context");
-  assert.equal(steps[1].type, "tool_call");
-  assert.equal(steps[1].title, "Call tool: Bash");
+  expect(steps.length).toBe(2);
+  expect(steps[0].type).toBe("thinking");
+  expect(steps[0].title).toBe("Reading context");
+  expect(steps[0].detail).toBe("Reading context");
+  expect(steps[1].type).toBe("tool_call");
+  expect(steps[1].title).toBe("Call tool: Bash");
 });
 
 test("buildExecutionSteps formats command execution details", () => {
@@ -48,17 +47,14 @@ test("buildExecutionSteps formats command execution details", () => {
     },
   ]);
 
-  assert.equal(steps.length, 1);
-  assert.equal(steps[0].title, "Run command: npm test");
-  assert.deepEqual(
-    steps[0].rows.map((row) => [row.label, row.value]),
-    [
-      ["Command", "npm test"],
-      ["Output", "12 passed"],
-      ["Exit", "0"],
-      ["Status", "completed"],
-    ],
-  );
+  expect(steps.length).toBe(1);
+  expect(steps[0].title).toBe("Run command: npm test");
+  expect(steps[0].rows.map((row) => [row.label, row.value])).toEqual([
+    ["Command", "npm test"],
+    ["Output", "12 passed"],
+    ["Exit", "0"],
+    ["Status", "completed"],
+  ]);
 });
 
 test("buildExecutionSteps keeps tool result errors readable", () => {
@@ -75,11 +71,11 @@ test("buildExecutionSteps keeps tool result errors readable", () => {
     },
   ]);
 
-  assert.equal(steps.length, 1);
-  assert.equal(steps[0].type, "tool_result");
-  assert.equal(steps[0].title, "Tool error: toolu_1");
-  assert.equal(steps[0].rows[0].label, "Tool Error");
-  assert.equal(steps[0].rows[1].value, "permission denied");
+  expect(steps.length).toBe(1);
+  expect(steps[0].type).toBe("tool_result");
+  expect(steps[0].title).toBe("Tool error: toolu_1");
+  expect(steps[0].rows[0].label).toBe("Tool Error");
+  expect(steps[0].rows[1].value).toBe("permission denied");
 });
 
 test("buildExecutionSteps summarizes generated image events", () => {
@@ -95,16 +91,13 @@ test("buildExecutionSteps summarizes generated image events", () => {
     },
   ]);
 
-  assert.equal(steps.length, 1);
-  assert.equal(steps[0].type, "generated_image");
-  assert.equal(steps[0].title, "Generated image: result.png");
-  assert.deepEqual(
-    steps[0].rows.map((row) => [row.label, row.value]),
-    [
-      ["Path", "/Users/example/.codex/generated_images/thread/result.png"],
-      ["Media", "image/png"],
-    ],
-  );
+  expect(steps.length).toBe(1);
+  expect(steps[0].type).toBe("generated_image");
+  expect(steps[0].title).toBe("Generated image: result.png");
+  expect(steps[0].rows.map((row) => [row.label, row.value])).toEqual([
+    ["Path", "/Users/example/.codex/generated_images/thread/result.png"],
+    ["Media", "image/png"],
+  ]);
 });
 
 test("buildExecutionSteps preserves renderable image_content previews", () => {
@@ -120,12 +113,9 @@ test("buildExecutionSteps preserves renderable image_content previews", () => {
     },
   ]);
 
-  assert.equal(steps.length, 1);
-  assert.equal(steps[0].type, "image_content");
-  assert.equal(steps[0].title, "Image output");
-  assert.equal(steps[0].imageSrc, "data:image/png;base64,aW1hZ2U=");
-  assert.deepEqual(
-    steps[0].rows.map((row) => [row.label, row.value]),
-    [["Media", "image/png"]],
-  );
+  expect(steps.length).toBe(1);
+  expect(steps[0].type).toBe("image_content");
+  expect(steps[0].title).toBe("Image output");
+  expect(steps[0].imageSrc).toBe("data:image/png;base64,aW1hZ2U=");
+  expect(steps[0].rows.map((row) => [row.label, row.value])).toEqual([["Media", "image/png"]]);
 });

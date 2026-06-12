@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, type CSSProperties } from "react";
 import QRCode from "qrcode";
 import {
   formatDateTimeLocalInput,
@@ -6,19 +6,19 @@ import {
   formatTaskTime,
   parseTaskDateTime,
   serializeDateTimeLocalInput,
-} from "./dateTime.mjs";
+} from "./dateTime.ts";
 import {
   buildChannelsSavePayload,
   createInitialChannelsState,
   isWeixinQrImageSource,
   mergeChannelsStatus,
-} from "./channelsSettings.mjs";
-import { buildExecutionSteps } from "./traceSteps.mjs";
+} from "./channelsSettings.ts";
+import { buildExecutionSteps } from "./traceSteps.ts";
 
 const API = "http://127.0.0.1:9712/api";
 
 // ─── Theme ───
-const THEMES = {
+const THEMES: Record<string, Record<string, string>> = {
   dark: {
     bg: "#0a0a0f",
     surface: "#12121a",
@@ -745,7 +745,7 @@ async function fetchSkillPatterns() {
   return res.json();
 }
 
-async function triggerSkillSweep(agent) {
+async function triggerSkillSweep(agent?: string) {
   const res = await fetch(`${API}/skills/sweep`, {
     method: "POST",
     headers: await csrfHeaders(),
@@ -756,7 +756,7 @@ async function triggerSkillSweep(agent) {
   return payload;
 }
 
-async function triggerSkillDraft(id, agent) {
+async function triggerSkillDraft(id, agent?: string) {
   const res = await fetch(`${API}/skill-patterns/${id}/draft`, {
     method: "POST",
     headers: await csrfHeaders(),
@@ -1380,7 +1380,7 @@ function HeartbeatBadge({ enabled }) {
   );
 }
 
-function HeartbeatModal({ onClose, onSubmit, initialData, defaultAgent, mode = "create" }) {
+function HeartbeatModal({ onClose, onSubmit, initialData, defaultAgent, mode = "create" }: any) {
   const savedDir = localStorage.getItem("agentforge_working_dir") || "~/papers";
   const [form, setForm] = useState(() => ({
     name: initialData?.name || "",
@@ -1397,7 +1397,7 @@ function HeartbeatModal({ onClose, onSubmit, initialData, defaultAgent, mode = "
 
   const set = (k, v) => setForm((prev) => ({ ...prev, [k]: v }));
 
-  const inputStyle = {
+  const inputStyle: CSSProperties = {
     width: "100%",
     padding: "10px 14px",
     borderRadius: 8,
@@ -1775,10 +1775,10 @@ function HeartbeatCard({ heartbeat, onAction, onViewDetail }) {
 }
 
 function HeartbeatDetailPanel({ heartbeat, ticks, onClose }) {
-  const [selectedTickId, setSelectedTickId] = useState(null);
+  const [selectedTickId, setSelectedTickId] = useState<any>(null);
   const [tickOutput, setTickOutput] = useState("");
   const [tickRunning, setTickRunning] = useState(false);
-  const outputRef = useRef(null);
+  const outputRef = useRef<any>(null);
 
   useEffect(() => {
     setSelectedTickId(ticks[0]?.id || null);
@@ -2166,10 +2166,10 @@ function NewTaskModal({ onClose, onSubmit, initialData, mode = "create" }) {
 
   const handleImageSelect = (e) => {
     const files = Array.from(e.target.files || []);
-    files.forEach((file) => {
+    files.forEach((file: any) => {
       const reader = new FileReader();
       reader.onload = (ev) => {
-        const dataUrl = ev.target.result; // "data:image/jpeg;base64,..."
+        const dataUrl = ev.target.result as string; // "data:image/jpeg;base64,..."
         const [meta, data] = dataUrl.split(",");
         const media_type = meta.match(/:(.*?);/)?.[1] || "image/jpeg";
         setPromptImages((prev) => [
@@ -2193,7 +2193,7 @@ function NewTaskModal({ onClose, onSubmit, initialData, mode = "create" }) {
       .filter((r) => r.task_id)
       .map((r) => ({ task_id: r.task_id, inject_result: r.inject_result }));
 
-    const data = {
+    const data: any = {
       ...form,
       title: form.title || form.prompt.slice(0, 60),
       delay_seconds: form.schedule_type === "delayed" ? parseInt(form.delay_seconds) || 60 : null,
@@ -2219,7 +2219,7 @@ function NewTaskModal({ onClose, onSubmit, initialData, mode = "create" }) {
     onSubmit(data);
   };
 
-  const inputStyle = {
+  const inputStyle: CSSProperties = {
     width: "100%",
     padding: "10px 14px",
     borderRadius: 8,
@@ -2673,7 +2673,7 @@ function NewTaskModal({ onClose, onSubmit, initialData, mode = "create" }) {
   );
 }
 
-function DetailPanel({ task, onClose, onResume }) {
+function DetailPanel({ task, onClose, onResume }: any) {
   // `task` is always truthy here — the only caller renders this inside
   // `{detail && <DetailPanel task={... || detail} />}`. Hooks must stay
   // unconditional, so do not early-return before them.
@@ -2681,14 +2681,14 @@ function DetailPanel({ task, onClose, onResume }) {
   const [resumeText, setResumeText] = useState("");
   const [resumeError, setResumeError] = useState("");
   const [resumeSent, setResumeSent] = useState(false);
-  const [messages, setMessages] = useState([]);
-  const [events, setEvents] = useState([]);
+  const [messages, setMessages] = useState<any[]>([]);
+  const [events, setEvents] = useState<any[]>([]);
   const [showMessages, setShowMessages] = useState(false);
   const [showEvents, setShowEvents] = useState(false);
   const [showLiveOutput, setShowLiveOutput] = useState(true);
-  const liveOutputRef = useRef(null);
-  const messagesRef = useRef(null);
-  const eventsRef = useRef(null);
+  const liveOutputRef = useRef<any>(null);
+  const messagesRef = useRef<any>(null);
+  const eventsRef = useRef<any>(null);
 
   useEffect(() => {
     if (task.status !== "running") {
@@ -3385,10 +3385,10 @@ function SettingsModal({
     ...initialFeishu,
   });
   const [feishuSaving, setFeishuSaving] = useState(false);
-  const [feishuMsg, setFeishuMsg] = useState(null); // {ok, text}
+  const [feishuMsg, setFeishuMsg] = useState<any>(null); // {ok, text}
   const [channels, setChannels] = useState(createInitialChannelsState(initialChannelsStatus));
   const [channelsSaving, setChannelsSaving] = useState(false);
-  const [channelsMsg, setChannelsMsg] = useState(null);
+  const [channelsMsg, setChannelsMsg] = useState<any>(null);
   const [weixinQrSrc, setWeixinQrSrc] = useState("");
   const [weixinActionBusy, setWeixinActionBusy] = useState(false);
   const [collapsedChannels, setCollapsedChannels] = useState({
@@ -3535,7 +3535,7 @@ function SettingsModal({
     }
   };
 
-  const fieldStyle = {
+  const fieldStyle: CSSProperties = {
     width: "100%",
     padding: "10px 14px",
     borderRadius: 8,
@@ -5095,7 +5095,7 @@ function SkillPatternCard({ p, tasks, onDraft, onApprove, onDismiss }) {
 
 function SkillRegistryCard({ s, tasks, onToggle, onDelete }) {
   const [expanded, setExpanded] = useState(false);
-  const [content, setContent] = useState(null);
+  const [content, setContent] = useState<any>(null);
   const [loading, setLoading] = useState(false);
 
   let sourceTaskIds = [];
@@ -5392,32 +5392,32 @@ function SkillsView({
 }
 
 export default function App() {
-  const [tasks, setTasks] = useState([]);
-  const [heartbeats, setHeartbeats] = useState([]);
-  const [heartbeatTicks, setHeartbeatTicks] = useState([]);
+  const [tasks, setTasks] = useState<any[]>([]);
+  const [heartbeats, setHeartbeats] = useState<any[]>([]);
+  const [heartbeatTicks, setHeartbeatTicks] = useState<any[]>([]);
   const [skillData, setSkillData] = useState({
     patterns: [],
     sweep: { running: false, last: null },
   });
-  const [skills, setSkills] = useState([]);
+  const [skills, setSkills] = useState<any[]>([]);
   const [activeView, setActiveView] = useState("tasks");
   const [showNew, setShowNew] = useState(false);
   const [showNewHeartbeat, setShowNewHeartbeat] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
-  const [detail, setDetail] = useState(null);
-  const [heartbeatDetail, setHeartbeatDetail] = useState(null);
+  const [detail, setDetail] = useState<any>(null);
+  const [heartbeatDetail, setHeartbeatDetail] = useState<any>(null);
   const [connected, setConnected] = useState(false);
   const [filter, setFilter] = useState("");
   const [taskTimeout, setTaskTimeout] = useState(DEFAULT_TIMEOUT_SECONDS);
   const [defaultAgent, setDefaultAgent] = useState(DEFAULT_AGENT);
-  const [feishuSettings, setFeishuSettings] = useState({});
-  const [channelsStatus, setChannelsStatus] = useState({});
+  const [feishuSettings, setFeishuSettings] = useState<any>({});
+  const [channelsStatus, setChannelsStatus] = useState<any>({});
   const [backendReady, setBackendReady] = useState(false);
-  const [backendError, setBackendError] = useState(null);
-  const [apiError, setApiError] = useState(null);
-  const [editingTask, setEditingTask] = useState(null);
-  const [forkingTask, setForkingTask] = useState(null);
-  const [editingHeartbeat, setEditingHeartbeat] = useState(null);
+  const [backendError, setBackendError] = useState<any>(null);
+  const [apiError, setApiError] = useState<any>(null);
+  const [editingTask, setEditingTask] = useState<any>(null);
+  const [forkingTask, setForkingTask] = useState<any>(null);
+  const [editingHeartbeat, setEditingHeartbeat] = useState<any>(null);
 
   // ─── Color mode ───
   const [colorMode, setColorMode] = useState(() => localStorage.getItem("colorMode") || "system");

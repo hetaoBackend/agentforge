@@ -8,16 +8,45 @@ export const TRACE_EVENT_TYPES = new Set([
 
 const THINKING_PREFIX = "[thinking] ";
 
-function compact(rows) {
-  return rows.filter(Boolean);
+export interface TraceRow {
+  label: string;
+  value: string;
 }
 
-function row(label, value) {
+export type TracePayload = Record<string, any>;
+
+export interface TraceEventInput {
+  id?: number;
+  event_type?: string;
+  type?: string;
+  content?: string;
+  timestamp?: string;
+}
+
+export interface ExecutionStep {
+  id: string;
+  eventIds: number[];
+  rawEventType: string;
+  timestamp: string;
+  rows: TraceRow[];
+  detail: string;
+  count: number;
+  type: string;
+  title: string;
+  imageSrc?: string;
+  number?: number;
+}
+
+function compact(rows: Array<TraceRow | null>): TraceRow[] {
+  return rows.filter(Boolean) as TraceRow[];
+}
+
+function row(label: string, value: unknown): TraceRow | null {
   const formatted = formatTraceValue(value);
   return formatted === "" ? null : { label, value: formatted };
 }
 
-export function parseTracePayload(content) {
+export function parseTracePayload(content: string): TracePayload | null {
   try {
     const payload = JSON.parse(content);
     return payload && typeof payload === "object" && !Array.isArray(payload) ? payload : null;
@@ -26,13 +55,17 @@ export function parseTracePayload(content) {
   }
 }
 
-export function formatTraceValue(value) {
+export function formatTraceValue(value: unknown): string {
   if (value === undefined || value === null) return "";
   if (typeof value === "string") return value;
   return JSON.stringify(value, null, 2);
 }
 
-export function buildTraceRows(eventType, payload, rawContent = "") {
+export function buildTraceRows(
+  eventType: string,
+  payload: TracePayload,
+  rawContent = "",
+): TraceRow[] {
   if (eventType === "tool_call") {
     const name = payload.server
       ? `${payload.server}.${payload.name || payload.tool || "unknown"}`
@@ -65,7 +98,7 @@ export function buildTraceRows(eventType, payload, rawContent = "") {
   if (eventType === "file_change") {
     const changes = Array.isArray(payload.changes)
       ? payload.changes
-          .map((change) => {
+          .map((change: any) => {
             if (!change || typeof change !== "object") return formatTraceValue(change);
             const kind = change.kind || change.type || "changed";
             const path = change.path || change.file || "";
@@ -87,9 +120,9 @@ export function buildTraceRows(eventType, payload, rawContent = "") {
   return [{ label: eventType, value: rawContent }];
 }
 
-export function buildExecutionSteps(events) {
+export function buildExecutionSteps(events: TraceEventInput[] | null | undefined): ExecutionStep[] {
   const sortedEvents = [...(events || [])].sort(compareEventsChronologically);
-  const steps = [];
+  const steps: ExecutionStep[] = [];
 
   for (const event of sortedEvents) {
     const step = eventToStep(event);
@@ -114,13 +147,13 @@ export function buildExecutionSteps(events) {
   }));
 }
 
-function compareEventsChronologically(a, b) {
+function compareEventsChronologically(a: TraceEventInput, b: TraceEventInput): number {
   const timestampComparison = String(a.timestamp || "").localeCompare(String(b.timestamp || ""));
   if (timestampComparison !== 0) return timestampComparison;
   return Number(a.id || 0) - Number(b.id || 0);
 }
 
-function eventToStep(event) {
+function eventToStep(event: TraceEventInput): ExecutionStep | null {
   const eventType = event.event_type || event.type || "unknown";
   const content = event.content || "";
   const base = {
@@ -128,7 +161,7 @@ function eventToStep(event) {
     eventIds: event.id ? [event.id] : [],
     rawEventType: eventType,
     timestamp: event.timestamp || "",
-    rows: [],
+    rows: [] as TraceRow[],
     detail: content,
     count: 1,
   };
@@ -219,7 +252,7 @@ function eventToStep(event) {
   };
 }
 
-function titleForTraceEvent(eventType, payload) {
+function titleForTraceEvent(eventType: string, payload: TracePayload): string {
   if (eventType === "tool_call") {
     const name = payload.server
       ? `${payload.server}.${payload.name || payload.tool || "unknown"}`
@@ -243,7 +276,7 @@ function titleForTraceEvent(eventType, payload) {
   if (eventType === "file_change") {
     const changes = Array.isArray(payload.changes) ? payload.changes : [];
     const firstPath = changes.find(
-      (change) => change && typeof change === "object" && (change.path || change.file),
+      (change: any) => change && typeof change === "object" && (change.path || change.file),
     );
     return firstPath ? `Change file: ${firstPath.path || firstPath.file}` : "Change files";
   }
@@ -251,16 +284,16 @@ function titleForTraceEvent(eventType, payload) {
   return eventType;
 }
 
-function canMergeSteps(previous, next) {
-  return (
+function canMergeSteps(previous: ExecutionStep | undefined, next: ExecutionStep): boolean {
+  return Boolean(
     previous &&
     previous.type === next.type &&
     (next.type === "thinking" || next.type === "assistant") &&
-    previous.rawEventType === next.rawEventType
+    previous.rawEventType === next.rawEventType,
   );
 }
 
-function appendDetail(previous, next) {
+function appendDetail(previous: string, next: string): string {
   if (!previous) return next || "";
   if (!next) return previous;
   if (
@@ -274,7 +307,7 @@ function appendDetail(previous, next) {
   return `${previous}\n${next}`;
 }
 
-function summarizeTitle(text, prefix = "") {
+function summarizeTitle(text: unknown, prefix = ""): string {
   const normalized = String(text || "")
     .replace(/\s+/g, " ")
     .trim();
@@ -283,7 +316,7 @@ function summarizeTitle(text, prefix = "") {
   return prefix ? `${prefix}: ${title}` : title;
 }
 
-function basename(value) {
+function basename(value: unknown): string {
   const parts = String(value || "")
     .split(/[\\/]/)
     .filter(Boolean);
