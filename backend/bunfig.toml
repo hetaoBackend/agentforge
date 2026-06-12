@@ -1,0 +1,5 @@
+# Bun test runner configuration for the AgentForge backend.
+[test]
+root = "tests"
+coverageSkipTestFiles = true
+coveragePathIgnorePatterns = ["node_modules", "tests"]

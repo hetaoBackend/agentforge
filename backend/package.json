@@ -1,0 +1,24 @@
+{
+  "name": "agentforge-backend",
+  "version": "1.0.0",
+  "description": "AgentForge task board backend (Bun + TypeScript)",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "bun taskboard.ts",
+    "check": "bunx tsc --noEmit && bun test",
+    "test": "bun test",
+    "typecheck": "bunx tsc --noEmit",
+    "compile": "bun build --compile taskboard.ts --outfile ../taskboard-electron/resources/taskboard"
+  },
+  "dependencies": {
+    "@larksuiteoapi/node-sdk": "^1.55.0",
+    "@slack/socket-mode": "^2.0.4",
+    "@slack/web-api": "^7.13.0",
+    "cron-parser": "^5.4.0"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.3.5",
+    "typescript": "^5.9.3"
+  }
+}
