@@ -1,0 +1,1620 @@
+import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+
+import { MessageBus } from "../src/bus.ts";
+import { TaskDB } from "../src/db.ts";
+import { TaskScheduler } from "../src/scheduler.ts";
+import { handleApiRequest, type ApiContext } from "../src/api.ts";
+import { FeishuChannel } from "../src/channels/feishu.ts";
+
+describe("api handler", () => {
+  let tmpDir: string;
+  let db: TaskDB;
+  let scheduler: TaskScheduler;
+  let ctx: ApiContext;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "agentforge-api-test-"));
+    db = new TaskDB(path.join(tmpDir, "api-test.db"));
+    const bus = new MessageBus();
+    scheduler = new TaskScheduler(db, null, bus);
+    ctx = {
+      db,
+      scheduler,
+      bus,
+      telegram_channel: null,
+      slack_channel: null,
+      weixin_channel: null,
+      feishu_channel: null,
+    };
+  });
+
+  afterEach(() => {
+    db.conn.close();
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  async function json(req: Request): Promise<any> {
+    const res = await handleApiRequest(ctx, req);
+    return (await res.json()) as Record<string, any>;
+  }
+
+  test("GET /api/health returns ok and task count", async () => {
+    const res = await handleApiRequest(
+      ctx,
+      new Request("http://127.0.0.1:9712/api/health"),
+    );
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ status: "ok", tasks: 0 });
+  });
+
+  test("POST /api/tasks enforces browser CSRF and creates tasks with token", async () => {
+    const body = JSON.stringify({
+      title: "API task",
+      prompt: "ship it",
+      working_dir: ".",
+    });
+    const rejected = await handleApiRequest(
+      ctx,
+      new Request("http://127.0.0.1:9712/api/tasks", {
+        method: "POST",
+        headers: {
+          Origin: "http://localhost:5173",
+          "Content-Type": "application/json",
+        },
+        body,
+      }),
+    );
+    expect(rejected.status).toBe(403);
+
+    const csrf = await json(
+      new Request("http://127.0.0.1:9712/api/csrf-token", {
+        headers: { Origin: "http://localhost:5173" },
+      }),
+    );
+    const created = await handleApiRequest(
+      ctx,
+      new Request("http://127.0.0.1:9712/api/tasks", {
+        method: "POST",
+        headers: {
+          Origin: "http://localhost:5173",
+          "Content-Type": "application/json",
+          "X-CSRF-Token": csrf["csrf_token"],
+        },
+        body,
+      }),
+    );
+    expect(created.status).toBe(201);
+    const payload = (await created.json()) as Record<string, any>;
+    expect(payload["status"]).toBe("created");
+
+    const tasks = await json(new Request("http://127.0.0.1:9712/api/tasks"));
+    expect(Array.isArray(tasks)).toBe(true);
+    expect(tasks).toHaveLength(1);
+    expect(tasks[0]["title"]).toBe("API task");
+    expect(tasks[0]["dependencies"]).toEqual([]);
+    expect(tasks[0]["dependents"]).toEqual([]);
+  });
+
+  test("GET task output falls back to latest persisted raw output", async () => {
+    const created = await json(
+      new Request("http://127.0.0.1:9712/api/tasks", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title: "Run",
+          prompt: "do it",
+          working_dir: ".",
+        }),
+      }),
+    );
+    const taskId = Number(created["id"]);
+    const runId = db.add_run(taskId);
+    db.finish_run(runId, "completed", "ok", null, "raw output");
+
+    const output = await json(
+      new Request(`http://127.0.0.1:9712/api/tasks/${taskId}/output`),
+    );
+    expect(output).toEqual({ output: "raw output", is_running: false });
+  });
+
+  test("POST /api/feishu/settings restarts the Feishu channel", async () => {
+    const old = {
+      stopped: false,
+      stop() {
+        this.stopped = true;
+      },
+    };
+    ctx.feishu_channel = old as any;
+
+    const enabled = await handleApiRequest(
+      ctx,
+      new Request("http://127.0.0.1:9712/api/feishu/settings", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ feishu_enabled: "true" }),
+      }),
+    );
+
+    expect(enabled.status).toBe(200);
+    expect(old.stopped).toBe(true);
+    expect(ctx.feishu_channel).toBeInstanceOf(FeishuChannel);
+    expect(db.get_setting("feishu_enabled")).toBe("true");
+
+    const started = ctx.feishu_channel;
+    const disabled = await handleApiRequest(
+      ctx,
+      new Request("http://127.0.0.1:9712/api/feishu/settings", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ feishu_enabled: "false" }),
+      }),
+    );
+
+    expect(disabled.status).toBe(200);
+    expect(ctx.feishu_channel).toBeNull();
+    expect(started?._running).toBe(false);
+    expect(db.get_setting("feishu_enabled")).toBe("false");
+  });
+
+  test("DELETE /api/tasks enforces CSRF for browser origins", async () => {
+    const created = await json(
+      new Request("http://127.0.0.1:9712/api/tasks", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title: "Delete me",
+          prompt: "later",
+          schedule_type: "delayed",
+          delay_seconds: 999,
+        }),
+      }),
+    );
+    const taskId = Number(created["id"]);
+
+    const rejected = await handleApiRequest(
+      ctx,
+      new Request(`http://127.0.0.1:9712/api/tasks/${taskId}`, {
+        method: "DELETE",
+        headers: {
+          Origin: "http://localhost:5173",
+          "X-CSRF-Token": "wrong",
+        },
+      }),
+    );
+
+    expect(rejected.status).toBe(403);
+    expect(db.get_task(taskId)).not.toBeNull();
+
+    const csrf = await json(
+      new Request("http://127.0.0.1:9712/api/csrf-token", {
+        headers: { Origin: "http://localhost:5173" },
+      }),
+    );
+    const accepted = await handleApiRequest(
+      ctx,
+      new Request(`http://127.0.0.1:9712/api/tasks/${taskId}`, {
+        method: "DELETE",
+        headers: {
+          Origin: "http://localhost:5173",
+          "X-CSRF-Token": csrf["csrf_token"],
+        },
+      }),
+    );
+
+    expect(accepted.status).toBe(200);
+    expect(await accepted.json()).toEqual({ status: "deleted" });
+    expect(db.get_task(taskId)).toBeNull();
+  });
+
+  test("POST /api/channels/settings stops existing disabled channels", async () => {
+    const stopped: string[] = [];
+    ctx.telegram_channel = { stop: () => stopped.push("telegram") } as any;
+    ctx.slack_channel = { stop: () => stopped.push("slack") } as any;
+    ctx.weixin_channel = { stop: () => stopped.push("weixin") } as any;
+    ctx.feishu_channel = { stop: () => stopped.push("feishu") } as any;
+
+    const res = await handleApiRequest(
+      ctx,
+      new Request("http://127.0.0.1:9712/api/channels/settings", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          telegram_enabled: "false",
+          slack_enabled: "false",
+          weixin_enabled: "false",
+        }),
+      }),
+    );
+
+    expect(res.status).toBe(200);
+    expect(stopped).toEqual(["telegram", "slack", "weixin", "feishu"]);
+    expect(ctx.telegram_channel).toBeNull();
+    expect(ctx.slack_channel).toBeNull();
+    expect(ctx.weixin_channel).toBeNull();
+    expect(ctx.feishu_channel).toBeNull();
+  });
+
+  test("POST /api/dag accepts prompt_images as JSON string", async () => {
+    const res = await handleApiRequest(
+      ctx,
+      new Request("http://127.0.0.1:9712/api/dag", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          dag_id: "imgdag",
+          tasks: [
+            {
+              ref: "a",
+              prompt: "first",
+              schedule_type: "immediate",
+              prompt_images: JSON.stringify([
+                { media_type: "image/png", data: "AAA" },
+              ]),
+            },
+          ],
+        }),
+      }),
+    );
+
+    expect(res.status).toBe(201);
+    const payload = (await res.json()) as Record<string, any>;
+    const taskId = Number(payload["task_ids"]["a"]);
+    expect(db.get_task(taskId)!["prompt_images"]).toEqual([
+      { media_type: "image/png", data: "AAA" },
+    ]);
+  });
+
+  test("POST /api/dag falls back to empty prompt_images for bad JSON", async () => {
+    const res = await handleApiRequest(
+      ctx,
+      new Request("http://127.0.0.1:9712/api/dag", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          tasks: [
+            {
+              ref: "a",
+              prompt: "first",
+              schedule_type: "immediate",
+              prompt_images: "{not json",
+            },
+          ],
+        }),
+      }),
+    );
+
+    expect(res.status).toBe(201);
+    const payload = (await res.json()) as Record<string, any>;
+    const taskId = Number(payload["task_ids"]["a"]);
+    expect(db.get_task(taskId)!["prompt_images"]).toEqual([]);
+  });
+
+  test("POST /api/tasks/:id/resume returns 404 for missing tasks", async () => {
+    const res = await handleApiRequest(
+      ctx,
+      new Request("http://127.0.0.1:9712/api/tasks/99999/resume", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message: "go" }),
+      }),
+    );
+
+    expect(res.status).toBe(404);
+    expect(await res.json()).toEqual({ error: "not found" });
+  });
+
+  test("POST rejects declared bodies larger than the API cap", async () => {
+    const res = await handleApiRequest(
+      ctx,
+      new Request("http://127.0.0.1:9712/api/tasks", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Content-Length": String(10 * 1024 * 1024 + 1),
+        },
+        body: "{}",
+      }),
+    );
+
+    expect(res.status).toBe(413);
+    expect(await res.json()).toEqual({ error: "request body too large" });
+  });
+
+  test("CORS, method, and JSON error paths return explicit responses", async () => {
+    const forbiddenOrigin = await handleApiRequest(
+      ctx,
+      new Request("http://127.0.0.1:9712/api/health", {
+        headers: { Origin: "https://evil.example" },
+      }),
+    );
+    expect(forbiddenOrigin.status).toBe(403);
+
+    const options = await handleApiRequest(
+      ctx,
+      new Request("http://127.0.0.1:9712/api/tasks", {
+        method: "OPTIONS",
+        headers: { Origin: "http://localhost:5173" },
+      }),
+    );
+    expect(options.status).toBe(200);
+    expect(options.headers.get("Access-Control-Allow-Origin")).toBe(
+      "http://localhost:5173",
+    );
+
+    const invalidJson = await handleApiRequest(
+      ctx,
+      new Request("http://127.0.0.1:9712/api/tasks", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: "{",
+      }),
+    );
+    expect(invalidJson.status).toBe(400);
+    expect(await invalidJson.json()).toEqual({ error: "invalid JSON body" });
+
+    const methodNotAllowed = await handleApiRequest(
+      ctx,
+      new Request("http://127.0.0.1:9712/api/tasks", { method: "PATCH" }),
+    );
+    expect(methodNotAllowed.status).toBe(405);
+    expect(await methodNotAllowed.json()).toEqual({
+      error: "method not allowed",
+    });
+
+    const outsideApi = await handleApiRequest(
+      ctx,
+      new Request("http://127.0.0.1:9712/not-api"),
+    );
+    expect(outsideApi.status).toBe(404);
+  });
+
+  test("GET settings and channel status expose stored non-secret configuration", async () => {
+    db.set_setting("timeout", "123");
+    db.set_setting("default_agent", "codex");
+    db.set_setting("skill_library_enabled", "1");
+    db.set_setting("skill_sweep_agent", "claude");
+    db.set_setting("skill_sweep_cron", "5 4 * * *");
+    db.set_setting("telegram_enabled", "true");
+    db.set_setting("telegram_bot_token", "tg-secret");
+    db.set_setting("telegram_allowed_users", "42");
+    db.set_setting("telegram_default_working_dir", "~/tg");
+    db.set_setting("telegram_default_chat_id", "-10042");
+    db.set_setting("slack_enabled", "true");
+    db.set_setting("slack_bot_token", "xoxb");
+    db.set_setting("slack_app_token", "xapp");
+    db.set_setting("slack_default_channel", "C42");
+    db.set_setting("weixin_enabled", "true");
+    db.set_setting("weixin_account_id", "configured-account");
+    ctx.weixin_channel = {
+      _running: true,
+      get_status_snapshot: () => ({
+        configured: true,
+        login_status: "logged_in",
+        account_id: "runtime-account",
+        qr_code_url: "qr",
+        user_id: "wx-user",
+      }),
+    } as any;
+
+    const settings = await json(
+      new Request("http://127.0.0.1:9712/api/settings"),
+    );
+    expect(settings).toEqual({
+      default_agent: "codex",
+      timeout: 123,
+      skill_library_enabled: true,
+      skill_sweep_agent: "claude",
+      skill_sweep_cron: "5 4 * * *",
+    });
+
+    const status = await json(
+      new Request("http://127.0.0.1:9712/api/channels/status"),
+    );
+    expect(status.telegram).toEqual({
+      enabled: true,
+      configured: true,
+      running: false,
+      default_working_dir: "~/tg",
+      default_chat_id: "-10042",
+      allowed_users: "42",
+    });
+    expect(status.slack.configured).toBe(true);
+    expect(status.slack.default_channel).toBe("C42");
+    expect(status.weixin.account_id).toBe("runtime-account");
+    expect(status.weixin.running).toBe(true);
+    expect(status.weixin.login_status).toBe("logged_in");
+  });
+
+  test("task detail routes expose runs, events, messages, and dependency metadata", async () => {
+    const upstream = await json(
+      new Request("http://127.0.0.1:9712/api/tasks", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title: "Upstream",
+          prompt: "prepare",
+          working_dir: ".",
+          dag_id: "dag-api",
+        }),
+      }),
+    );
+    const upstreamId = Number(upstream["id"]);
+
+    const downstream = await json(
+      new Request("http://127.0.0.1:9712/api/tasks", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title: "Downstream",
+          prompt: "consume",
+          working_dir: ".",
+          dag_id: "dag-api",
+          depends_on: [{ task_id: upstreamId, inject_result: true }],
+        }),
+      }),
+    );
+    const downstreamId = Number(downstream["id"]);
+
+    const runId = db.add_run(downstreamId);
+    const raw = [
+      JSON.stringify({
+        type: "user",
+        message: { content: [{ type: "text", text: "hello" }] },
+      }),
+      "not-json",
+      JSON.stringify({
+        type: "assistant",
+        message: { content: [{ type: "text", text: "world" }] },
+      }),
+    ].join("\n");
+    db.finish_run(runId, "completed", "done", null, raw);
+    db.add_output_event(downstreamId, runId, "assistant", "event-content");
+
+    const task = await json(
+      new Request(`http://127.0.0.1:9712/api/tasks/${downstreamId}`),
+    );
+    expect(task.dependencies).toEqual([
+      expect.objectContaining({
+        task_id: downstreamId,
+        depends_on_task_id: upstreamId,
+        inject_result: 1,
+      }),
+    ]);
+
+    const dependents = await json(
+      new Request(`http://127.0.0.1:9712/api/tasks/${upstreamId}/dependents`),
+    );
+    expect(dependents.map((d: any) => d.task_id)).toEqual([downstreamId]);
+
+    const deps = await json(
+      new Request(
+        `http://127.0.0.1:9712/api/tasks/${downstreamId}/dependencies`,
+      ),
+    );
+    expect(deps).toEqual([
+      expect.objectContaining({
+        task_id: downstreamId,
+        depends_on_task_id: upstreamId,
+        inject_result: 1,
+      }),
+    ]);
+
+    const runs = await json(
+      new Request(`http://127.0.0.1:9712/api/tasks/${downstreamId}/runs`),
+    );
+    expect(runs[0].id).toBe(runId);
+
+    const events = await json(
+      new Request(
+        `http://127.0.0.1:9712/api/tasks/${downstreamId}/events?limit=5&offset=0`,
+      ),
+    );
+    expect(events.total).toBe(1);
+    expect(events.events[0].content).toBe("event-content");
+
+    const messages = await json(
+      new Request(`http://127.0.0.1:9712/api/tasks/${downstreamId}/messages`),
+    );
+    expect(messages.map((m: any) => [m.role, m.text])).toEqual([
+      ["user", "hello"],
+      ["assistant", "world"],
+    ]);
+
+    const dag = await json(
+      new Request("http://127.0.0.1:9712/api/dag/dag-api"),
+    );
+    expect(
+      dag.map((t: any) => t.id).sort((a: number, b: number) => a - b),
+    ).toEqual([upstreamId, downstreamId]);
+  });
+
+  test("POST /api/tasks validates prompt, working dir, and cron schedules", async () => {
+    const emptyPrompt = await handleApiRequest(
+      ctx,
+      new Request("http://127.0.0.1:9712/api/tasks", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ prompt: "   " }),
+      }),
+    );
+    expect(emptyPrompt.status).toBe(400);
+    expect(await emptyPrompt.json()).toEqual({
+      error: "prompt cannot be empty",
+      field: "prompt",
+    });
+
+    const badDir = await handleApiRequest(
+      ctx,
+      new Request("http://127.0.0.1:9712/api/tasks", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          prompt: "x",
+          working_dir: path.join(tmpDir, "missing"),
+        }),
+      }),
+    );
+    expect(badDir.status).toBe(400);
+    expect(((await badDir.json()) as Record<string, any>).field).toBe(
+      "working_dir",
+    );
+
+    const missingCron = await handleApiRequest(
+      ctx,
+      new Request("http://127.0.0.1:9712/api/tasks", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ prompt: "x", schedule_type: "cron" }),
+      }),
+    );
+    expect(missingCron.status).toBe(400);
+
+    const invalidCron = await handleApiRequest(
+      ctx,
+      new Request("http://127.0.0.1:9712/api/tasks", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          prompt: "x",
+          schedule_type: "cron",
+          cron_expr: "not cron",
+        }),
+      }),
+    );
+    expect(invalidCron.status).toBe(400);
+    expect(((await invalidCron.json()) as Record<string, any>).field).toBe(
+      "cron_expr",
+    );
+  });
+
+  test("task mutation routes edit, respond, resume, cancel, retry, and remove dependencies", async () => {
+    const upstream = await json(
+      new Request("http://127.0.0.1:9712/api/tasks", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title: "Up", prompt: "up" }),
+      }),
+    );
+    const task = await json(
+      new Request("http://127.0.0.1:9712/api/tasks", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title: "Editable", prompt: "first" }),
+      }),
+    );
+    const upstreamId = Number(upstream.id);
+    const taskId = Number(task.id);
+
+    const addDep = await handleApiRequest(
+      ctx,
+      new Request(`http://127.0.0.1:9712/api/tasks/${taskId}/dependencies`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ depends_on_task_id: upstreamId }),
+      }),
+    );
+    expect(addDep.status).toBe(200);
+    expect(db.get_task(taskId)!["status"]).toBe("blocked");
+
+    const removeDep = await handleApiRequest(
+      ctx,
+      new Request(
+        `http://127.0.0.1:9712/api/tasks/${taskId}/dependencies/${upstreamId}`,
+        { method: "DELETE" },
+      ),
+    );
+    expect(removeDep.status).toBe(200);
+    expect(db.get_dependencies(taskId)).toEqual([]);
+
+    const edited = await handleApiRequest(
+      ctx,
+      new Request(`http://127.0.0.1:9712/api/tasks/${taskId}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title: "Edited",
+          prompt: "second",
+          schedule_type: "scheduled_at",
+          next_run_at: "2030-01-01T00:00:00",
+          prompt_images: JSON.stringify([
+            { media_type: "image/png", data: "x" },
+          ]),
+        }),
+      }),
+    );
+    expect(edited.status).toBe(200);
+    const editedPayload = (await edited.json()) as any;
+    expect(editedPayload.title).toBe("Edited");
+    expect(editedPayload.status).toBe("scheduled");
+    expect(editedPayload.prompt_images).toEqual([
+      { media_type: "image/png", data: "x" },
+    ]);
+
+    const respond = await handleApiRequest(
+      ctx,
+      new Request(`http://127.0.0.1:9712/api/tasks/${taskId}/respond`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ answer: "answer" }),
+      }),
+    );
+    expect(respond.status).toBe(200);
+    expect(db.get_task(taskId)!["answer"]).toBe("answer");
+
+    db.update_task(taskId, { session_id: "sess-1" });
+    const resume = await handleApiRequest(
+      ctx,
+      new Request(`http://127.0.0.1:9712/api/tasks/${taskId}/resume`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message: "continue" }),
+      }),
+    );
+    expect(resume.status).toBe(200);
+    expect(db.get_task(taskId)!["prompt"]).toBe("continue");
+
+    const cancel = await handleApiRequest(
+      ctx,
+      new Request(`http://127.0.0.1:9712/api/tasks/${taskId}/cancel`, {
+        method: "POST",
+      }),
+    );
+    expect(cancel.status).toBe(200);
+    expect(db.get_task(taskId)!["status"]).toBe("cancelled");
+
+    const retry = await handleApiRequest(
+      ctx,
+      new Request(`http://127.0.0.1:9712/api/tasks/${taskId}/retry`, {
+        method: "POST",
+      }),
+    );
+    expect(retry.status).toBe(200);
+    expect(db.get_task(taskId)!["status"]).toBe("pending");
+  });
+
+  test("heartbeat API covers create, ticks, output, pause, resume, update, and delete", async () => {
+    const created = await handleApiRequest(
+      ctx,
+      new Request("http://127.0.0.1:9712/api/heartbeats", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: "Heartbeat",
+          check_prompt: "check",
+          schedule_type: "interval",
+          interval_seconds: 60,
+          cooldown_seconds: 5,
+        }),
+      }),
+    );
+    expect(created.status).toBe(201);
+    const heartbeatId = Number(((await created.json()) as any).id);
+
+    expect(
+      await json(new Request("http://127.0.0.1:9712/api/heartbeats")),
+    ).toHaveLength(1);
+    expect(
+      (
+        await json(
+          new Request(`http://127.0.0.1:9712/api/heartbeats/${heartbeatId}`),
+        )
+      ).name,
+    ).toBe("Heartbeat");
+
+    const tickId = db.add_heartbeat_tick(heartbeatId);
+    db.finish_heartbeat_tick(
+      tickId,
+      "completed",
+      "idle",
+      { decision: "idle" },
+      null,
+      "tick raw",
+    );
+    const ticks = await json(
+      new Request(`http://127.0.0.1:9712/api/heartbeats/${heartbeatId}/ticks`),
+    );
+    expect(ticks.ticks[0].id).toBe(tickId);
+
+    let output = await json(
+      new Request(
+        `http://127.0.0.1:9712/api/heartbeats/${heartbeatId}/ticks/${tickId}/output`,
+      ),
+    );
+    expect(output).toEqual({ output: "tick raw", is_running: false });
+
+    scheduler._live_heartbeat_output.set(tickId, "live tick");
+    output = await json(
+      new Request(
+        `http://127.0.0.1:9712/api/heartbeats/${heartbeatId}/ticks/${tickId}/output`,
+      ),
+    );
+    expect(output).toEqual({ output: "live tick", is_running: true });
+
+    const pause = await handleApiRequest(
+      ctx,
+      new Request(`http://127.0.0.1:9712/api/heartbeats/${heartbeatId}/pause`, {
+        method: "POST",
+      }),
+    );
+    expect(pause.status).toBe(200);
+    expect(db.get_heartbeat(heartbeatId)!["enabled"]).toBe(false);
+
+    const resume = await handleApiRequest(
+      ctx,
+      new Request(
+        `http://127.0.0.1:9712/api/heartbeats/${heartbeatId}/resume`,
+        { method: "POST" },
+      ),
+    );
+    expect(resume.status).toBe(200);
+    expect(db.get_heartbeat(heartbeatId)!["enabled"]).toBe(true);
+
+    const updated = await handleApiRequest(
+      ctx,
+      new Request(`http://127.0.0.1:9712/api/heartbeats/${heartbeatId}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: "Cron heartbeat",
+          check_prompt: "check",
+          schedule_type: "cron",
+          cron_expr: "0 9 * * *",
+          cooldown_seconds: 0,
+        }),
+      }),
+    );
+    expect(updated.status).toBe(200);
+    expect(((await updated.json()) as any).schedule_type).toBe("cron");
+
+    const deleted = await handleApiRequest(
+      ctx,
+      new Request(`http://127.0.0.1:9712/api/heartbeats/${heartbeatId}`, {
+        method: "DELETE",
+      }),
+    );
+    expect(deleted.status).toBe(200);
+    expect(db.get_heartbeat(heartbeatId)).toBeNull();
+  });
+
+  test("heartbeat validation rejects malformed payloads", async () => {
+    const empty = await handleApiRequest(
+      ctx,
+      new Request("http://127.0.0.1:9712/api/heartbeats", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ check_prompt: "" }),
+      }),
+    );
+    expect(empty.status).toBe(400);
+    expect(((await empty.json()) as Record<string, any>).field).toBe(
+      "check_prompt",
+    );
+
+    const badSchedule = await handleApiRequest(
+      ctx,
+      new Request("http://127.0.0.1:9712/api/heartbeats", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          check_prompt: "x",
+          schedule_type: "nonsense",
+        }),
+      }),
+    );
+    expect(badSchedule.status).toBe(400);
+    expect(((await badSchedule.json()) as Record<string, any>).field).toBe(
+      "schedule_type",
+    );
+
+    const badCron = await handleApiRequest(
+      ctx,
+      new Request("http://127.0.0.1:9712/api/heartbeats", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          check_prompt: "x",
+          schedule_type: "cron",
+          cron_expr: "bad cron",
+        }),
+      }),
+    );
+    expect(badCron.status).toBe(400);
+    expect(((await badCron.json()) as Record<string, any>).field).toBe(
+      "cron_expr",
+    );
+
+    const badInterval = await handleApiRequest(
+      ctx,
+      new Request("http://127.0.0.1:9712/api/heartbeats", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          check_prompt: "x",
+          schedule_type: "interval",
+          interval_seconds: 0,
+        }),
+      }),
+    );
+    expect(badInterval.status).toBe(400);
+    expect(((await badInterval.json()) as Record<string, any>).field).toBe(
+      "interval_seconds",
+    );
+
+    const badCooldown = await handleApiRequest(
+      ctx,
+      new Request("http://127.0.0.1:9712/api/heartbeats", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          check_prompt: "x",
+          schedule_type: "interval",
+          interval_seconds: 10,
+          cooldown_seconds: -1,
+        }),
+      }),
+    );
+    expect(badCooldown.status).toBe(400);
+    expect(((await badCooldown.json()) as Record<string, any>).field).toBe(
+      "cooldown_seconds",
+    );
+  });
+
+  test("Weixin action API delegates to the running channel", async () => {
+    const calls: string[] = [];
+
+    const missing = await handleApiRequest(
+      ctx,
+      new Request("http://127.0.0.1:9712/api/channels/weixin/action", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "login" }),
+      }),
+    );
+    expect(missing.status).toBe(400);
+
+    ctx.weixin_channel = {
+      request_login: () => calls.push("login"),
+      request_logout: () => calls.push("logout"),
+    } as any;
+
+    const login = await handleApiRequest(
+      ctx,
+      new Request("http://127.0.0.1:9712/api/channels/weixin/action", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "reconnect" }),
+      }),
+    );
+    expect(login.status).toBe(200);
+
+    const logout = await handleApiRequest(
+      ctx,
+      new Request("http://127.0.0.1:9712/api/channels/weixin/action", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "logout" }),
+      }),
+    );
+    expect(logout.status).toBe(200);
+
+    const unsupported = await handleApiRequest(
+      ctx,
+      new Request("http://127.0.0.1:9712/api/channels/weixin/action", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "dance" }),
+      }),
+    );
+    expect(unsupported.status).toBe(400);
+    expect(calls).toEqual(["login", "logout"]);
+  });
+
+  test("skill content, toggle, and delete routes use the skill registry", async () => {
+    const skillDir = path.join(tmpDir, "skill");
+    fs.mkdirSync(skillDir);
+    const skillPath = path.join(skillDir, "SKILL.md");
+    fs.writeFileSync(skillPath, "# Skill\n", "utf8");
+    const skillId = db.add_skill("demo", "desc", skillPath)!;
+
+    const list = await json(new Request("http://127.0.0.1:9712/api/skills"));
+    expect(list.skills.map((s: any) => s.id)).toContain(skillId);
+
+    const content = await json(
+      new Request(`http://127.0.0.1:9712/api/skills/${skillId}/content`),
+    );
+    expect(content.content).toBe("# Skill\n");
+    expect(content.path).toBe(skillPath);
+
+    const toggled = await handleApiRequest(
+      ctx,
+      new Request(`http://127.0.0.1:9712/api/skills/${skillId}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ enabled: false }),
+      }),
+    );
+    expect(toggled.status).toBe(200);
+    expect(db.get_skill(skillId)!["enabled"]).toBe(0);
+
+    const deleted = await handleApiRequest(
+      ctx,
+      new Request(`http://127.0.0.1:9712/api/skills/${skillId}`, {
+        method: "DELETE",
+      }),
+    );
+    expect(deleted.status).toBe(200);
+    expect(db.get_skill(skillId)).toBeNull();
+  });
+
+  test("settings, skill workflow, and delete error routes cover edge cases", async () => {
+    const nonObjectSettings = await handleApiRequest(
+      ctx,
+      new Request("http://127.0.0.1:9712/api/settings", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(["ignored"]),
+      }),
+    );
+    expect(nonObjectSettings.status).toBe(200);
+
+    const putSettings = await handleApiRequest(
+      ctx,
+      new Request("http://127.0.0.1:9712/api/settings", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ timeout: 90 }),
+      }),
+    );
+    expect(putSettings.status).toBe(200);
+    expect(db.get_setting("timeout")).toBe("90");
+
+    db.set_setting("feishu_app_id", "cli_x");
+    const feishuSettings = await json(
+      new Request("http://127.0.0.1:9712/api/feishu/settings"),
+    );
+    expect(feishuSettings.feishu_app_id).toBe("cli_x");
+
+    const missingContent = await handleApiRequest(
+      ctx,
+      new Request("http://127.0.0.1:9712/api/skills/999/content"),
+    );
+    expect(missingContent.status).toBe(404);
+
+    const brokenSkillId = db.add_skill(
+      "broken",
+      "missing file",
+      path.join(tmpDir, "missing", "SKILL.md"),
+    )!;
+    const brokenContent = await json(
+      new Request(`http://127.0.0.1:9712/api/skills/${brokenSkillId}/content`),
+    );
+    expect(brokenContent.content).toContain("无法读取");
+
+    (scheduler as any).trigger_skill_sweep = mock(() => true);
+    let res = await handleApiRequest(
+      ctx,
+      new Request("http://127.0.0.1:9712/api/skills/sweep", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ agent: "codex", full: false }),
+      }),
+    );
+    expect(res.status).toBe(200);
+    expect((scheduler as any).trigger_skill_sweep.mock.calls[0]).toEqual([
+      "codex",
+      false,
+    ]);
+    (scheduler as any).trigger_skill_sweep = mock(() => false);
+    res = await handleApiRequest(
+      ctx,
+      new Request("http://127.0.0.1:9712/api/skills/sweep", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: "{}",
+      }),
+    );
+    expect(res.status).toBe(409);
+
+    (scheduler as any).trigger_skill_draft = mock(() => true);
+    res = await handleApiRequest(
+      ctx,
+      new Request("http://127.0.0.1:9712/api/skill-patterns/1/draft", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ agent: "claude" }),
+      }),
+    );
+    expect(res.status).toBe(200);
+    (scheduler as any).trigger_skill_draft = mock(() => false);
+    res = await handleApiRequest(
+      ctx,
+      new Request("http://127.0.0.1:9712/api/skill-patterns/bad/draft", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: "{}",
+      }),
+    );
+    expect(res.status).toBe(404);
+
+    (scheduler as any).approve_skill = mock(() => ({ id: 1, name: "ok" }));
+    res = await handleApiRequest(
+      ctx,
+      new Request("http://127.0.0.1:9712/api/skill-patterns/1/approve", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: "ok", description: "d", body: "# Skill" }),
+      }),
+    );
+    expect(res.status).toBe(200);
+    (scheduler as any).approve_skill = mock(() => {
+      throw new Error("pattern not found");
+    });
+    res = await handleApiRequest(
+      ctx,
+      new Request("http://127.0.0.1:9712/api/skill-patterns/1/approve", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: "{}",
+      }),
+    );
+    expect(res.status).toBe(404);
+
+    (scheduler as any).dismiss_skill_pattern = mock(() => undefined);
+    res = await handleApiRequest(
+      ctx,
+      new Request("http://127.0.0.1:9712/api/skill-patterns/1/dismiss", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: "{}",
+      }),
+    );
+    expect(res.status).toBe(200);
+    res = await handleApiRequest(
+      ctx,
+      new Request("http://127.0.0.1:9712/api/skill-patterns/bad/dismiss", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: "{}",
+      }),
+    );
+    expect(res.status).toBe(404);
+
+    res = await handleApiRequest(
+      ctx,
+      new Request("http://127.0.0.1:9712/api/skills/bad", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: "{}",
+      }),
+    );
+    expect(res.status).toBe(400);
+    (scheduler as any).toggle_skill = mock(() => {
+      throw new Error("skill not found");
+    });
+    res = await handleApiRequest(
+      ctx,
+      new Request("http://127.0.0.1:9712/api/skills/123", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: "{}",
+      }),
+    );
+    expect(res.status).toBe(404);
+
+    res = await handleApiRequest(
+      ctx,
+      new Request("http://127.0.0.1:9712/api/skills/bad", {
+        method: "DELETE",
+      }),
+    );
+    expect(res.status).toBe(400);
+    (scheduler as any).remove_skill = mock(() => {
+      throw new Error("skill not found");
+    });
+    res = await handleApiRequest(
+      ctx,
+      new Request("http://127.0.0.1:9712/api/skills/123", {
+        method: "DELETE",
+      }),
+    );
+    expect(res.status).toBe(404);
+    res = await handleApiRequest(
+      ctx,
+      new Request("http://127.0.0.1:9712/api/unknown", { method: "DELETE" }),
+    );
+    expect(res.status).toBe(404);
+  });
+
+  test("heartbeat routes cover validation and scheduler error branches", async () => {
+    let res = await handleApiRequest(
+      ctx,
+      new Request("http://127.0.0.1:9712/api/heartbeats", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          check_prompt: "check",
+          working_dir: path.join(tmpDir, "missing"),
+          schedule_type: "interval",
+          interval_seconds: 60,
+        }),
+      }),
+    );
+    expect(res.status).toBe(400);
+
+    res = await handleApiRequest(
+      ctx,
+      new Request("http://127.0.0.1:9712/api/heartbeats", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          check_prompt: "check",
+          schedule_type: "cron",
+        }),
+      }),
+    );
+    expect(res.status).toBe(400);
+
+    res = await handleApiRequest(
+      ctx,
+      new Request("http://127.0.0.1:9712/api/heartbeats", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          check_prompt: "check",
+          schedule_type: "interval",
+          interval_seconds: 60,
+          cooldown_seconds: "not-int",
+          enabled: "false",
+        }),
+      }),
+    );
+    expect(res.status).toBe(400);
+
+    const created = await handleApiRequest(
+      ctx,
+      new Request("http://127.0.0.1:9712/api/heartbeats", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          check_prompt: "check",
+          schedule_type: "interval",
+          interval_seconds: 60,
+          cooldown_seconds: 0,
+          enabled: "false",
+        }),
+      }),
+    );
+    const heartbeatId = Number(((await created.json()) as any).id);
+    expect(db.get_heartbeat(heartbeatId)!["enabled"]).toBe(false);
+
+    const tickId = db.add_heartbeat_tick(heartbeatId);
+    expect(
+      (
+        await handleApiRequest(
+          ctx,
+          new Request(
+            `http://127.0.0.1:9712/api/heartbeats/bad/ticks/${tickId}/output`,
+          ),
+        )
+      ).status,
+    ).toBe(404);
+    expect(
+      (
+        await handleApiRequest(
+          ctx,
+          new Request(
+            `http://127.0.0.1:9712/api/heartbeats/${heartbeatId}/ticks/999/output`,
+          ),
+        )
+      ).status,
+    ).toBe(404);
+    expect(
+      (
+        await handleApiRequest(
+          ctx,
+          new Request("http://127.0.0.1:9712/api/heartbeats/bad/ticks"),
+        )
+      ).status,
+    ).toBe(404);
+    expect(
+      (
+        await handleApiRequest(
+          ctx,
+          new Request("http://127.0.0.1:9712/api/heartbeats/bad"),
+        )
+      ).status,
+    ).toBe(404);
+
+    (scheduler as any).trigger_heartbeat_now = mock(() => undefined);
+    res = await handleApiRequest(
+      ctx,
+      new Request(
+        `http://127.0.0.1:9712/api/heartbeats/${heartbeatId}/run-now`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: "{}",
+        },
+      ),
+    );
+    expect(res.status).toBe(200);
+    (scheduler as any).trigger_heartbeat_now = mock(() => {
+      throw new Error("heartbeat already running");
+    });
+    res = await handleApiRequest(
+      ctx,
+      new Request(
+        `http://127.0.0.1:9712/api/heartbeats/${heartbeatId}/run-now`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: "{}",
+        },
+      ),
+    );
+    expect(res.status).toBe(409);
+    (scheduler as any).trigger_heartbeat_now = mock(() => {
+      throw new Error("heartbeat not found");
+    });
+    res = await handleApiRequest(
+      ctx,
+      new Request(
+        `http://127.0.0.1:9712/api/heartbeats/${heartbeatId}/run-now`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: "{}",
+        },
+      ),
+    );
+    expect(res.status).toBe(404);
+
+    expect(
+      (
+        await handleApiRequest(
+          ctx,
+          new Request("http://127.0.0.1:9712/api/heartbeats/bad", {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: "{}",
+          }),
+        )
+      ).status,
+    ).toBe(400);
+    expect(
+      (
+        await handleApiRequest(
+          ctx,
+          new Request("http://127.0.0.1:9712/api/heartbeats/999", {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: "{}",
+          }),
+        )
+      ).status,
+    ).toBe(404);
+
+    (scheduler as any).pause_heartbeat = mock(() => {
+      throw new Error("heartbeat not found");
+    });
+    expect(
+      (
+        await handleApiRequest(
+          ctx,
+          new Request(
+            `http://127.0.0.1:9712/api/heartbeats/${heartbeatId}/pause`,
+            {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: "{}",
+            },
+          ),
+        )
+      ).status,
+    ).toBe(404);
+    (scheduler as any).resume_heartbeat = mock(() => {
+      throw new Error("heartbeat not found");
+    });
+    expect(
+      (
+        await handleApiRequest(
+          ctx,
+          new Request(
+            `http://127.0.0.1:9712/api/heartbeats/${heartbeatId}/resume`,
+            {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: "{}",
+            },
+          ),
+        )
+      ).status,
+    ).toBe(404);
+  });
+
+  test("task routes cover live output, message parsing, validation, and DAG errors", async () => {
+    const upstream = await json(
+      new Request("http://127.0.0.1:9712/api/tasks", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ prompt: "upstream" }),
+      }),
+    );
+    db.update_task(Number(upstream.id), { status: "completed" });
+
+    const created = await json(
+      new Request("http://127.0.0.1:9712/api/tasks", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          prompt: "downstream",
+          schedule_type: "cron",
+          cron_expr: "*/5 * * * *",
+          depends_on: [Number(upstream.id), { task_id: Number(upstream.id) }],
+          inject_result: true,
+          prompt_images: JSON.stringify({ not: "a list" }),
+          image_paths: ["a.png", 1],
+        }),
+      }),
+    );
+    const taskId = Number(created.id);
+    expect(db.get_dependencies(taskId)).toHaveLength(1);
+
+    scheduler._live_output.set(taskId, "live output");
+    expect(
+      await json(
+        new Request(`http://127.0.0.1:9712/api/tasks/${taskId}/output`),
+      ),
+    ).toEqual({ output: "live output", is_running: true });
+
+    const runId = db.add_run(taskId);
+    db.finish_run(
+      runId,
+      "completed",
+      "ok",
+      null,
+      [
+        JSON.stringify({
+          type: "user",
+          message: {
+            content: [
+              "hello ",
+              { type: "text", text: "world" },
+              { type: "image", source: "ignored" },
+            ],
+          },
+        }),
+        JSON.stringify({
+          type: "assistant",
+          message: {
+            content: [{ type: "text", text: "answer" }, { type: "tool" }],
+          },
+        }),
+        "{bad json",
+      ].join("\n"),
+    );
+    const messages = await json(
+      new Request(`http://127.0.0.1:9712/api/tasks/${taskId}/messages`),
+    );
+    expect(messages.map((m: any) => m.text)).toEqual(["hello world", "answer"]);
+
+    for (const suffix of [
+      "runs",
+      "output",
+      "events",
+      "messages",
+      "dependencies",
+      "dependents",
+    ]) {
+      const res = await handleApiRequest(
+        ctx,
+        new Request(`http://127.0.0.1:9712/api/tasks/bad/${suffix}`),
+      );
+      expect(res.status).toBe(404);
+    }
+
+    let res = await handleApiRequest(
+      ctx,
+      new Request("http://127.0.0.1:9712/api/tasks/bad/dependencies", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: "{}",
+      }),
+    );
+    expect(res.status).toBe(400);
+    res = await handleApiRequest(
+      ctx,
+      new Request(`http://127.0.0.1:9712/api/tasks/${taskId}/dependencies`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ depends_on_task_id: 999 }),
+      }),
+    );
+    expect(res.status).toBe(404);
+
+    res = await handleApiRequest(
+      ctx,
+      new Request(`http://127.0.0.1:9712/api/tasks/${taskId}/resume`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message: "   " }),
+      }),
+    );
+    expect(res.status).toBe(400);
+    res = await handleApiRequest(
+      ctx,
+      new Request(`http://127.0.0.1:9712/api/tasks/${taskId}/resume`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message: "continue" }),
+      }),
+    );
+    expect(res.status).toBe(400);
+    expect(
+      (
+        await handleApiRequest(
+          ctx,
+          new Request("http://127.0.0.1:9712/api/tasks/bad/cancel", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: "{}",
+          }),
+        )
+      ).status,
+    ).toBe(404);
+    expect(
+      (
+        await handleApiRequest(
+          ctx,
+          new Request("http://127.0.0.1:9712/api/tasks/bad/retry", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: "{}",
+          }),
+        )
+      ).status,
+    ).toBe(404);
+    expect(
+      (
+        await handleApiRequest(
+          ctx,
+          new Request("http://127.0.0.1:9712/api/tasks/999/respond", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: "{}",
+          }),
+        )
+      ).status,
+    ).toBe(404);
+
+    res = await handleApiRequest(
+      ctx,
+      new Request("http://127.0.0.1:9712/api/dag", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ tasks: [] }),
+      }),
+    );
+    expect(res.status).toBe(400);
+    res = await handleApiRequest(
+      ctx,
+      new Request("http://127.0.0.1:9712/api/dag", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          tasks: [{ ref: "b", prompt: "b", depends_on_refs: ["missing"] }],
+        }),
+      }),
+    );
+    expect(res.status).toBe(400);
+
+    res = await handleApiRequest(
+      ctx,
+      new Request("http://127.0.0.1:9712/api/tasks/bad", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: "{}",
+      }),
+    );
+    expect(res.status).toBe(400);
+    res = await handleApiRequest(
+      ctx,
+      new Request("http://127.0.0.1:9712/api/tasks/999", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: "{}",
+      }),
+    );
+    expect(res.status).toBe(404);
+
+    db.update_task(taskId, { status: "completed" });
+    res = await handleApiRequest(
+      ctx,
+      new Request(`http://127.0.0.1:9712/api/tasks/${taskId}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ prompt: "edit" }),
+      }),
+    );
+    expect(res.status).toBe(409);
+
+    db.update_task(taskId, { status: "pending" });
+    for (const body of [
+      { prompt: "   " },
+      { prompt: "ok", working_dir: path.join(tmpDir, "missing") },
+      { prompt: "ok", schedule_type: "cron", cron_expr: "" },
+      { prompt: "ok", schedule_type: "cron", cron_expr: "bad cron" },
+      { prompt: "ok", schedule_type: "scheduled_at", next_run_at: "" },
+    ]) {
+      res = await handleApiRequest(
+        ctx,
+        new Request(`http://127.0.0.1:9712/api/tasks/${taskId}`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        }),
+      );
+      expect(res.status).toBe(400);
+    }
+
+    for (const body of [
+      { prompt: "immediate", schedule_type: "immediate" },
+      { prompt: "delayed", schedule_type: "delayed", delay_seconds: 30 },
+      { prompt: "cron", schedule_type: "cron", cron_expr: "*/10 * * * *" },
+      {
+        prompt: "blocked",
+        depends_on: [{ task_id: Number(upstream.id), inject_result: true }],
+        prompt_images: [{ media_type: "image/png", data: "x" }],
+        image_paths: ["image.png"],
+      },
+    ]) {
+      res = await handleApiRequest(
+        ctx,
+        new Request(`http://127.0.0.1:9712/api/tasks/${taskId}`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        }),
+      );
+      expect(res.status).toBe(200);
+    }
+
+    const explodingDb = {
+      ...ctx,
+      db: {
+        ...db,
+        get_all_tasks: () => {
+          throw new Error("db down");
+        },
+      },
+    } as any;
+    const failure = await handleApiRequest(
+      explodingDb,
+      new Request("http://127.0.0.1:9712/api/health"),
+    );
+    expect(failure.status).toBe(500);
+  });
+});

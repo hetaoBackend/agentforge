@@ -1,23 +1,29 @@
 import js from "@eslint/js";
 import globals from "globals";
+import tseslint from "typescript-eslint";
 import react from "eslint-plugin-react";
 import reactHooks from "eslint-plugin-react-hooks";
 import prettier from "eslint-config-prettier";
 
-export default [
+export default tseslint.config(
   {
     ignores: [
-      ".vite/**",
+      ".bun/**",
       "out/**",
       "node_modules/**",
       "resources/**",
       "dist/**",
       // Throwaway manual hot-reload probe, not part of the app or test suite.
-      "test_hot_reload.mjs",
     ],
   },
 
   js.configs.recommended,
+
+  // TypeScript sources (main, preload, renderer, tests, build scripts).
+  ...tseslint.configs.recommended.map((config) => ({
+    ...config,
+    files: ["src/**/*.{ts,tsx}", "scripts/**/*.ts"],
+  })),
 
   // Project-wide tweaks: allow `_`-prefixed throwaways and intentional empty
   // catches; permit full-width spaces inside Chinese JSX copy.
@@ -39,30 +45,49 @@ export default [
     },
   },
 
-  // Node-side code: Electron main/preload, build scripts, Forge/Vite configs.
+  // Pragmatic migration posture: the codebase leans on `any` while strict
+  // typing is layered in incrementally.
   {
-    files: [
-      "src/main.js",
-      "src/preload.js",
-      "scripts/**/*.mjs",
-      "forge.config.js",
-      "*.config.js",
-      "vite.*.config.mjs",
-    ],
+    files: ["src/**/*.{ts,tsx}"],
+    rules: {
+      "@typescript-eslint/no-explicit-any": "off",
+      "no-unused-vars": "off",
+      "@typescript-eslint/no-unused-vars": [
+        "error",
+        {
+          argsIgnorePattern: "^_",
+          varsIgnorePattern: "^_",
+          caughtErrorsIgnorePattern: "^_",
+        },
+      ],
+    },
+  },
+
+  // Node-side code: Electron main/preload, build scripts, Forge config.
+  {
+    files: ["src/main.ts", "src/preload.ts", "scripts/**/*.ts", "forge.config.js", "*.config.js"],
     languageOptions: {
       ecmaVersion: 2024,
       globals: {
         ...globals.node,
-        // Injected by the electron-forge Vite plugin at build time.
-        MAIN_WINDOW_VITE_DEV_SERVER_URL: "readonly",
-        MAIN_WINDOW_VITE_NAME: "readonly",
+        // Bun runtime globals used by the build scripts (run with `bun`).
+        Bun: "readonly",
       },
+    },
+  },
+
+  // The preload script intentionally uses CommonJS `require` (Electron preload
+  // context); main.ts keeps a lazy `require` for a synchronous child_process call.
+  {
+    files: ["src/main.ts", "src/preload.ts"],
+    rules: {
+      "@typescript-eslint/no-require-imports": "off",
     },
   },
 
   // Renderer code: browser context + React/JSX.
   {
-    files: ["src/renderer.js", "src/renderer/**/*.{js,jsx,mjs}"],
+    files: ["src/renderer/**/*.{ts,tsx}"],
     plugins: { react, "react-hooks": reactHooks },
     languageOptions: {
       ecmaVersion: 2024,
@@ -82,9 +107,9 @@ export default [
     },
   },
 
-  // Renderer unit tests run under `node --test`, so they need Node globals too.
+  // Renderer unit tests run under `bun test`, so they need Node globals too.
   {
-    files: ["src/renderer/**/*.test.mjs"],
+    files: ["src/renderer/**/*.test.ts"],
     languageOptions: {
       globals: { ...globals.node },
     },
@@ -92,4 +117,4 @@ export default [
 
   // Keep ESLint clear of anything Prettier owns (formatting).
   prettier,
-];
+);

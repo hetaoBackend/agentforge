@@ -4,7 +4,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Platform: macOS](https://img.shields.io/badge/Platform-macOS%2012%2B-lightgrey?logo=apple)](https://github.com/releases)
-[![Python 3.12+](https://img.shields.io/badge/Python-3.12%2B-blue?logo=python)](https://python.org)
+[![Bun 1.3+](https://img.shields.io/badge/Bun-1.3%2B-black?logo=bun)](https://bun.sh) [![TypeScript](https://img.shields.io/badge/TypeScript-5-blue?logo=typescript)](https://www.typescriptlang.org)
 [![Claude Code](https://img.shields.io/badge/Powered%20by-Claude%20Code-orange)](https://docs.anthropic.com/en/docs/claude-code)
 
 **官网**: https://agentforge-landing-weld.vercel.app/
@@ -63,8 +63,7 @@
 ## 环境要求
 
 - macOS 12.0+（Apple Silicon 或 Intel）
-- Python 3.12+
-- Node.js 18+
+- [Bun](https://bun.sh) 1.3+
 - [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code)（已安装并在 `PATH` 中）
 
 ---
@@ -97,30 +96,25 @@ make package-dmg
 git clone https://github.com/your-org/agentforge.git
 cd agentforge
 
-uv sync
-cd taskboard-electron && npm install && cd ..
+make install-deps  # bun install in backend/ and taskboard-electron/
 
-# 终端 1：启动 Python 后端
-uv run taskboard.py
-
-# 终端 2：启动 Electron + Vite 开发服务
-cd taskboard-electron && npm start
+# 启动 Electron + 后端（Bun 负责构建、监听并自动拉起后端）
+cd taskboard-electron && bun run start
 ```
 
 ---
 
 ## 常见问题
 
-### `npm install` 卡住不动
+### `bun install` 卡住不动
 
 这是最常见的安装问题。Electron 二进制包约 100MB，从 GitHub 下载，在国内网络环境下极易卡住。
 
 **快速解决——使用国内镜像：**
 
 ```bash
-npm config set registry https://registry.npmmirror.com
 export ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/
-cd taskboard-electron && npm install
+cd taskboard-electron && bun install --registry https://registry.npmmirror.com
 ```
 
 **完整排查指南：** [docs/installation-troubleshooting.md](docs/installation-troubleshooting.md)，涵盖：
@@ -285,7 +279,7 @@ curl -X POST http://127.0.0.1:9712/api/feishu/settings \
 
 </details>
 
-> 详细配置、通知行为及自定义频道开发，请参阅 [`channels/README.md`](channels/README.md)。
+频道适配器位于 [`backend/src/channels/`](backend/src/channels/)，可在桌面应用设置页或上面的 REST 接口中配置。
 
 ---
 
@@ -367,9 +361,8 @@ AgentForge 自动处理调度、依赖追踪和结果传递。
     <string>com.agentforge.taskboard</string>
     <key>ProgramArguments</key>
     <array>
-        <string>/usr/local/bin/uv</string>
-        <string>run</string>
-        <string>/path/to/agentforge/taskboard.py</string>
+        <string>/usr/local/bin/bun</string>
+        <string>/path/to/agentforge/backend/taskboard.ts</string>
     </array>
     <key>WorkingDirectory</key>
     <string>/path/to/agentforge</string>
@@ -395,7 +388,7 @@ launchctl load ~/Library/LaunchAgents/com.agentforge.taskboard.plist
 
 ```
 ┌──────────────────┐     HTTP/JSON      ┌──────────────────┐
-│   React 前端     │ <────────────────> │   Python 后端    │
+│   React 前端     │ <────────────────> │  Bun/TS 后端     │
 │   （看板 UI）    │   localhost:9712   │  （调度器+API）  │
 └──────────────────┘                   └───────┬──────────┘
                                                |
@@ -404,9 +397,9 @@ launchctl load ~/Library/LaunchAgents/com.agentforge.taskboard.plist
                          [ SQLite DB ]    [ 调度器 ]    [ Claude CLI ]
 ```
 
-- **Python 后端**（`taskboard.py`）—— 单文件 `BaseHTTPRequestHandler` 服务。在 SQLite（`~/.agentforge/tasks.db`）中管理任务，通过 `AgentExecutor` 运行 `claude` CLI，通过 `TaskScheduler` 调度任务（每 2 秒轮询，支持通过 `croniter` 解析 cron 表达式）。
-- **Electron 外壳**（`taskboard-electron/`）—— 启动时创建 Python 后端进程，退出时终止它。开发模式下从 Vite 开发服务器加载 React 渲染器，生产模式下使用打包后的静态资源。
-- **React 前端**（`App.jsx`）—— 单组件看板，轮询 REST API 并渲染带颜色的流式输出。
+- **Bun/TypeScript 后端**（`backend/`）—— `Bun.serve` HTTP 服务。通过 `bun:sqlite` 在 SQLite（`~/.agentforge/tasks.db`）中管理任务，通过 `AgentExecutor` 运行 `claude` / `codex` CLI，通过 `TaskScheduler` 调度任务（每 2 秒轮询，支持通过 `cron-parser` 解析 cron 表达式）。
+- **Electron 外壳**（`taskboard-electron/`）—— 启动时创建后端进程，退出时终止它。主进程/preload/渲染器均由 `Bun.build` 打包（`scripts/build.ts`）；开发模式 `bun run start` 自动监听并热重载。
+- **React 前端**（`App.tsx`）—— 单组件看板，轮询 REST API 并渲染带颜色的流式输出。
 
 ---
 
@@ -416,14 +409,14 @@ launchctl load ~/Library/LaunchAgents/com.agentforge.taskboard.plist
 
 1. Fork 本仓库并创建功能分支。
 2. 以开发模式启动应用（参见[方式三](#方式三开发模式)）。
-3. 修改代码并手动验证——项目目前没有自动化测试。
+3. 修改代码并运行对应的 Bun 质量门禁（后端改动运行 `make check`；前端/Electron 改动在 `taskboard-electron/` 下运行前端门禁）。
 4. 提交 PR，并清晰描述改动内容。
 
 **关键文件：**
-- `taskboard.py` —— 整个 Python 后端（数据库、调度器、执行器、HTTP 处理器）
-- `taskboard-electron/src/main.js` —— Electron 主进程
-- `taskboard-electron/src/renderer/App.jsx` —— React 前端（约 1500 行）
-- `channels/` —— 可插拔消息频道适配器
+- `backend/` —— 整个 TypeScript 后端（数据库、调度器、执行器、HTTP API、频道）
+- `taskboard-electron/src/main.ts` —— Electron 主进程
+- `taskboard-electron/src/renderer/App.tsx` —— React 前端
+- `backend/src/channels/` —— 可插拔消息频道适配器
 - `skills/agentforge/` —— 用于智能体间委托的 Claude Code Skill
 
 ---
