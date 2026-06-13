@@ -12,18 +12,7 @@
 // _execute_task EDGE branches (magic-byte media sniffing, unsafe-path
 // rejection, the sub-agent wait loop, the notify fan-out).
 //
-// SKIPPED (exercise the HTTP API handler — owned by the API handler test
-// suite, not ported here):
-//   - test_feishu_settings_restart_stops_old_and_starts_new
-//   - test_channels_settings_restart_all_three
-//   - test_telegram_restart_factory_returns_none
-//   - test_create_dag_prompt_images_json_string
-//   - test_create_dag_prompt_images_bad_json_falls_back
-//   - test_task_resume_not_found
-//   - test_delete_csrf_rejected
-//   - test_delete_csrf_accepted_with_token
-//   - test_post_body_too_large_returns_413
-//   - test_read_body_too_large_drains_declared_body
+// HTTP API handler branches live in api-handler.test.ts.
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import fs from "node:fs";

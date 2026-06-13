@@ -230,7 +230,7 @@ export class TelegramChannel extends Channel {
   start(): void {
     if (!TELEGRAM_AVAILABLE) {
       console.log(
-        "[Telegram] python-telegram-bot not installed. Run: uv add python-telegram-bot",
+        "[Telegram] Telegram Bot API transport unavailable in this runtime",
       );
       return;
     }

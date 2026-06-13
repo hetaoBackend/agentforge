@@ -10,7 +10,11 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { CronExpressionParser } from "cron-parser";
-import { BusAwareSchedulerMixin, OutboundMessageType, type MessageBus } from "./bus.ts";
+import {
+  BusAwareSchedulerMixin,
+  OutboundMessageType,
+  type MessageBus,
+} from "./bus.ts";
 import type { TaskDB } from "./db.ts";
 import {
   AgentExecutor,
@@ -24,7 +28,11 @@ import {
   type PopenLike,
 } from "./executor.ts";
 import { logger } from "./log.ts";
-import { _skill_creator_dir, _sanitize_skill_name, _compose_skill_md } from "./skills.ts";
+import {
+  _skill_creator_dir,
+  _sanitize_skill_name,
+  _compose_skill_md,
+} from "./skills.ts";
 import {
   _parse_skill_frontmatter,
   expanduser,
@@ -68,7 +76,10 @@ function sleepSeconds(seconds: number): Promise<void> {
 }
 
 /** Await a promise but give up after `seconds` (≙ Thread.join(timeout=...)). */
-async function joinWithTimeout(p: Promise<unknown>, seconds: number): Promise<void> {
+async function joinWithTimeout(
+  p: Promise<unknown>,
+  seconds: number,
+): Promise<void> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timeout = new Promise<void>((resolve) => {
     timer = setTimeout(resolve, seconds * 1000);
@@ -92,7 +103,9 @@ function croniter_is_valid(expr: string): boolean {
 
 /** ≙ croniter(expr, base).get_next(datetime).isoformat() (local-naive storage) */
 function cron_next_iso(expr: string, base: Date): string {
-  return dateToLocalIso(CronExpressionParser.parse(expr, { currentDate: base }).next().toDate());
+  return dateToLocalIso(
+    CronExpressionParser.parse(expr, { currentDate: base }).next().toDate(),
+  );
 }
 
 /** ≙ the Python dict key tuple (run_id, item_id) for codex/claude delta state. */
@@ -230,7 +243,9 @@ export class TaskScheduler extends BusAwareSchedulerMixin {
     }
     // Wait up to 5 seconds for running tasks to finish
     let deadline = Date.now() / 1000 + 5;
-    const running = [...this._active_tasks.entries()].filter(([, t]) => t.is_alive());
+    const running = [...this._active_tasks.entries()].filter(([, t]) =>
+      t.is_alive(),
+    );
     if (running.length) {
       logger.info(`Waiting for ${running.length} running task(s) to finish...`);
       for (const [, t] of running) {
@@ -238,11 +253,13 @@ export class TaskScheduler extends BusAwareSchedulerMixin {
         if (t.promise) await joinWithTimeout(t.promise, remaining);
       }
     }
-    const heartbeat_running = [...this._active_heartbeats.entries()].filter(([, t]) =>
-      t.is_alive(),
+    const heartbeat_running = [...this._active_heartbeats.entries()].filter(
+      ([, t]) => t.is_alive(),
     );
     if (heartbeat_running.length) {
-      logger.info(`Waiting for ${heartbeat_running.length} heartbeat(s) to finish...`);
+      logger.info(
+        `Waiting for ${heartbeat_running.length} heartbeat(s) to finish...`,
+      );
       for (const [, t] of heartbeat_running) {
         const remaining = Math.max(0, deadline - Date.now() / 1000);
         if (t.promise) await joinWithTimeout(t.promise, remaining);
@@ -274,7 +291,9 @@ export class TaskScheduler extends BusAwareSchedulerMixin {
       }
       if (!gone) {
         // Still alive — escalate to SIGKILL
-        logger.warning(`Force-killing task ${tid} (pgid ${pgid}) after SIGTERM timeout`);
+        logger.warning(
+          `Force-killing task ${tid} (pgid ${pgid}) after SIGTERM timeout`,
+        );
         try {
           this._os.killpg(pgid, "SIGKILL");
         } catch (e) {
@@ -308,23 +327,38 @@ export class TaskScheduler extends BusAwareSchedulerMixin {
         continue; // already running
       }
       // Check if it's time
-      if (task["schedule_type"] === "immediate" && task["status"] === "pending") {
+      if (
+        task["schedule_type"] === "immediate" &&
+        task["status"] === "pending"
+      ) {
         this._spawn_task(task);
-      } else if (task["schedule_type"] === "delayed" && task["status"] === "pending") {
+      } else if (
+        task["schedule_type"] === "delayed" &&
+        task["status"] === "pending"
+      ) {
         this._schedule_delayed(task);
-      } else if (task["schedule_type"] === "delayed" && task["status"] === "scheduled") {
+      } else if (
+        task["schedule_type"] === "delayed" &&
+        task["status"] === "scheduled"
+      ) {
         const nra = task["next_run_at"];
         const run_at = nra ? parseComparableDatetime(nra) : null;
         if (run_at && run_at.getTime() <= Date.now()) {
           this._spawn_task(task);
         }
-      } else if (task["schedule_type"] === "scheduled_at" && task["status"] === "scheduled") {
+      } else if (
+        task["schedule_type"] === "scheduled_at" &&
+        task["status"] === "scheduled"
+      ) {
         const nra = task["next_run_at"];
         const run_at = nra ? parseComparableDatetime(nra) : null;
         if (run_at && run_at.getTime() <= Date.now()) {
           this._spawn_task(task);
         }
-      } else if (task["schedule_type"] === "cron" && task["status"] === "scheduled") {
+      } else if (
+        task["schedule_type"] === "cron" &&
+        task["status"] === "scheduled"
+      ) {
         const nra = task["next_run_at"];
         const run_at = nra ? parseComparableDatetime(nra) : null;
         if (run_at && run_at.getTime() <= Date.now()) {
@@ -352,7 +386,11 @@ export class TaskScheduler extends BusAwareSchedulerMixin {
    * entirely. When disabled, returns immediately — never calls an agent.
    */
   _maybe_run_scheduled_sweep(): void {
-    if (!["1", "true", "True"].includes(this.db.get_setting("skill_library_enabled", "0") ?? "")) {
+    if (
+      !["1", "true", "True"].includes(
+        this.db.get_setting("skill_library_enabled", "0") ?? "",
+      )
+    ) {
       return;
     }
     const cron = this.db.get_setting("skill_sweep_cron", "0 3 * * *");
@@ -381,7 +419,10 @@ export class TaskScheduler extends BusAwareSchedulerMixin {
   _schedule_delayed(task: Row): void {
     const delay = task["delay_seconds"] || 0;
     const run_at = new Date(Date.now() + delay * 1000);
-    this.db.update_task(task["id"], { status: "scheduled", next_run_at: dateToLocalIso(run_at) });
+    this.db.update_task(task["id"], {
+      status: "scheduled",
+      next_run_at: dateToLocalIso(run_at),
+    });
     this._notify(task["id"]);
   }
 
@@ -465,7 +506,9 @@ export class TaskScheduler extends BusAwareSchedulerMixin {
     }
     const payload = JSON.parse(text) as Row;
     const decision = payload["decision"];
-    if (!(Object.values(HeartbeatDecisionType) as string[]).includes(decision)) {
+    if (
+      !(Object.values(HeartbeatDecisionType) as string[]).includes(decision)
+    ) {
       throw new Error(`Invalid heartbeat decision: ${decision}`);
     }
     const normalized: Row = {
@@ -496,7 +539,10 @@ export class TaskScheduler extends BusAwareSchedulerMixin {
    * the watermark, so the button always analyzes something. Counting is
    * idempotent per run_id, so re-scanning never inflates recurrence counts.
    */
-  async run_skill_sweep(agent: string | null = null, full: boolean = false): Promise<Row> {
+  async run_skill_sweep(
+    agent: string | null = null,
+    full: boolean = false,
+  ): Promise<Row> {
     agent =
       agent ||
       this.db.get_setting("skill_sweep_agent", null) ||
@@ -506,7 +552,10 @@ export class TaskScheduler extends BusAwareSchedulerMixin {
     if (full) {
       runs = this.db.get_recent_completed_runs(this.SKILL_SWEEP_RUN_LIMIT);
     } else {
-      runs = this.db.get_completed_runs_since(watermark, this.SKILL_SWEEP_RUN_LIMIT);
+      runs = this.db.get_completed_runs_since(
+        watermark,
+        this.SKILL_SWEEP_RUN_LIMIT,
+      );
     }
     if (!runs.length) {
       const result: Row = {
@@ -538,7 +587,9 @@ export class TaskScheduler extends BusAwareSchedulerMixin {
       const it = item as Row;
       const tid = _int(it["task_id"]);
       const rid = _int(it["run_id"]);
-      const before = this.db.get_skill_pattern_recurrence(it["pattern_key"] ?? "");
+      const before = this.db.get_skill_pattern_recurrence(
+        it["pattern_key"] ?? "",
+      );
       const pid = this.db.upsert_skill_pattern(
         it["pattern_key"] ?? "",
         it["kind"] ?? "recipe",
@@ -548,15 +599,21 @@ export class TaskScheduler extends BusAwareSchedulerMixin {
       );
       if (pid !== null) {
         detected += 1;
-        const after = this.db.get_skill_pattern_recurrence(it["pattern_key"] ?? "");
+        const after = this.db.get_skill_pattern_recurrence(
+          it["pattern_key"] ?? "",
+        );
         if (after > before) {
           new_occurrences += 1;
         }
       }
     }
 
-    const finished = runs.map((r) => r["finished_at"]).filter(Boolean) as string[];
-    const new_watermark = finished.length ? finished.reduce((a, b) => (a > b ? a : b)) : watermark;
+    const finished = runs
+      .map((r) => r["finished_at"])
+      .filter(Boolean) as string[];
+    const new_watermark = finished.length
+      ? finished.reduce((a, b) => (a > b ? a : b))
+      : watermark;
     if (new_watermark && new_watermark > watermark) {
       this.db.set_setting("skill_sweep_watermark", new_watermark);
     }
@@ -580,7 +637,10 @@ export class TaskScheduler extends BusAwareSchedulerMixin {
    * The HTTP server is single-threaded, so a sweep (which can take minutes)
    * must not block the request thread.
    */
-  trigger_skill_sweep(agent: string | null = null, full: boolean = false): boolean {
+  trigger_skill_sweep(
+    agent: string | null = null,
+    full: boolean = false,
+  ): boolean {
     if (this._skill_sweep_running) {
       return false;
     }
@@ -680,7 +740,10 @@ export class TaskScheduler extends BusAwareSchedulerMixin {
   }
 
   /** Synchronous distill core (tested directly). Saves a 'ready' draft. */
-  async distill_skill_draft(pattern_id: number, agent: string | null = null): Promise<Row> {
+  async distill_skill_draft(
+    pattern_id: number,
+    agent: string | null = null,
+  ): Promise<Row> {
     const pattern = this.db.get_skill_pattern(pattern_id);
     if (!pattern) {
       throw new Error("pattern not found");
@@ -703,7 +766,9 @@ export class TaskScheduler extends BusAwareSchedulerMixin {
     // *using* skill-creator (not just "in its style").
     const creator_src = _skill_creator_dir();
     let creator_rel: string | null = null;
-    const workdir = fs.mkdtempSync(path.join(os.tmpdir(), "agentforge-distill-"));
+    const workdir = fs.mkdtempSync(
+      path.join(os.tmpdir(), "agentforge-distill-"),
+    );
     let ok: boolean;
     let raw: string;
     try {
@@ -716,7 +781,10 @@ export class TaskScheduler extends BusAwareSchedulerMixin {
       if (hasCreatorMd) {
         const dest = path.join(workdir, ".claude", "skills", "skill-creator");
         fs.mkdirSync(dest, { recursive: true });
-        fs.copyFileSync(path.join(creator_src, "SKILL.md"), path.join(dest, "SKILL.md"));
+        fs.copyFileSync(
+          path.join(creator_src, "SKILL.md"),
+          path.join(dest, "SKILL.md"),
+        );
         creator_rel = ".claude/skills/skill-creator/SKILL.md";
       }
       const prompt = this._build_distill_prompt(pattern, context, creator_rel);
@@ -728,7 +796,9 @@ export class TaskScheduler extends BusAwareSchedulerMixin {
       throw new Error(raw || "distill agent failed");
     }
     const obj = parseJsonObject(raw);
-    const name = _sanitize_skill_name((obj["name"] as string) || pattern["pattern_key"]);
+    const name = _sanitize_skill_name(
+      (obj["name"] as string) || pattern["pattern_key"],
+    );
     const description = String(obj["description"] ?? "").trim();
     const body_md = String(obj["body_markdown"] || obj["body"] || "").trim();
     const worthy_raw = obj["worthy"];
@@ -758,7 +828,10 @@ export class TaskScheduler extends BusAwareSchedulerMixin {
   }
 
   /** Start distillation in the background (single-threaded server). */
-  trigger_skill_draft(pattern_id: number, agent: string | null = null): boolean {
+  trigger_skill_draft(
+    pattern_id: number,
+    agent: string | null = null,
+  ): boolean {
     const pattern = this.db.get_skill_pattern(pattern_id);
     if (!pattern) {
       return false;
@@ -771,14 +844,27 @@ export class TaskScheduler extends BusAwareSchedulerMixin {
       } catch (e) {
         // surface to draft row, never crash
         logger.error(`Skill distill failed: ${errStr(e)}`);
-        this.db.upsert_skill_draft(pattern_id, "error", "", "", pattern["kind"], "", errStr(e));
+        this.db.upsert_skill_draft(
+          pattern_id,
+          "error",
+          "",
+          "",
+          pattern["kind"],
+          "",
+          errStr(e),
+        );
       }
     })();
     return true;
   }
 
   /** Write the approved SKILL.md, symlink it for both agents, register it. */
-  approve_skill(pattern_id: number, name: string, description: string, body: string): Row | null {
+  approve_skill(
+    pattern_id: number,
+    name: string,
+    description: string,
+    body: string,
+  ): Row | null {
     const pattern = this.db.get_skill_pattern(pattern_id);
     if (!pattern) {
       throw new Error("pattern not found");
@@ -1000,8 +1086,16 @@ export class TaskScheduler extends BusAwareSchedulerMixin {
       }
     };
 
-    const stdout_promise = _read_stream(proc.stdout, stdout_chunks, on_stdout_line).catch(() => {});
-    const stderr_promise = _read_stream(proc.stderr, stderr_chunks, on_stderr_line).catch(() => {});
+    const stdout_promise = _read_stream(
+      proc.stdout,
+      stdout_chunks,
+      on_stdout_line,
+    ).catch(() => {});
+    const stderr_promise = _read_stream(
+      proc.stderr,
+      stderr_chunks,
+      on_stderr_line,
+    ).catch(() => {});
     try {
       await proc.wait(timeout_secs);
     } catch (e) {
@@ -1023,7 +1117,10 @@ export class TaskScheduler extends BusAwareSchedulerMixin {
     const raw_stdout = stdout_chunks.join("");
     const raw_stderr = stderr_chunks.join("");
     if (proc.returncode !== 0) {
-      return [false, raw_stderr || raw_stdout || `${agent} heartbeat decision failed`];
+      return [
+        false,
+        raw_stderr || raw_stdout || `${agent} heartbeat decision failed`,
+      ];
     }
 
     if (agent === "codex") {
@@ -1037,7 +1134,10 @@ export class TaskScheduler extends BusAwareSchedulerMixin {
         } catch {
           continue;
         }
-        if (event?.type === "item.completed" && event?.item?.type === "agent_message") {
+        if (
+          event?.type === "item.completed" &&
+          event?.item?.type === "agent_message"
+        ) {
           out = event.item.text ?? "";
         }
       }
@@ -1092,7 +1192,11 @@ export class TaskScheduler extends BusAwareSchedulerMixin {
     if (triggered_at) {
       try {
         const triggered_dt = parseComparableDatetime(triggered_at);
-        if (triggered_dt && cooldown > 0 && Date.now() < triggered_dt.getTime() + cooldown * 1000) {
+        if (
+          triggered_dt &&
+          cooldown > 0 &&
+          Date.now() < triggered_dt.getTime() + cooldown * 1000
+        ) {
           return true;
         }
       } catch {
@@ -1102,7 +1206,10 @@ export class TaskScheduler extends BusAwareSchedulerMixin {
     const existing_task_id = existing["task_id"];
     if (existing_task_id) {
       const task = this.db.get_task(existing_task_id);
-      if (task && ["pending", "scheduled", "blocked", "running"].includes(task["status"])) {
+      if (
+        task &&
+        ["pending", "scheduled", "blocked", "running"].includes(task["status"])
+      ) {
         return true;
       }
     }
@@ -1127,7 +1234,9 @@ export class TaskScheduler extends BusAwareSchedulerMixin {
         check_prompt: heartbeat["check_prompt"],
         action_prompt_template: heartbeat["action_prompt_template"] || "",
         default_agent: heartbeat["default_agent"] || DEFAULT_AGENT,
-        cooldown_seconds: Math.trunc(Number(heartbeat["cooldown_seconds"] || 0)),
+        cooldown_seconds: Math.trunc(
+          Number(heartbeat["cooldown_seconds"] || 0),
+        ),
       }),
       now,
     );
@@ -1185,8 +1294,11 @@ export class TaskScheduler extends BusAwareSchedulerMixin {
             "Suppressed duplicate signal during cooldown or while prior task is still active";
         } else {
           const task_prompt =
-            decision["prompt"] || heartbeat["action_prompt_template"] || heartbeat["check_prompt"];
-          const task_title = decision["title"] || `Heartbeat: ${heartbeat["name"]}`;
+            decision["prompt"] ||
+            heartbeat["action_prompt_template"] ||
+            heartbeat["check_prompt"];
+          const task_title =
+            decision["title"] || `Heartbeat: ${heartbeat["name"]}`;
           const task = {
             title: task_title,
             prompt: task_prompt,
@@ -1213,7 +1325,9 @@ export class TaskScheduler extends BusAwareSchedulerMixin {
             decision_type,
             decision,
             task_id,
-            output_chunks.length ? output_chunks.join("").slice(0, 500000) : null,
+            output_chunks.length
+              ? output_chunks.join("").slice(0, 500000)
+              : null,
           );
           return;
         }
@@ -1223,7 +1337,8 @@ export class TaskScheduler extends BusAwareSchedulerMixin {
         last_tick_at: dateToLocalIso(now),
         last_decision: decision_type,
         last_error: null,
-        last_dedupe_key: (decision["dedupe_key"] || heartbeat["last_dedupe_key"]) ?? null,
+        last_dedupe_key:
+          (decision["dedupe_key"] || heartbeat["last_dedupe_key"]) ?? null,
       });
       this.db.finish_heartbeat_tick(
         tick_id,
@@ -1257,7 +1372,11 @@ export class TaskScheduler extends BusAwareSchedulerMixin {
   }
 
   /** Return only the newly emitted text for a cumulative Codex message item. */
-  _codex_text_delta(run_id: number | null, item_id: string, current_text: string): string | null {
+  _codex_text_delta(
+    run_id: number | null,
+    item_id: string,
+    current_text: string,
+  ): string | null {
     const key = tupleKey(run_id, item_id);
     const previous = this._codex_item_text.get(key) ?? "";
     this._codex_item_text.set(key, current_text);
@@ -1274,12 +1393,19 @@ export class TaskScheduler extends BusAwareSchedulerMixin {
     return current_text;
   }
 
-  _codex_append_text_delta(run_id: number | null, item_id: string, delta: string): string | null {
+  _codex_append_text_delta(
+    run_id: number | null,
+    item_id: string,
+    delta: string,
+  ): string | null {
     if (delta === "") {
       return null;
     }
     const key = tupleKey(run_id, item_id);
-    this._codex_item_text.set(key, (this._codex_item_text.get(key) ?? "") + delta);
+    this._codex_item_text.set(
+      key,
+      (this._codex_item_text.get(key) ?? "") + delta,
+    );
     return delta;
   }
 
@@ -1322,7 +1448,8 @@ export class TaskScheduler extends BusAwareSchedulerMixin {
 
   _codex_generated_images_root(): string {
     const codex_home =
-      process.env.CODEX_HOME || path.join(process.env.HOME || os.homedir(), ".codex");
+      process.env.CODEX_HOME ||
+      path.join(process.env.HOME || os.homedir(), ".codex");
     return path.join(expanduser(codex_home), "generated_images");
   }
 
@@ -1346,9 +1473,9 @@ export class TaskScheduler extends BusAwareSchedulerMixin {
     const paths: string[] = [];
     let entries: string[];
     try {
-      entries = (fs.readdirSync(image_dir, { recursive: true }) as Array<string | Buffer>).map(
-        (e) => String(e),
-      );
+      entries = (
+        fs.readdirSync(image_dir, { recursive: true }) as Array<string | Buffer>
+      ).map((e) => String(e));
     } catch {
       return [];
     }
@@ -1377,7 +1504,10 @@ export class TaskScheduler extends BusAwareSchedulerMixin {
   }
 
   _image_media_type(image_path: string): string {
-    return GENERATED_IMAGE_MEDIA_TYPES[path.extname(image_path).toLowerCase()] ?? "image/png";
+    return (
+      GENERATED_IMAGE_MEDIA_TYPES[path.extname(image_path).toLowerCase()] ??
+      "image/png"
+    );
   }
 
   _extract_codex_success_output(
@@ -1394,7 +1524,10 @@ export class TaskScheduler extends BusAwareSchedulerMixin {
       } catch {
         continue;
       }
-      if (event?.type === "item.completed" && event?.item?.type === "agent_message") {
+      if (
+        event?.type === "item.completed" &&
+        event?.item?.type === "agent_message"
+      ) {
         out = event.item.text ?? "";
       }
     }
@@ -1410,16 +1543,27 @@ export class TaskScheduler extends BusAwareSchedulerMixin {
     return parts.join("\n\n");
   }
 
-  _store_generated_image_events(task_id: number, run_id: number, generated_images: string[]): void {
+  _store_generated_image_events(
+    task_id: number,
+    run_id: number,
+    generated_images: string[],
+  ): void {
     for (const image_path of generated_images) {
       const media_type = this._image_media_type(image_path);
       const metadata = { path: image_path, media_type };
-      this._store_output_event(task_id, run_id, "generated_image", this._trace_json(metadata));
+      this._store_output_event(
+        task_id,
+        run_id,
+        "generated_image",
+        this._trace_json(metadata),
+      );
       let image_data: string;
       try {
         image_data = fs.readFileSync(image_path).toString("base64");
       } catch (e) {
-        logger.warning(`Task ${task_id}: failed to read generated image ${image_path}: ${errStr(e)}`);
+        logger.warning(
+          `Task ${task_id}: failed to read generated image ${image_path}: ${errStr(e)}`,
+        );
         continue;
       }
       this.db.add_output_event(
@@ -1491,7 +1635,9 @@ export class TaskScheduler extends BusAwareSchedulerMixin {
       const redacted: Row = {};
       for (const [key, child] of Object.entries(value)) {
         const key_str = String(key).toLowerCase();
-        if (SECRET_KEY_FRAGMENTS.some((fragment) => key_str.includes(fragment))) {
+        if (
+          SECRET_KEY_FRAGMENTS.some((fragment) => key_str.includes(fragment))
+        ) {
           redacted[key] = "[redacted]";
         } else {
           redacted[key] = this._redact_display_payload(child);
@@ -1551,7 +1697,12 @@ export class TaskScheduler extends BusAwareSchedulerMixin {
     return LIVE_OUTPUT_EVENT_TYPES.has(event_type);
   }
 
-  _store_output_event(task_id: number, run_id: number, event_type: string, content: string): void {
+  _store_output_event(
+    task_id: number,
+    run_id: number,
+    event_type: string,
+    content: string,
+  ): void {
     if (!content) {
       return;
     }
@@ -1566,13 +1717,18 @@ export class TaskScheduler extends BusAwareSchedulerMixin {
    *
    * Returns (null, null) to skip events that carry no displayable content.
    */
-  _parse_codex_event(event: Row, run_id: number | null = null): [string | null, string | null] {
+  _parse_codex_event(
+    event: Row,
+    run_id: number | null = null,
+  ): [string | null, string | null] {
     const etype: string = event["type"] ?? "";
     if (etype === "item.updated" || etype === "item.completed") {
       const item: Row = event["item"] ?? {};
       const itype: string = item["type"] ?? "";
       if (itype === "agent_message") {
-        const item_id = String(item["id"] || item["item_id"] || "agent_message");
+        const item_id = String(
+          item["id"] || item["item_id"] || "agent_message",
+        );
         const event_delta = this._codex_event_delta_text(event, item);
         let delta: string | null;
         if (etype === "item.updated" && event_delta !== null) {
@@ -1586,9 +1742,11 @@ export class TaskScheduler extends BusAwareSchedulerMixin {
         const event_delta = this._codex_event_delta_text(event, item);
         let text: string;
         if (etype === "item.updated" && event_delta !== null) {
-          text = this._codex_append_text_delta(run_id, item_id, event_delta) || "";
+          text =
+            this._codex_append_text_delta(run_id, item_id, event_delta) || "";
         } else {
-          text = this._codex_text_delta(run_id, item_id, item["text"] ?? "") || "";
+          text =
+            this._codex_text_delta(run_id, item_id, item["text"] ?? "") || "";
         }
         return text ? ["assistant", `[thinking] ${text}`] : [null, null];
       } else if (itype === "command_execution") {
@@ -1657,7 +1815,11 @@ export class TaskScheduler extends BusAwareSchedulerMixin {
     } else if (etype === "turn.completed") {
       // turn.completed only carries usage stats; final text comes from agent_message items
       return [null, null];
-    } else if (etype === "thread.started" || etype === "turn.started" || etype === "item.started") {
+    } else if (
+      etype === "thread.started" ||
+      etype === "turn.started" ||
+      etype === "item.started"
+    ) {
       return [null, null];
     } else {
       return [etype, JSON.stringify(event)];
@@ -1665,7 +1827,12 @@ export class TaskScheduler extends BusAwareSchedulerMixin {
   }
 
   /** Parse a line from the output stream and store it as an event. */
-  _parse_and_store_event(task_id: number, run_id: number, line: string, agent: string = "claude") {
+  _parse_and_store_event(
+    task_id: number,
+    run_id: number,
+    line: string,
+    agent: string = "claude",
+  ) {
     if (!line.trim()) {
       return;
     }
@@ -1693,11 +1860,16 @@ export class TaskScheduler extends BusAwareSchedulerMixin {
     // Claude stream-json
     const event_type: string = event?.type ?? "unknown";
     if (event_type === "assistant") {
-      const [text0, image_events, trace_events] = this._extract_message_content(event);
+      const [text0, image_events, trace_events] =
+        this._extract_message_content(event);
       let text_content: string | null = text0;
       if (text_content) {
         const message_id = this._claude_message_id(event, run_id);
-        text_content = this._claude_text_delta(run_id, message_id, text_content);
+        text_content = this._claude_text_delta(
+          run_id,
+          message_id,
+          text_content,
+        );
       }
       if (text_content) {
         this._store_output_event(task_id, run_id, event_type, text_content);
@@ -1709,7 +1881,8 @@ export class TaskScheduler extends BusAwareSchedulerMixin {
         this._store_output_event(task_id, run_id, trace_type, trace_content);
       }
     } else if (event_type === "user") {
-      const [text_content, image_events, trace_events] = this._extract_message_content(event);
+      const [text_content, image_events, trace_events] =
+        this._extract_message_content(event);
       if (text_content) {
         this.db.add_output_event(task_id, run_id, event_type, text_content);
       }
@@ -1742,7 +1915,9 @@ export class TaskScheduler extends BusAwareSchedulerMixin {
    * Returns (text, image_events, trace_events), where image_events and
    * trace_events contain already serialized display payloads.
    */
-  _extract_message_content(event: Row): [string, string[], Array<[string, string]>] {
+  _extract_message_content(
+    event: Row,
+  ): [string, string[], Array<[string, string]>] {
     const message = event["message"] ?? {};
     const content = message["content"] ?? [];
     const text_parts: string[] = [];
@@ -1892,7 +2067,10 @@ export class TaskScheduler extends BusAwareSchedulerMixin {
         for (const root of _ALLOWED_IMAGE_ROOTS) {
           try {
             const resolved_root = realpathNonStrict(root);
-            if (resolved.startsWith(resolved_root + path.sep) || resolved === resolved_root) {
+            if (
+              resolved.startsWith(resolved_root + path.sep) ||
+              resolved === resolved_root
+            ) {
               return true;
             }
           } catch {
@@ -1918,7 +2096,10 @@ export class TaskScheduler extends BusAwareSchedulerMixin {
           let media_type: string;
           if (img_path_lower.endsWith(".png")) {
             media_type = "image/png";
-          } else if (img_path_lower.endsWith(".jpg") || img_path_lower.endsWith(".jpeg")) {
+          } else if (
+            img_path_lower.endsWith(".jpg") ||
+            img_path_lower.endsWith(".jpeg")
+          ) {
             media_type = "image/jpeg";
           } else if (img_path_lower.endsWith(".gif")) {
             media_type = "image/gif";
@@ -1927,11 +2108,20 @@ export class TaskScheduler extends BusAwareSchedulerMixin {
           } else {
             // Try to detect from magic bytes
             const header = buf.subarray(0, 12);
-            if (header.length >= 3 && header[0] === 0xff && header[1] === 0xd8 && header[2] === 0xff) {
+            if (
+              header.length >= 3 &&
+              header[0] === 0xff &&
+              header[1] === 0xd8 &&
+              header[2] === 0xff
+            ) {
               media_type = "image/jpeg";
             } else if (
               header.length >= 8 &&
-              header.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))
+              header
+                .subarray(0, 8)
+                .equals(
+                  Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+                )
             ) {
               media_type = "image/png";
             } else if (
@@ -1958,7 +2148,9 @@ export class TaskScheduler extends BusAwareSchedulerMixin {
             `Task ${tid}: Loaded image ${img_path} as ${media_type} (${img_data.length} bytes base64)`,
           );
         } catch (e) {
-          logger.error(`Task ${tid}: Failed to load image ${img_path}: ${errStr(e)}`);
+          logger.error(
+            `Task ${tid}: Failed to load image ${img_path}: ${errStr(e)}`,
+          );
         }
       }
     }
@@ -1997,7 +2189,13 @@ export class TaskScheduler extends BusAwareSchedulerMixin {
       }
     } else if (use_stdin) {
       // Claude multimodal input: pass via stdin with --input-format stream-json
-      cmd = ["claude", "-p", "--input-format", "stream-json", ...CLAUDE_STREAM_JSON_ARGS];
+      cmd = [
+        "claude",
+        "-p",
+        "--input-format",
+        "stream-json",
+        ...CLAUDE_STREAM_JSON_ARGS,
+      ];
     } else {
       cmd = ["claude", "-p", prompt, ...CLAUDE_STREAM_JSON_ARGS];
     }
@@ -2069,7 +2267,9 @@ export class TaskScheduler extends BusAwareSchedulerMixin {
           try {
             this._os.kill(proc.pid, "SIGKILL");
           } catch (e2) {
-            logger.error(`Task ${tid}: kill(${proc.pid}) also failed: ${errStr(e2)}`);
+            logger.error(
+              `Task ${tid}: kill(${proc.pid}) also failed: ${errStr(e2)}`,
+            );
           }
         }
       };
@@ -2110,7 +2310,9 @@ export class TaskScheduler extends BusAwareSchedulerMixin {
           }
           if (!waiting_logged) {
             waiting_logged = true;
-            logger.info(`Task ${tid}: main process exited, waiting for sub-agents...`);
+            logger.info(
+              `Task ${tid}: main process exited, waiting for sub-agents...`,
+            );
           }
           this._live_output.set(
             tid,
@@ -2124,7 +2326,9 @@ export class TaskScheduler extends BusAwareSchedulerMixin {
           try {
             this._os.killpg(pgid, "SIGKILL");
           } catch (e) {
-            logger.error(`Task ${tid}: killpg(${pgid}) on sub-agent timeout failed: ${errStr(e)}`);
+            logger.error(
+              `Task ${tid}: killpg(${pgid}) on sub-agent timeout failed: ${errStr(e)}`,
+            );
           }
         }
       }
@@ -2140,12 +2344,18 @@ export class TaskScheduler extends BusAwareSchedulerMixin {
       } else if (proc.returncode === 0) {
         if (agent === "codex") {
           const thread_id = this._extract_codex_thread_id(raw_stdout);
-          const generated_images = this._find_codex_generated_images(thread_id, start_time);
+          const generated_images = this._find_codex_generated_images(
+            thread_id,
+            start_time,
+          );
           if (generated_images.length) {
             this._store_generated_image_events(tid, run_id, generated_images);
           }
           success = true;
-          output = this._extract_codex_success_output(raw_stdout, generated_images);
+          output = this._extract_codex_success_output(
+            raw_stdout,
+            generated_images,
+          );
         } else {
           // Claude stream-json: find the last result event and last assistant text
           let out = "";
@@ -2195,7 +2405,9 @@ export class TaskScheduler extends BusAwareSchedulerMixin {
       if (e instanceof FileNotFoundError) {
         const cli_name = task["agent"] === "codex" ? "codex" : "claude";
         const install_hint =
-          cli_name === "codex" ? "Install with: npm install -g @openai/codex" : "Is it installed?";
+          cli_name === "codex"
+            ? "Install with: npm install -g @openai/codex"
+            : "Is it installed?";
         success = false;
         output = `${cli_name} CLI not found. ${install_hint}`;
         this._active_pgids.delete(tid);
@@ -2530,7 +2742,9 @@ export class TaskScheduler extends BusAwareSchedulerMixin {
         status: "cancelled",
         error: `Cancelled: upstream task #${origin_id} failed`,
       });
-      logger.info(`DAG: Task ${downstream_id} cascade-cancelled (upstream #${origin_id} failed)`);
+      logger.info(
+        `DAG: Task ${downstream_id} cascade-cancelled (upstream #${origin_id} failed)`,
+      );
       this._notify(downstream_id);
     }
   }
@@ -2593,7 +2807,9 @@ export class TaskScheduler extends BusAwareSchedulerMixin {
         check_prompt: heartbeat["check_prompt"],
         action_prompt_template: heartbeat["action_prompt_template"] || "",
         default_agent: heartbeat["default_agent"] || DEFAULT_AGENT,
-        cooldown_seconds: Math.trunc(Number(heartbeat["cooldown_seconds"] || 0)),
+        cooldown_seconds: Math.trunc(
+          Number(heartbeat["cooldown_seconds"] || 0),
+        ),
       }),
       new Date(),
     );

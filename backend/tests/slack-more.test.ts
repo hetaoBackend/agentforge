@@ -149,7 +149,9 @@ test("test_require_slack_raises_on_missing_dependency", async () => {
     } catch (e) {
       error = e as Error;
     }
-    expect(String(error)).toContain("slack-sdk is required");
+    expect(String(error)).toContain(
+      "@slack/web-api and @slack/socket-mode are required",
+    );
   } finally {
     slack_hooks.import_slack = orig;
   }

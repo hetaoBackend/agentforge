@@ -1,6 +1,7 @@
-// Compile the Bun TypeScript backend into a single-file binary bundled with
-// the Electron app (replaces the PyInstaller build of taskboard.py).
+// Compile the Bun TypeScript backend into the single-file binary bundled with
+// the Electron app.
 import { spawnSync } from "node:child_process";
+import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -12,16 +13,32 @@ if (process.env.SKIP_BACKEND_BUILD === "1") {
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const appRoot = path.resolve(scriptDir, "..");
 const backendDir = path.resolve(appRoot, "..", "backend");
-const outfile = path.join(appRoot, "resources", "taskboard");
+const resourcesDir = path.join(appRoot, "resources");
+const backendOutfile = path.join(resourcesDir, "taskboard");
+const weixinBridgeOutfile = path.join(resourcesDir, "weixin-bridge");
 
-console.log("[build-backend] Compiling Bun backend binary...");
+fs.mkdirSync(resourcesDir, { recursive: true });
 
-const result = spawnSync("bun", ["build", "--compile", "taskboard.ts", "--outfile", outfile], {
-  cwd: backendDir,
-  stdio: "inherit",
-});
+function runBuild(label: string, args: string[]): void {
+  console.log(`[build-backend] Compiling ${label}...`);
+  const result = spawnSync("bun", args, {
+    cwd: backendDir,
+    stdio: "inherit",
+  });
 
-if (result.status !== 0) {
-  process.exit(result.status ?? 1);
+  if (result.status !== 0) {
+    process.exit(result.status ?? 1);
+  }
 }
-console.log(`[build-backend] Backend binary written to ${outfile}`);
+
+runBuild("Bun backend binary", ["build", "--compile", "taskboard.ts", "--outfile", backendOutfile]);
+console.log(`[build-backend] Backend binary written to ${backendOutfile}`);
+
+runBuild("Weixin bridge binary", [
+  "build",
+  "--compile",
+  path.join("src", "channels", "weixin_bridge", "index.ts"),
+  "--outfile",
+  weixinBridgeOutfile,
+]);
+console.log(`[build-backend] Weixin bridge binary written to ${weixinBridgeOutfile}`);

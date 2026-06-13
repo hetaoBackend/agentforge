@@ -134,7 +134,9 @@ function imageExtFromBuffer(buf: Buffer, fallback = ".jpg"): string {
 }
 
 function getImageMimeFromFilename(filePath: string): string {
-  return IMAGE_MIME_BY_EXT[path.extname(filePath).toLowerCase()] || "image/jpeg";
+  return (
+    IMAGE_MIME_BY_EXT[path.extname(filePath).toLowerCase()] || "image/jpeg"
+  );
 }
 
 function encryptAesEcb(plaintext: Buffer, key: Buffer): Buffer {
@@ -569,7 +571,9 @@ function extractReplyReference(itemList: any[] = []): {
       continue;
     }
     return {
-      messageId: ref?.message_item?.msg_id ? String(ref.message_item.msg_id) : "",
+      messageId: ref?.message_item?.msg_id
+        ? String(ref.message_item.msg_id)
+        : "",
       title: ref?.title ? String(ref.title) : "",
       text: ref?.message_item ? extractText([ref.message_item]) : "",
     };
@@ -763,7 +767,10 @@ async function sendMessageWithImages(command: BridgeCommand): Promise<void> {
     await sendTextMessage(command);
   }
   for (const imagePath of imagePaths) {
-    const uploaded = await uploadImageToWeixin(imagePath, command.peer_id || "");
+    const uploaded = await uploadImageToWeixin(
+      imagePath,
+      command.peer_id || "",
+    );
     await sendMessageItem(command, buildImageItem(uploaded));
   }
 }

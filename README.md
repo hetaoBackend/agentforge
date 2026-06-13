@@ -304,7 +304,7 @@ Or configure from the desktop app's settings page.
 <details>
 <summary><b>WeChat setup (experimental)</b></summary>
 
-WeChat uses a Node.js sidecar bridge — no environment variables needed. Configure and enable it via the API or the desktop app's settings page.
+WeChat uses a Bun/TypeScript sidecar bridge — no environment variables needed. Configure and enable it via the API or the desktop app's settings page.
 
 ### 1. Enable via API
 
@@ -331,7 +331,7 @@ On first launch the bridge will request a QR code login. Scan it with your WeCha
 
 </details>
 
-> See [`channels/README.md`](channels/README.md) for detailed setup, notification behavior, and adding custom channels.
+Channel adapters live in [`backend/src/channels/`](backend/src/channels/). Configure them from the desktop app settings page or the REST endpoints shown above.
 
 ---
 
@@ -461,14 +461,14 @@ Contributions are welcome! Here's how to get started:
 
 1. Fork the repository and create a feature branch.
 2. Start the app in development mode (see [Option 3](#option-3-development-mode) above).
-3. Make your changes and verify them manually — there are no automated tests.
+3. Make your changes and run the relevant Bun quality gate (`make check` for backend changes; the frontend gate from `taskboard-electron/` for renderer/Electron changes).
 4. Open a pull request with a clear description of the change.
 
 **Key files:**
 - `backend/` — entire TypeScript backend (DB, scheduler, executor, HTTP API, channels)
 - `taskboard-electron/src/main.ts` — Electron main process
 - `taskboard-electron/src/renderer/App.tsx` — React frontend
-- `channels/` — pluggable chat channel adapters (Telegram, Slack, Feishu, WeChat)
+- `backend/src/channels/` — pluggable chat channel adapters (Telegram, Slack, Feishu, WeChat)
 - `skills/agentforge/` — Claude Code skill for agent-to-agent delegation
 
 ---

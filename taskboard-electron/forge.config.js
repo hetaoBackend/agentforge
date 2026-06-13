@@ -6,7 +6,11 @@ module.exports = {
     asar: true,
     name: "AgentForge",
     appBundleId: "com.agentforge.app",
-    extraResource: ["./resources/taskboard"],
+    extraResource: [
+      "./resources/taskboard",
+      "./resources/weixin-bridge",
+      "../vendor/skill-creator",
+    ],
     // Bun builds the app into .bun/ (see scripts/build.ts); ship only the
     // built output, package.json, and pruned node_modules.
     ignore: [

@@ -60,7 +60,10 @@ export interface SubprocessRunOptions {
   env: Record<string, string>;
 }
 
-export type SubprocessRunFn = (cmd: string[], opts: SubprocessRunOptions) => SubprocessRunResult;
+export type SubprocessRunFn = (
+  cmd: string[],
+  opts: SubprocessRunOptions,
+) => SubprocessRunResult;
 
 /** Real implementation backed by child_process.spawnSync. */
 export function default_subprocess_run(
@@ -127,7 +130,10 @@ export interface PopenOptions {
  * ≙ subprocess.Popen — may throw (or reject with) FileNotFoundError / OSError.
  * Test fakes are usually synchronous; callers `await` the result either way.
  */
-export type PopenFn = (cmd: string[], opts: PopenOptions) => PopenLike | Promise<PopenLike>;
+export type PopenFn = (
+  cmd: string[],
+  opts: PopenOptions,
+) => PopenLike | Promise<PopenLike>;
 
 /** Split a Readable into lines, keeping the trailing "\n" like Python file iteration. */
 async function* lineIterable(stream: Readable): AsyncGenerator<string> {
@@ -187,7 +193,10 @@ export const default_popen: PopenFn = (cmd, opts) => {
       wrapper.wait = (timeout: number | null = null): Promise<number> => {
         if (timeout === null || timeout === undefined) return exited;
         return new Promise<number>((res, rej) => {
-          const timer = setTimeout(() => rej(new TimeoutExpired(cmd, timeout)), timeout * 1000);
+          const timer = setTimeout(
+            () => rej(new TimeoutExpired(cmd, timeout)),
+            timeout * 1000,
+          );
           exited.then((code) => {
             clearTimeout(timer);
             res(code);

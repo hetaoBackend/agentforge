@@ -196,8 +196,10 @@ export async function _require_slack(): Promise<SlackSDK> {
     return await _hooks.import_slack();
   } catch (e) {
     throw new Error(
-      "slack-sdk is required for SlackChannel. Install it with: uv add slack-sdk",
-      { cause: e },
+      "@slack/web-api and @slack/socket-mode are required for SlackChannel",
+      {
+        cause: e,
+      },
     );
   }
 }

@@ -1,7 +1,0 @@
-{
-  "name": "agentforge-weixin-bridge",
-  "private": true,
-  "type": "module",
-  "version": "0.1.0",
-  "description": "Node sidecar bridge for AgentForge Weixin channel"
-}

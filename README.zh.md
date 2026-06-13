@@ -279,7 +279,7 @@ curl -X POST http://127.0.0.1:9712/api/feishu/settings \
 
 </details>
 
-> 详细配置、通知行为及自定义频道开发，请参阅 [`channels/README.md`](channels/README.md)。
+频道适配器位于 [`backend/src/channels/`](backend/src/channels/)，可在桌面应用设置页或上面的 REST 接口中配置。
 
 ---
 
@@ -409,14 +409,14 @@ launchctl load ~/Library/LaunchAgents/com.agentforge.taskboard.plist
 
 1. Fork 本仓库并创建功能分支。
 2. 以开发模式启动应用（参见[方式三](#方式三开发模式)）。
-3. 修改代码并手动验证——项目目前没有自动化测试。
+3. 修改代码并运行对应的 Bun 质量门禁（后端改动运行 `make check`；前端/Electron 改动在 `taskboard-electron/` 下运行前端门禁）。
 4. 提交 PR，并清晰描述改动内容。
 
 **关键文件：**
 - `backend/` —— 整个 TypeScript 后端（数据库、调度器、执行器、HTTP API、频道）
 - `taskboard-electron/src/main.ts` —— Electron 主进程
 - `taskboard-electron/src/renderer/App.tsx` —— React 前端
-- `channels/` —— 可插拔消息频道适配器
+- `backend/src/channels/` —— 可插拔消息频道适配器
 - `skills/agentforge/` —— 用于智能体间委托的 Claude Code Skill
 
 ---

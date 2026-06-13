@@ -44,6 +44,45 @@ test("mergeChannelsStatus overlays weixin status onto existing state", () => {
   expect(merged.weixin.account_id).toBe("wx-demo");
 });
 
+test("mergeChannelsStatus keeps telegram edits when preserving editable fields", () => {
+  const current = createInitialChannelsState({
+    telegram: {
+      enabled: true,
+      bot_token: "123456:edited",
+      allowed_users: "42,99",
+      default_working_dir: "~/workspace/edited",
+      default_chat_id: "-100edited",
+      running: false,
+      configured: false,
+    },
+  });
+
+  const merged = mergeChannelsStatus(
+    current,
+    {
+      telegram: {
+        enabled: false,
+        allowed_users: "",
+        default_working_dir: "~",
+        default_chat_id: "",
+        running: true,
+        configured: true,
+      },
+    },
+    { preserveEditableFields: true },
+  );
+
+  expect(merged.telegram).toEqual({
+    enabled: true,
+    bot_token: "123456:edited",
+    allowed_users: "42,99",
+    default_working_dir: "~/workspace/edited",
+    default_chat_id: "-100edited",
+    running: true,
+    configured: true,
+  });
+});
+
 test("buildChannelsSavePayload serializes weixin settings for the API", () => {
   const payload = buildChannelsSavePayload({
     ...createInitialChannelsState(),
@@ -61,6 +100,34 @@ test("buildChannelsSavePayload serializes weixin settings for the API", () => {
   expect(payload.weixin_default_working_dir).toBe("~/workspace/agentforge");
   expect(payload.weixin_base_url).toBe("https://ilinkai.weixin.qq.com");
   expect(payload.weixin_account_id).toBe("wx-primary");
+});
+
+test("buildChannelsSavePayload omits blank channel secrets", () => {
+  const payload = buildChannelsSavePayload({
+    ...createInitialChannelsState(),
+    telegram: {
+      ...createInitialChannelsState().telegram,
+      enabled: true,
+      bot_token: "",
+      allowed_users: "42",
+      default_working_dir: "~/workspace/agentforge",
+      default_chat_id: "-100123",
+    },
+    slack: {
+      ...createInitialChannelsState().slack,
+      enabled: true,
+      bot_token: "",
+      app_token: "",
+      default_channel: "C123",
+    },
+  });
+
+  expect("telegram_bot_token" in payload).toBe(false);
+  expect("slack_bot_token" in payload).toBe(false);
+  expect("slack_app_token" in payload).toBe(false);
+  expect(payload.telegram_allowed_users).toBe("42");
+  expect(payload.telegram_default_chat_id).toBe("-100123");
+  expect(payload.slack_default_channel).toBe("C123");
 });
 
 test("isWeixinQrImageSource recognizes real image sources only", () => {

@@ -10,6 +10,7 @@ interface BackendCommand {
   cmd: string;
   args: string[];
   cwd: string | undefined;
+  env?: Record<string, string>;
 }
 
 if (started) {
@@ -24,7 +25,14 @@ function getBackendCommand(): BackendCommand {
   if (app.isPackaged) {
     // Single-file binary produced by `bun build --compile`.
     const binaryPath = path.join(process.resourcesPath, "taskboard");
-    return { cmd: binaryPath, args: [], cwd: undefined };
+    return {
+      cmd: binaryPath,
+      args: [],
+      cwd: undefined,
+      env: {
+        AGENTFORGE_WEIXIN_BRIDGE: path.join(process.resourcesPath, "weixin-bridge"),
+      },
+    };
   } else {
     // In dev mode, app.getAppPath() returns taskboard-electron/ dir;
     // the project root (containing backend/) is one level up. Keep cwd at
@@ -99,10 +107,10 @@ function augmentedPath(): string {
 
 function startBackend(): Promise<void> {
   killPortSync(9712);
-  const { cmd, args, cwd } = getBackendCommand();
+  const { cmd, args, cwd, env } = getBackendCommand();
   backendProcess = spawn(cmd, args, {
     stdio: ["ignore", "pipe", "pipe"],
-    env: { ...process.env, PATH: augmentedPath() },
+    env: { ...process.env, PATH: augmentedPath(), ...env },
     ...(cwd ? { cwd } : {}),
   });
 

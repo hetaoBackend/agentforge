@@ -39,22 +39,22 @@ export function _skill_library_dirs(): [string, string, string] {
 /**
  * Path to the vendored Anthropic skill-creator skill (dev tree or packaged binary).
  *
- * Python resolves `getattr(sys, "_MEIPASS", dirname(abspath(__file__)))` +
- * "vendor/skill-creator": taskboard.py sits at the repo root, so the dev path
- * is <repo>/vendor/skill-creator, and a PyInstaller binary uses the bundled
- * data dir (sys._MEIPASS).
- *
- * Bun-compile has no _MEIPASS equivalent (no bundled-data dir): inside a
- * compiled binary import.meta.dir is a virtual bunfs path, so we fall back to
- * a vendor/ dir next to the executable (dirname(process.execPath)) — the
- * packager must ship vendor/skill-creator alongside the binary. In the dev
- * tree this file lives at backend/src/, so the repo root is two levels up.
+ * In the dev tree this file lives at backend/src/, so the repo root is two
+ * levels up. Inside a Bun-compiled binary, import.meta.dir is a virtual bunfs
+ * path, so we resolve relative to dirname(process.execPath); the Electron
+ * packager ships skill-creator as an extra resource beside the binary.
  */
 export function _skill_creator_dir(): string {
   const here = import.meta.dir;
   const isCompiled = here.includes("$bunfs") || here.includes("~BUN");
-  const base = isCompiled ? path.dirname(process.execPath) : path.resolve(here, "..", "..");
-  return path.join(base, "vendor", "skill-creator");
+  if (!isCompiled) {
+    return path.join(path.resolve(here, "..", ".."), "vendor", "skill-creator");
+  }
+  const resourceDir = path.dirname(process.execPath);
+  const nested = path.join(resourceDir, "vendor", "skill-creator");
+  return fs.existsSync(nested)
+    ? nested
+    : path.join(resourceDir, "skill-creator");
 }
 
 /** Lowercase kebab slug safe as a directory name (no path traversal). */
@@ -85,7 +85,9 @@ export function link_skill(name: string): string[] {
       try {
         fs.symlinkSync(skill_dir, link, "dir");
       } catch (e) {
-        logger.warning(`symlink ${link} failed: ${e instanceof Error ? e.message : e}`);
+        logger.warning(
+          `symlink ${link} failed: ${e instanceof Error ? e.message : e}`,
+        );
       }
     }
     links.push(link);
@@ -110,7 +112,10 @@ export function unlink_skill(name: string): void {
 }
 
 /** Write canonical SKILL.md and create both symlinks. Returns (md_path, dir). */
-export function write_skill_to_disk(name: string, body: string): [string, string] {
+export function write_skill_to_disk(
+  name: string,
+  body: string,
+): [string, string] {
   const [canonical_root, _claude_root, _agents_root] = _skill_library_dirs();
   void _claude_root;
   void _agents_root;
@@ -151,7 +156,9 @@ export function _compose_skill_md(
 }
 
 /** Pull name + description out of a SKILL.md's YAML frontmatter (best-effort). */
-export function _parse_skill_frontmatter(body: string | null | undefined): [string, string] {
+export function _parse_skill_frontmatter(
+  body: string | null | undefined,
+): [string, string] {
   let name = "";
   let description = "";
   const text = (body || "").replace(/^\s+/, "");

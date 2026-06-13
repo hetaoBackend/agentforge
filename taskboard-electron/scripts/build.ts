@@ -4,9 +4,12 @@
 //   .bun/build/preload.js   - context-bridge preload (CJS)
 //   .bun/renderer/index.html (+ hashed assets) - React renderer
 import path from "node:path";
+import fs from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 
 const appRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const mainOutDir = path.join(appRoot, ".bun/build");
+const rendererOutDir = path.join(appRoot, ".bun/renderer");
 
 function reportFailure(label: string, result: Awaited<ReturnType<typeof Bun.build>>): never {
   console.error(`[build] ${label} failed`);
@@ -17,7 +20,7 @@ function reportFailure(label: string, result: Awaited<ReturnType<typeof Bun.buil
 export async function buildMain(): Promise<void> {
   const result = await Bun.build({
     entrypoints: [path.join(appRoot, "src/main.ts")],
-    outdir: path.join(appRoot, ".bun/build"),
+    outdir: mainOutDir,
     target: "node",
     format: "cjs",
     // Runtime deps resolved from packaged node_modules; electron is provided
@@ -33,7 +36,7 @@ export async function buildMain(): Promise<void> {
 export async function buildPreload(): Promise<void> {
   const result = await Bun.build({
     entrypoints: [path.join(appRoot, "src/preload.ts")],
-    outdir: path.join(appRoot, ".bun/build"),
+    outdir: mainOutDir,
     target: "node",
     format: "cjs",
     external: ["electron"],
@@ -47,7 +50,7 @@ export async function buildPreload(): Promise<void> {
 export async function buildRenderer(): Promise<void> {
   const result = await Bun.build({
     entrypoints: [path.join(appRoot, "index.html")],
-    outdir: path.join(appRoot, ".bun/renderer"),
+    outdir: rendererOutDir,
     target: "browser",
     sourcemap: "linked",
     define: { "process.env.NODE_ENV": '"production"' },
@@ -58,6 +61,10 @@ export async function buildRenderer(): Promise<void> {
 }
 
 export async function buildAll(): Promise<void> {
+  await Promise.all([
+    fs.rm(mainOutDir, { recursive: true, force: true }),
+    fs.rm(rendererOutDir, { recursive: true, force: true }),
+  ]);
   await Promise.all([buildMain(), buildPreload(), buildRenderer()]);
 }
 

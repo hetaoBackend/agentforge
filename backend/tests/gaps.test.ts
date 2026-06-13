@@ -3,11 +3,8 @@
 // Ported from tests/test_taskboard_gaps.py; test() descriptions keep the
 // Python test function names.
 //
-// SKIPPED (exercise the HTTP API / run_server lifecycle — owned by the API
-// handler test suite, not ported here):
-//   - test_run_server_starts_all_channels_via_settings
-//   - test_run_server_auto_enables_telegram_and_slack_via_env
-//   - test_run_server_telegram_factory_returns_none_no_start
+// HTTP API and Bun server lifecycle branches live in api-handler.test.ts and
+// server-lifecycle.test.ts.
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import fs from "node:fs";

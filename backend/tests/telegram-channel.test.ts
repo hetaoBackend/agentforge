@@ -696,5 +696,5 @@ test("test_start_without_telegram", () => {
     log.restore();
     _set_telegram_available(true);
   }
-  expect(log.text()).toContain("not installed");
+  expect(log.text()).toContain("Telegram Bot API transport unavailable");
 });

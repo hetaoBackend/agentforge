@@ -3404,15 +3404,9 @@ function SettingsModal({
       const status = await fetchChannelsStatus();
       if (!cancelled) {
         setChannels((c) => {
-          const merged = mergeChannelsStatus(c, status);
-          if (!preserveUserEdits) return merged;
-          // During background polling, keep user-edited config fields untouched
-          // so toggling enabled / editing URLs isn't overwritten before Save.
-          return {
-            telegram: { ...merged.telegram, enabled: c.telegram.enabled },
-            slack: { ...merged.slack, enabled: c.slack.enabled },
-            weixin: { ...merged.weixin, enabled: c.weixin.enabled },
-          };
+          return mergeChannelsStatus(c, status, {
+            preserveEditableFields: preserveUserEdits,
+          });
         });
       }
     };
@@ -5854,7 +5848,7 @@ export default function App() {
               {connected ? (
                 <span style={{ color: theme.green }}>● Connected</span>
               ) : (
-                <span style={{ color: theme.red }}>● Disconnected — run `python taskboard.py`</span>
+                <span style={{ color: theme.red }}>● Disconnected — run `bun taskboard.ts`</span>
               )}
               {connected &&
                 ` · ${runningCount} running · ${scheduledCount} scheduled · ${enabledHeartbeatCount} heartbeats`}
@@ -6201,9 +6195,9 @@ export default function App() {
             Backend not running
           </div>
           <code style={{ fontSize: 11, color: theme.text, lineHeight: 1.8, display: "block" }}>
-            pip install croniter
+            cd backend
             <br />
-            python taskboard.py
+            bun taskboard.ts
           </code>
         </div>
       )}

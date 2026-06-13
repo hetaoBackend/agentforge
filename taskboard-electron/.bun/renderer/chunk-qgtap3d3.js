@@ -13150,23 +13150,48 @@ function createInitialChannelsState(initial = {}) {
   const base = cloneState(DEFAULT_CHANNELS_STATE);
   return mergeChannelsStatus(base, initial);
 }
-function mergeChannelsStatus(current, status = {}) {
-  return {
+function mergeChannelsStatus(current, status = {}, options2 = {}) {
+  const merged = {
     telegram: { ...current.telegram, ...status.telegram || {} },
     slack: { ...current.slack, ...status.slack || {} },
     weixin: { ...current.weixin, ...status.weixin || {} }
   };
+  if (!options2.preserveEditableFields)
+    return merged;
+  return {
+    telegram: {
+      ...merged.telegram,
+      enabled: current.telegram.enabled,
+      bot_token: current.telegram.bot_token,
+      allowed_users: current.telegram.allowed_users,
+      default_working_dir: current.telegram.default_working_dir,
+      default_chat_id: current.telegram.default_chat_id
+    },
+    slack: {
+      ...merged.slack,
+      enabled: current.slack.enabled,
+      bot_token: current.slack.bot_token,
+      app_token: current.slack.app_token,
+      default_working_dir: current.slack.default_working_dir,
+      default_channel: current.slack.default_channel,
+      default_user: current.slack.default_user
+    },
+    weixin: {
+      ...merged.weixin,
+      enabled: current.weixin.enabled,
+      default_working_dir: current.weixin.default_working_dir,
+      base_url: current.weixin.base_url,
+      account_id: current.weixin.account_id
+    }
+  };
 }
 function buildChannelsSavePayload(channels) {
-  return {
+  const payload = {
     telegram_enabled: channels.telegram.enabled ? "true" : "false",
-    telegram_bot_token: channels.telegram.bot_token,
     telegram_allowed_users: channels.telegram.allowed_users,
     telegram_default_working_dir: channels.telegram.default_working_dir,
     telegram_default_chat_id: channels.telegram.default_chat_id,
     slack_enabled: channels.slack.enabled ? "true" : "false",
-    slack_bot_token: channels.slack.bot_token,
-    slack_app_token: channels.slack.app_token,
     slack_default_working_dir: channels.slack.default_working_dir,
     slack_default_channel: channels.slack.default_channel,
     slack_default_user: channels.slack.default_user,
@@ -13175,6 +13200,16 @@ function buildChannelsSavePayload(channels) {
     weixin_base_url: channels.weixin.base_url,
     weixin_account_id: channels.weixin.account_id
   };
+  if (channels.telegram.bot_token.trim()) {
+    payload.telegram_bot_token = channels.telegram.bot_token;
+  }
+  if (channels.slack.bot_token.trim()) {
+    payload.slack_bot_token = channels.slack.bot_token;
+  }
+  if (channels.slack.app_token.trim()) {
+    payload.slack_app_token = channels.slack.app_token;
+  }
+  return payload;
 }
 function isWeixinQrImageSource(value) {
   const normalized = (value || "").trim();
@@ -16841,14 +16876,9 @@ function SettingsModal({
       const status = await fetchChannelsStatus();
       if (!cancelled) {
         setChannels((c) => {
-          const merged = mergeChannelsStatus(c, status);
-          if (!preserveUserEdits)
-            return merged;
-          return {
-            telegram: { ...merged.telegram, enabled: c.telegram.enabled },
-            slack: { ...merged.slack, enabled: c.slack.enabled },
-            weixin: { ...merged.weixin, enabled: c.weixin.enabled }
-          };
+          return mergeChannelsStatus(c, status, {
+            preserveEditableFields: preserveUserEdits
+          });
         });
       }
     };
@@ -19444,7 +19474,7 @@ function App() {
                         children: "● Connected"
                       }) : /* @__PURE__ */ jsx_runtime.jsx("span", {
                         style: { color: theme.red },
-                        children: "● Disconnected — run `python taskboard.py`"
+                        children: "● Disconnected — run `bun taskboard.ts`"
                       }),
                       connected && ` · ${runningCount} running · ${scheduledCount} scheduled · ${enabledHeartbeatCount} heartbeats`
                     ]
@@ -19743,9 +19773,9 @@ function App() {
           /* @__PURE__ */ jsx_runtime.jsxs("code", {
             style: { fontSize: 11, color: theme.text, lineHeight: 1.8, display: "block" },
             children: [
-              "pip install croniter",
+              "cd backend",
               /* @__PURE__ */ jsx_runtime.jsx("br", {}),
-              "python taskboard.py"
+              "bun taskboard.ts"
             ]
           })
         ]
@@ -19801,5 +19831,5 @@ import_client.createRoot(document.getElementById("root")).render(/* @__PURE__ */
   children: /* @__PURE__ */ jsx_runtime2.jsx(App, {})
 }));
 
-//# debugId=018A608DD777E92F64756E2164756E21
-//# sourceMappingURL=chunk-nbmpy57s.js.map
+//# debugId=6D6D54C3905035A964756E2164756E21
+//# sourceMappingURL=chunk-qgtap3d3.js.map
