@@ -22,6 +22,10 @@ let backendProcess: ChildProcess | null = null;
 let backendWatcher: FSWatcher | undefined;
 let rendererWatcher: FSWatcher | undefined;
 
+function getAppIconPath(): string {
+  return path.join(app.getAppPath(), "assets", "agentforge.png");
+}
+
 function getBackendCommand(): BackendCommand {
   if (app.isPackaged) {
     // Single-file binary produced by `bun build --compile`.
@@ -249,7 +253,7 @@ const createWindow = () => {
     height: 800,
     minWidth: 900,
     minHeight: 600,
-    icon: path.join(app.getAppPath(), "assets", "agentforge.png"),
+    icon: getAppIconPath(),
     titleBarStyle: "hiddenInset",
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
@@ -273,6 +277,10 @@ ipcMain.handle("select-directory", async () => {
 });
 
 app.whenReady().then(() => {
+  if (process.platform === "darwin") {
+    app.dock.setIcon(getAppIconPath());
+  }
+
   powerSaveBlocker.start("prevent-app-suspension");
   const mainWindow = createWindow();
 
