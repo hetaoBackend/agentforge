@@ -249,6 +249,7 @@ const createWindow = () => {
     height: 800,
     minWidth: 900,
     minHeight: 600,
+    icon: path.join(app.getAppPath(), "assets", "agentforge.png"),
     titleBarStyle: "hiddenInset",
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),

@@ -6,6 +6,7 @@ module.exports = {
     asar: true,
     name: "AgentForge",
     appBundleId: "com.agentforge.app",
+    icon: "./assets/agentforge",
     extraResource: [
       "./resources/taskboard",
       "./resources/weixin-bridge",
