@@ -1,4 +1,19 @@
 import { useState, useEffect, useCallback, useRef, type CSSProperties } from "react";
+import {
+  CheckCircle2,
+  HeartPulse,
+  Inbox,
+  KanbanSquare,
+  MonitorCog,
+  Moon,
+  Play,
+  Plus,
+  Search,
+  Settings,
+  Sparkles,
+  Sun,
+  type LucideIcon,
+} from "lucide-react";
 import QRCode from "qrcode";
 import {
   formatDateTimeLocalInput,
@@ -20,53 +35,92 @@ const API = "http://127.0.0.1:9712/api";
 // ─── Theme ───
 const THEMES: Record<string, Record<string, string>> = {
   dark: {
-    bg: "#0a0a0f",
-    surface: "#12121a",
-    surfaceHover: "#1a1a26",
-    border: "#1e1e2e",
-    borderActive: "#2d2d44",
-    text: "#e2e2ef",
-    textMuted: "#6b6b8a",
-    textDim: "#44445e",
-    accent: "#7c6aff",
-    accentGlow: "rgba(124, 106, 255, 0.15)",
-    green: "#34d399",
-    greenBg: "rgba(52, 211, 153, 0.08)",
-    orange: "#fbbf24",
-    orangeBg: "rgba(251, 191, 36, 0.08)",
-    red: "#f87171",
-    redBg: "rgba(248, 113, 113, 0.08)",
-    blue: "#60a5fa",
-    blueBg: "rgba(96, 165, 250, 0.08)",
-    cyan: "#22d3ee",
-    cyanBg: "rgba(34, 211, 238, 0.08)",
+    bg: "#0f1116",
+    surface: "rgba(28, 30, 36, 0.86)",
+    surfaceHover: "rgba(38, 41, 48, 0.92)",
+    panel: "rgba(22, 24, 29, 0.74)",
+    panelRaised: "rgba(34, 37, 44, 0.76)",
+    field: "rgba(12, 14, 18, 0.56)",
+    border: "rgba(235, 245, 255, 0.11)",
+    borderActive: "rgba(10, 132, 255, 0.46)",
+    text: "#f5f5f7",
+    textMuted: "#b3b8c2",
+    textDim: "#727783",
+    accent: "#0a84ff",
+    accentGlow: "rgba(10, 132, 255, 0.18)",
+    green: "#30d158",
+    greenBg: "rgba(48, 209, 88, 0.12)",
+    orange: "#ff9f0a",
+    orangeBg: "rgba(255, 159, 10, 0.13)",
+    red: "#ff453a",
+    redBg: "rgba(255, 69, 58, 0.13)",
+    blue: "#64d2ff",
+    blueBg: "rgba(100, 210, 255, 0.12)",
+    cyan: "#5e5ce6",
+    cyanBg: "rgba(94, 92, 230, 0.13)",
+    yellow: "#ffd60a",
+    headerBg: "rgba(20, 22, 27, 0.74)",
+    headerBorder: "rgba(235, 245, 255, 0.12)",
+    boardBg:
+      "radial-gradient(circle at 20% 0%, rgba(10,132,255,0.18), transparent 32%), radial-gradient(circle at 78% 12%, rgba(94,92,230,0.14), transparent 28%), linear-gradient(180deg, #12141a 0%, #0f1116 42%)",
+    columnBg: "rgba(24, 27, 33, 0.58)",
+    columnHeader: "#f5f5f7",
+    shadow: "0 24px 60px rgba(0, 0, 0, 0.38)",
+    shadowSoft: "0 10px 30px rgba(0, 0, 0, 0.24)",
+    brandStart: "#64d2ff",
+    brandEnd: "#5e5ce6",
+    brandInk: "#ffffff",
   },
   light: {
-    bg: "#f5f5fa",
-    surface: "#ffffff",
-    surfaceHover: "#eeeef7",
-    border: "#dcdce8",
-    borderActive: "#b8b8d0",
-    text: "#1a1a2e",
-    textMuted: "#6b6b8a",
-    textDim: "#a0a0bc",
-    accent: "#5b4ecc",
-    accentGlow: "rgba(91, 78, 204, 0.12)",
-    green: "#059669",
-    greenBg: "rgba(5, 150, 105, 0.08)",
-    orange: "#d97706",
-    orangeBg: "rgba(217, 119, 6, 0.08)",
-    red: "#dc2626",
-    redBg: "rgba(220, 38, 38, 0.08)",
-    blue: "#2563eb",
-    blueBg: "rgba(37, 99, 235, 0.08)",
-    cyan: "#0891b2",
-    cyanBg: "rgba(8, 145, 178, 0.08)",
+    bg: "#f5f5f7",
+    surface: "rgba(255, 255, 255, 0.88)",
+    surfaceHover: "rgba(255, 255, 255, 0.96)",
+    panel: "rgba(255, 255, 255, 0.62)",
+    panelRaised: "rgba(255, 255, 255, 0.82)",
+    field: "rgba(244, 246, 250, 0.86)",
+    border: "rgba(60, 60, 67, 0.14)",
+    borderActive: "rgba(0, 122, 255, 0.36)",
+    text: "#1d1d1f",
+    textMuted: "#6e6e73",
+    textDim: "#9a9aa1",
+    accent: "#007aff",
+    accentGlow: "rgba(0, 122, 255, 0.13)",
+    green: "#34c759",
+    greenBg: "rgba(52, 199, 89, 0.1)",
+    orange: "#ff9500",
+    orangeBg: "rgba(255, 149, 0, 0.11)",
+    red: "#ff3b30",
+    redBg: "rgba(255, 59, 48, 0.1)",
+    blue: "#007aff",
+    blueBg: "rgba(0, 122, 255, 0.1)",
+    cyan: "#5856d6",
+    cyanBg: "rgba(88, 86, 214, 0.1)",
+    yellow: "#ffcc00",
+    headerBg: "rgba(245, 245, 247, 0.72)",
+    headerBorder: "rgba(60, 60, 67, 0.12)",
+    boardBg:
+      "radial-gradient(circle at 18% 0%, rgba(0,122,255,0.14), transparent 34%), radial-gradient(circle at 82% 8%, rgba(88,86,214,0.11), transparent 30%), linear-gradient(180deg, #fbfbfd 0%, #f5f5f7 44%)",
+    columnBg: "rgba(255, 255, 255, 0.58)",
+    columnHeader: "#1d1d1f",
+    shadow: "0 18px 44px rgba(31, 35, 45, 0.12)",
+    shadowSoft: "0 8px 24px rgba(31, 35, 45, 0.09)",
+    brandStart: "#00c7ff",
+    brandEnd: "#5856d6",
+    brandInk: "#ffffff",
   },
 };
 
 // Mutable module-level theme reference — updated before each App render
 let theme = THEMES.dark;
+const APP_FONT_STACK =
+  "'SF Pro Text', -apple-system, BlinkMacSystemFont, 'Helvetica Neue', sans-serif";
+const DISPLAY_FONT_STACK =
+  "'SF Pro Display', -apple-system, BlinkMacSystemFont, 'Helvetica Neue', sans-serif";
+const MONO_FONT_STACK = "'SF Mono', 'JetBrains Mono', ui-monospace, Menlo, monospace";
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, value));
+}
 
 function getStatusConfig() {
   return {
@@ -86,14 +140,35 @@ function getStatusConfig() {
 }
 
 const COLUMNS = [
-  { key: "queued", label: "Queue", statuses: ["pending", "scheduled", "blocked"], icon: "⧖" },
-  { key: "running", label: "Running", statuses: ["running"], icon: "▸" },
-  { key: "done", label: "Done", statuses: ["completed", "failed", "cancelled"], icon: "◆" },
+  {
+    key: "queued",
+    label: "Queue",
+    hint: "ready, delayed, or blocked",
+    statuses: ["pending", "scheduled", "blocked"],
+    icon: Inbox,
+    tone: "orange",
+  },
+  {
+    key: "running",
+    label: "Running",
+    hint: "live agent sessions",
+    statuses: ["running"],
+    icon: Play,
+    tone: "blue",
+  },
+  {
+    key: "done",
+    label: "Done",
+    hint: "completed, failed, cancelled",
+    statuses: ["completed", "failed", "cancelled"],
+    icon: CheckCircle2,
+    tone: "green",
+  },
 ];
 
 const AGENTS = {
-  claude: { label: "Claude Code", icon: "⌘", color: "#7c6aff" },
-  codex: { label: "Codex CLI", icon: "◈", color: "#10a37f" },
+  claude: { label: "Claude Code", icon: "C", color: "#ff9f0a" },
+  codex: { label: "Codex CLI", icon: "X", color: "#00c7be" },
 };
 const DEFAULT_AGENT = "codex";
 const DEFAULT_TIMEOUT_SECONDS = 12000;
@@ -1020,35 +1095,300 @@ async function runWeixinAction(action) {
 
 function Tooltip({ text, children }) {
   const [visible, setVisible] = useState(false);
+  const [position, setPosition] = useState<{
+    arrowLeft: number;
+    left: number;
+    top: number;
+    placement: "top" | "bottom";
+  } | null>(null);
+  const triggerRef = useRef<HTMLDivElement | null>(null);
+  const tooltipRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!visible) return;
+
+    const updatePosition = () => {
+      const trigger = triggerRef.current;
+      const tooltip = tooltipRef.current;
+      if (!trigger || !tooltip) return;
+
+      const triggerRect = trigger.getBoundingClientRect();
+      const tooltipRect = tooltip.getBoundingClientRect();
+      const gap = 8;
+      const margin = 8;
+      const topCandidate = triggerRect.top - tooltipRect.height - gap;
+      const placement = topCandidate < margin ? "bottom" : "top";
+      const top = placement === "top" ? topCandidate : triggerRect.bottom + gap;
+      const centeredLeft = triggerRect.left + triggerRect.width / 2 - tooltipRect.width / 2;
+      const maxLeft = window.innerWidth - tooltipRect.width - margin;
+      const left = clamp(centeredLeft, margin, Math.max(margin, maxLeft));
+
+      setPosition({
+        arrowLeft: clamp(
+          triggerRect.left + triggerRect.width / 2 - left,
+          10,
+          tooltipRect.width - 10,
+        ),
+        left,
+        top,
+        placement,
+      });
+    };
+
+    const frame = requestAnimationFrame(updatePosition);
+    window.addEventListener("resize", updatePosition);
+    window.addEventListener("scroll", updatePosition, true);
+
+    return () => {
+      cancelAnimationFrame(frame);
+      window.removeEventListener("resize", updatePosition);
+      window.removeEventListener("scroll", updatePosition, true);
+    };
+  }, [visible, text]);
+
   return (
     <div
+      ref={triggerRef}
       style={{ position: "relative", display: "inline-flex" }}
-      onMouseEnter={() => setVisible(true)}
+      onMouseEnter={() => {
+        setPosition(null);
+        setVisible(true);
+      }}
       onMouseLeave={() => setVisible(false)}
+      onFocus={() => {
+        setPosition(null);
+        setVisible(true);
+      }}
+      onBlur={() => setVisible(false)}
     >
       {children}
       {visible && (
         <div
+          ref={tooltipRef}
           style={{
-            position: "absolute",
-            bottom: "calc(100% + 6px)",
-            left: "50%",
-            transform: "translateX(-50%)",
+            position: "fixed",
+            top: position?.top ?? 0,
+            left: position?.left ?? 0,
+            opacity: position ? 1 : 0,
             background: theme.surface,
             border: `1px solid ${theme.border}`,
             color: theme.textMuted,
             fontSize: 11,
-            padding: "4px 8px",
-            borderRadius: 6,
+            padding: "5px 8px",
+            borderRadius: 8,
             whiteSpace: "nowrap",
             pointerEvents: "none",
-            boxShadow: "0 4px 12px rgba(0,0,0,0.3)",
+            boxShadow: theme.shadowSoft,
             zIndex: 9999,
+            transition: "opacity 0.12s ease",
           }}
         >
           {text}
+          <span
+            aria-hidden="true"
+            style={{
+              position: "absolute",
+              left: position?.arrowLeft ?? "50%",
+              [position?.placement === "bottom" ? "top" : "bottom"]: -4,
+              width: 7,
+              height: 7,
+              background: theme.surface,
+              borderLeft: `1px solid ${theme.border}`,
+              borderTop: `1px solid ${theme.border}`,
+              transform:
+                position?.placement === "bottom"
+                  ? "translateX(-50%) rotate(45deg)"
+                  : "translateX(-50%) rotate(225deg)",
+            }}
+          />
         </div>
       )}
+    </div>
+  );
+}
+
+function BrandMark({ size = 40 }) {
+  return (
+    <div
+      style={{
+        width: size,
+        height: size,
+        borderRadius: 8,
+        display: "grid",
+        placeItems: "center",
+        background: `radial-gradient(circle at 30% 18%, rgba(255,255,255,0.92), transparent 22%), linear-gradient(135deg, ${theme.brandStart}, ${theme.brandEnd})`,
+        boxShadow: `0 14px 36px ${theme.accentGlow}`,
+        position: "relative",
+        overflow: "hidden",
+        flexShrink: 0,
+      }}
+    >
+      <img
+        src="./assets/agentforge.png"
+        alt="AgentForge"
+        style={{ width: size, height: size, display: "block" }}
+      />
+      <div
+        aria-hidden="true"
+        style={{
+          position: "absolute",
+          inset: 1,
+          borderRadius: 7,
+          border: "1px solid rgba(255,255,255,0.22)",
+          pointerEvents: "none",
+        }}
+      />
+    </div>
+  );
+}
+
+function IconGlyph({
+  icon: Icon,
+  size = 15,
+  strokeWidth = 2.35,
+  style,
+}: {
+  icon: LucideIcon;
+  size?: number;
+  strokeWidth?: number;
+  style?: CSSProperties;
+}) {
+  return (
+    <Icon
+      aria-hidden="true"
+      size={size}
+      strokeWidth={strokeWidth}
+      style={{ display: "block", flexShrink: 0, ...style }}
+    />
+  );
+}
+
+function IconWell({
+  icon,
+  color = theme.accent,
+  background = theme.field,
+  size = 28,
+  iconSize = 15,
+  active = false,
+}: {
+  icon: LucideIcon;
+  color?: string;
+  background?: string;
+  size?: number;
+  iconSize?: number;
+  active?: boolean;
+}) {
+  return (
+    <span
+      aria-hidden="true"
+      style={{
+        width: size,
+        height: size,
+        borderRadius: 8,
+        display: "grid",
+        placeItems: "center",
+        background: active ? "rgba(255,255,255,0.18)" : background,
+        border: `1px solid ${active ? "rgba(255,255,255,0.32)" : theme.border}`,
+        color,
+        boxShadow: active ? "inset 0 1px 0 rgba(255,255,255,0.18)" : "none",
+        flexShrink: 0,
+      }}
+    >
+      <IconGlyph icon={icon} size={iconSize} />
+    </span>
+  );
+}
+
+function HeaderButton({ children, onClick, title, active = false }) {
+  return (
+    <Tooltip text={title}>
+      <button
+        onClick={onClick}
+        aria-label={title}
+        style={{
+          width: 34,
+          height: 34,
+          borderRadius: 8,
+          border: `1px solid ${active ? theme.accent : theme.border}`,
+          background: active ? theme.accentGlow : theme.panelRaised,
+          color: active ? theme.accent : theme.textMuted,
+          cursor: "pointer",
+          fontSize: 15,
+          display: "grid",
+          placeItems: "center",
+          backdropFilter: "blur(22px)",
+          boxShadow: active ? `0 0 0 3px ${theme.accentGlow}` : "none",
+          transition: "background 0.15s ease, color 0.15s ease, border-color 0.15s ease",
+        }}
+      >
+        {children}
+      </button>
+    </Tooltip>
+  );
+}
+
+function StatusPill({ connected, label, tone = theme.green, background = theme.greenBg }) {
+  const activeTone = connected ? tone : theme.red;
+  const activeBackground = connected ? background : theme.redBg;
+
+  return (
+    <div
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 8,
+        color: activeTone,
+        background: activeBackground,
+        border: `1px solid ${connected ? activeTone : theme.red}`,
+        borderRadius: 8,
+        padding: "5px 10px",
+        fontSize: 11,
+        fontWeight: 600,
+        fontFamily: MONO_FONT_STACK,
+        boxShadow: connected ? `0 0 0 1px ${activeBackground}` : "none",
+      }}
+    >
+      <span
+        aria-hidden="true"
+        style={{
+          width: 7,
+          height: 7,
+          borderRadius: "50%",
+          background: activeTone,
+          boxShadow: `0 0 12px ${activeTone}`,
+        }}
+      />
+      {connected ? label : "offline"}
+    </div>
+  );
+}
+
+function MetricTile({ label, value, tone = theme.text }) {
+  return (
+    <div
+      style={{
+        minWidth: 92,
+        padding: "10px 12px",
+        borderRadius: 8,
+        border: `1px solid ${theme.border}`,
+        background: theme.panelRaised,
+        backdropFilter: "blur(22px)",
+        boxShadow: theme.shadowSoft,
+      }}
+    >
+      <div style={{ color: theme.textMuted, fontSize: 11, fontWeight: 600 }}>{label}</div>
+      <div
+        style={{
+          color: tone,
+          fontSize: 20,
+          fontWeight: 700,
+          lineHeight: 1.1,
+          marginTop: 2,
+          fontFamily: DISPLAY_FONT_STACK,
+        }}
+      >
+        {value}
+      </div>
     </div>
   );
 }
@@ -1061,13 +1401,13 @@ function Badge({ status }) {
         display: "inline-flex",
         alignItems: "center",
         gap: 5,
-        padding: "3px 10px",
-        borderRadius: 20,
+        padding: "3px 8px",
+        borderRadius: 8,
         fontSize: 11,
         fontWeight: 600,
         color: cfg.color,
         background: cfg.bg,
-        letterSpacing: 0.3,
+        border: `1px solid ${cfg.color}33`,
       }}
     >
       <span style={{ fontSize: 10 }}>{cfg.icon}</span>
@@ -1080,13 +1420,13 @@ function Tag({ children }) {
   return (
     <span
       style={{
-        padding: "2px 8px",
+        padding: "3px 7px",
         borderRadius: 4,
         fontSize: 10,
-        fontWeight: 500,
-        background: theme.accentGlow,
-        color: theme.accent,
-        letterSpacing: 0.4,
+        fontWeight: 600,
+        background: theme.field,
+        color: theme.textMuted,
+        border: `1px solid ${theme.border}`,
       }}
     >
       {children}
@@ -1101,17 +1441,33 @@ function AgentBadge({ agent }) {
       style={{
         display: "inline-flex",
         alignItems: "center",
-        gap: 4,
-        padding: "2px 8px",
+        gap: 6,
+        padding: "3px 8px",
         borderRadius: 4,
         fontSize: 10,
         fontWeight: 600,
         color: cfg.color,
         background: `${cfg.color}18`,
-        letterSpacing: 0.3,
+        border: `1px solid ${cfg.color}2f`,
       }}
     >
-      <span style={{ fontSize: 9 }}>{cfg.icon}</span>
+      <span
+        style={{
+          width: 14,
+          height: 14,
+          borderRadius: 4,
+          display: "grid",
+          placeItems: "center",
+          color: theme.brandInk,
+          background: cfg.color,
+          fontSize: 9,
+          fontWeight: 700,
+          lineHeight: 1,
+          fontFamily: MONO_FONT_STACK,
+        }}
+      >
+        {cfg.icon}
+      </span>
       {cfg.label}
     </span>
   );
@@ -1130,142 +1486,169 @@ function TaskCard({ task, onAction, onViewDetail }) {
       style={{
         background: hovered ? theme.surfaceHover : theme.surface,
         border: `1px solid ${hovered ? theme.borderActive : theme.border}`,
-        borderLeft: `3px solid ${cfg.color}`,
-        borderRadius: 10,
-        padding: "14px 16px",
+        borderRadius: 8,
         cursor: "pointer",
-        transition: "all 0.2s ease",
-        transform: hovered ? "translateY(-1px)" : "none",
-        boxShadow: hovered ? `0 4px 20px rgba(0,0,0,0.3)` : "none",
+        overflow: "hidden",
+        backdropFilter: "blur(26px)",
+        transition: "transform 0.18s ease, border-color 0.18s ease, box-shadow 0.18s ease",
+        transform: hovered ? "translateY(-2px)" : "none",
+        boxShadow: hovered ? theme.shadowSoft : "none",
       }}
     >
+      <div style={{ height: 3, background: cfg.color }} />
       <div
         style={{
+          padding: "13px 14px 12px",
           display: "flex",
-          justifyContent: "space-between",
-          alignItems: "flex-start",
-          marginBottom: 8,
+          flexDirection: "column",
+          gap: 10,
         }}
       >
-        <span
+        <div
           style={{
-            fontSize: 13,
-            fontWeight: 600,
-            color: theme.text,
-            lineHeight: 1.4,
-            flex: 1,
-            marginRight: 8,
-            fontFamily: "'JetBrains Mono', 'SF Mono', monospace",
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+            gap: 10,
           }}
         >
-          {task.title}
-        </span>
-        <Badge status={task.status} />
-      </div>
+          <span
+            style={{
+              color: theme.textDim,
+              fontFamily: MONO_FONT_STACK,
+              fontSize: 10,
+              fontWeight: 800,
+            }}
+          >
+            #{task.id}
+          </span>
+          <Badge status={task.status} />
+        </div>
 
-      <div
-        style={{
-          fontSize: 12,
-          color: theme.textMuted,
-          marginBottom: 10,
-          lineHeight: 1.5,
-          overflow: "hidden",
-          textOverflow: "ellipsis",
-          display: "-webkit-box",
-          WebkitLineClamp: 2,
-          WebkitBoxOrient: "vertical",
-        }}
-      >
-        {task.prompt}
-      </div>
+        <div
+          style={{
+            fontSize: 14,
+            fontWeight: 650,
+            color: theme.text,
+            lineHeight: 1.35,
+            fontFamily: DISPLAY_FONT_STACK,
+          }}
+        >
+          {task.title || "Untitled task"}
+        </div>
 
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-        <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
+        <div
+          style={{
+            fontSize: 12,
+            color: theme.textMuted,
+            lineHeight: 1.5,
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            display: "-webkit-box",
+            WebkitLineClamp: 2,
+            WebkitBoxOrient: "vertical",
+          }}
+        >
+          {task.prompt || "No prompt saved for this task."}
+        </div>
+
+        <div style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
           <AgentBadge agent={task.agent} />
-          {task.schedule_type === "delayed" && <Tag>⏳ {task.delay_seconds}s</Tag>}
+          {task.schedule_type === "delayed" && <Tag>delay {task.delay_seconds}s</Tag>}
           {task.schedule_type === "scheduled_at" && task.next_run_at && (
-            <Tag>📅 {formatTaskDateTime(task.next_run_at)}</Tag>
+            <Tag>at {formatTaskDateTime(task.next_run_at)}</Tag>
           )}
-          {task.schedule_type === "cron" && <Tag>⏲ {task.cron_expr}</Tag>}
-          {tags.map((t, i) => (
+          {task.schedule_type === "cron" && <Tag>cron {task.cron_expr}</Tag>}
+          {task.run_count > 0 && (
+            <Tag>
+              runs {task.run_count}
+              {task.max_runs ? `/${task.max_runs}` : ""}
+            </Tag>
+          )}
+          {tags.slice(0, 4).map((t, i) => (
             <Tag key={i}>{t.trim()}</Tag>
           ))}
         </div>
 
-        <div style={{ display: "flex", gap: 4 }} onClick={(e) => e.stopPropagation()}>
-          {["pending", "scheduled", "blocked"].includes(task.status) && (
-            <ActionBtn
-              label="✎"
-              title="Edit"
-              onClick={() => onAction("edit", task.id)}
-              color={theme.blue || theme.accent}
-            />
-          )}
-          {["completed", "cancelled", "failed"].includes(task.status) && (
-            <ActionBtn
-              label="⑂"
-              title="Fork"
-              onClick={() => onAction("fork", task.id)}
-              color={theme.cyan || theme.accent}
-            />
-          )}
-          {task.status === "failed" && (
-            <ActionBtn
-              label="↻"
-              title="Retry"
-              onClick={() => onAction("retry", task.id)}
-              color={theme.orange}
-            />
-          )}
-          {["pending", "scheduled", "running"].includes(task.status) && (
-            <ActionBtn
-              label="■"
-              title="Cancel"
-              onClick={() => onAction("cancel", task.id)}
-              color={theme.red}
-            />
-          )}
-          <ActionBtn
-            label="×"
-            title="Delete"
-            onClick={() => onAction("delete", task.id)}
-            color={theme.textMuted}
-          />
-        </div>
-      </div>
-
-      {task.run_count > 0 && (
-        <div style={{ fontSize: 10, color: theme.textDim, marginTop: 8, fontFamily: "monospace" }}>
-          Runs: {task.run_count}
-          {task.max_runs ? ` / ${task.max_runs}` : ""}
-          {task.last_run_at && ` · Last: ${formatTaskTime(task.last_run_at)}`}
-        </div>
-      )}
-
-      {/* DAG info */}
-      {task.status === "blocked" && task.dependencies && task.dependencies.length > 0 && (
-        <div style={{ fontSize: 10, color: theme.textDim, marginTop: 6, fontFamily: "monospace" }}>
-          ⊘ Waiting for: {task.dependencies.map((d) => `#${d.depends_on_task_id}`).join(", ")}
-        </div>
-      )}
-      {task.dependents && task.dependents.length > 0 && task.status === "completed" && (
-        <div style={{ fontSize: 10, color: theme.textDim, marginTop: 6, fontFamily: "monospace" }}>
-          → Unlocks: {task.dependents.map((id) => `#${id}`).join(", ")}
-        </div>
-      )}
-      {task.dag_id && (
         <div
           style={{
-            fontSize: 10,
-            color: theme.accent,
-            marginTop: 4,
-            opacity: 0.6,
-            fontFamily: "monospace",
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+            gap: 10,
+            borderTop: `1px solid ${theme.border}`,
+            paddingTop: 9,
           }}
         >
-          dag: {task.dag_id}
+          <div style={{ fontSize: 10, color: theme.textDim, fontFamily: MONO_FONT_STACK }}>
+            {task.last_run_at ? `last ${formatTaskTime(task.last_run_at)}` : "not run yet"}
+          </div>
+
+          <div style={{ display: "flex", gap: 4 }} onClick={(e) => e.stopPropagation()}>
+            {["pending", "scheduled", "blocked"].includes(task.status) && (
+              <ActionBtn
+                label="✎"
+                title="Edit"
+                onClick={() => onAction("edit", task.id)}
+                color={theme.blue || theme.accent}
+              />
+            )}
+            {["completed", "cancelled", "failed"].includes(task.status) && (
+              <ActionBtn
+                label="⑂"
+                title="Fork"
+                onClick={() => onAction("fork", task.id)}
+                color={theme.cyan || theme.accent}
+              />
+            )}
+            {task.status === "failed" && (
+              <ActionBtn
+                label="↻"
+                title="Retry"
+                onClick={() => onAction("retry", task.id)}
+                color={theme.orange}
+              />
+            )}
+            {["pending", "scheduled", "running"].includes(task.status) && (
+              <ActionBtn
+                label="■"
+                title="Cancel"
+                onClick={() => onAction("cancel", task.id)}
+                color={theme.red}
+              />
+            )}
+            <ActionBtn
+              label="×"
+              title="Delete"
+              onClick={() => onAction("delete", task.id)}
+              color={theme.textMuted}
+            />
+          </div>
         </div>
-      )}
+
+        {task.status === "blocked" && task.dependencies && task.dependencies.length > 0 && (
+          <div style={{ fontSize: 10, color: theme.textDim, fontFamily: MONO_FONT_STACK }}>
+            waiting for {task.dependencies.map((d) => `#${d.depends_on_task_id}`).join(", ")}
+          </div>
+        )}
+        {task.dependents && task.dependents.length > 0 && task.status === "completed" && (
+          <div style={{ fontSize: 10, color: theme.textDim, fontFamily: MONO_FONT_STACK }}>
+            unlocks {task.dependents.map((id) => `#${id}`).join(", ")}
+          </div>
+        )}
+        {task.dag_id && (
+          <div
+            style={{
+              fontSize: 10,
+              color: theme.accent,
+              opacity: 0.72,
+              fontFamily: MONO_FONT_STACK,
+            }}
+          >
+            dag {task.dag_id}
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -1279,18 +1662,19 @@ function ActionBtn({ label, title, onClick, color }) {
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
       style={{
-        background: hovered ? `${color}22` : "transparent",
-        border: "none",
+        background: hovered ? `${color}22` : theme.field,
+        border: `1px solid ${hovered ? `${color}66` : theme.border}`,
         color: color,
         cursor: "pointer",
-        width: 24,
-        height: 24,
+        width: 26,
+        height: 26,
         borderRadius: 6,
-        fontSize: 14,
+        fontSize: 13,
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
-        transition: "background 0.15s",
+        backdropFilter: "blur(18px)",
+        transition: "background 0.15s ease, border-color 0.15s ease",
       }}
     >
       {label}
@@ -1299,43 +1683,71 @@ function ActionBtn({ label, title, onClick, color }) {
 }
 
 function Column({ col, tasks, onAction, onViewDetail }) {
+  const iconColor = theme[col.tone] || theme.accent;
+  const iconBackground = theme[`${col.tone}Bg`] || theme.field;
+
   return (
-    <div style={{ flex: 1, minWidth: 300 }}>
+    <div
+      style={{
+        minWidth: 0,
+        borderRadius: 8,
+        border: `1px solid ${theme.border}`,
+        background: theme.columnBg,
+        backdropFilter: "blur(28px)",
+        boxShadow: theme.shadowSoft,
+        padding: 12,
+        minHeight: 420,
+      }}
+    >
       <div
         style={{
           display: "flex",
           alignItems: "center",
-          gap: 10,
-          marginBottom: 16,
-          padding: "0 4px",
+          justifyContent: "space-between",
+          gap: 12,
+          marginBottom: 12,
+          padding: "4px 2px 10px",
+          borderBottom: `1px solid ${theme.border}`,
         }}
       >
-        <span style={{ fontSize: 16, opacity: 0.4 }}>{col.icon}</span>
+        <div style={{ display: "flex", alignItems: "center", gap: 9, minWidth: 0 }}>
+          <IconWell
+            icon={col.icon}
+            color={iconColor}
+            background={iconBackground}
+            size={28}
+            iconSize={15}
+          />
+          <div style={{ minWidth: 0 }}>
+            <div
+              style={{
+                fontSize: 13,
+                fontWeight: 700,
+                color: theme.columnHeader,
+                fontFamily: DISPLAY_FONT_STACK,
+              }}
+            >
+              {col.label}
+            </div>
+            <div style={{ fontSize: 10, color: theme.textDim, marginTop: 2 }}>{col.hint}</div>
+          </div>
+        </div>
         <span
           style={{
-            fontSize: 12,
-            fontWeight: 700,
-            color: theme.textMuted,
-            letterSpacing: 1.5,
-            textTransform: "uppercase",
-          }}
-        >
-          {col.label}
-        </span>
-        <span
-          style={{
-            background: theme.border,
-            borderRadius: 10,
-            padding: "2px 8px",
+            background: theme.field,
+            border: `1px solid ${theme.border}`,
+            borderRadius: 8,
+            padding: "3px 8px",
             fontSize: 11,
-            color: theme.textDim,
+            color: theme.textMuted,
             fontWeight: 600,
+            fontFamily: MONO_FONT_STACK,
           }}
         >
           {tasks.length}
         </span>
       </div>
-      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+      <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
         {tasks.map((t) => (
           <TaskCard key={t.id} task={t} onAction={onAction} onViewDetail={onViewDetail} />
         ))}
@@ -1343,14 +1755,15 @@ function Column({ col, tasks, onAction, onViewDetail }) {
           <div
             style={{
               border: `1px dashed ${theme.border}`,
-              borderRadius: 10,
-              padding: 32,
+              borderRadius: 8,
+              padding: "30px 18px",
               textAlign: "center",
               color: theme.textDim,
               fontSize: 12,
+              background: theme.field,
             }}
           >
-            No tasks
+            Clear
           </div>
         )}
       </div>
@@ -5690,8 +6103,62 @@ export default function App() {
     : tasks;
 
   const runningCount = tasks.filter((t) => t.status === "running").length;
-  const scheduledCount = tasks.filter((t) => t.status === "scheduled").length;
+  const queueCount = tasks.filter((t) =>
+    ["pending", "scheduled", "blocked"].includes(t.status),
+  ).length;
+  const doneCount = tasks.filter((t) =>
+    ["completed", "failed", "cancelled"].includes(t.status),
+  ).length;
   const enabledHeartbeatCount = heartbeats.filter((h) => h.enabled).length;
+  const pausedHeartbeatCount = Math.max(heartbeats.length - enabledHeartbeatCount, 0);
+  const heartbeatIssueCount = heartbeats.filter((h) => h.last_error).length;
+  const enabledSkillCount = skills.filter((s) => s.enabled).length;
+  const pausedSkillCount = Math.max(skills.length - enabledSkillCount, 0);
+  const skillPatternCount = (skillData.patterns || []).filter(
+    (p) => p.recurrence_count >= 2,
+  ).length;
+  const activeSummary = {
+    tasks: {
+      label: `${runningCount} running / ${queueCount} queued`,
+      tone: runningCount > 0 ? theme.blue : theme.green,
+      background: runningCount > 0 ? theme.blueBg : theme.greenBg,
+      metrics: [
+        { label: "Total", value: tasks.length },
+        { label: "Queue", value: queueCount, tone: theme.orange },
+        { label: "Running", value: runningCount, tone: theme.blue },
+        { label: "Done", value: doneCount, tone: theme.green },
+      ],
+    },
+    heartbeats: {
+      label:
+        heartbeatIssueCount > 0
+          ? `${enabledHeartbeatCount} enabled / ${heartbeatIssueCount} issues`
+          : `${enabledHeartbeatCount} enabled / ${pausedHeartbeatCount} paused`,
+      tone: heartbeatIssueCount > 0 ? theme.orange : theme.cyan,
+      background: heartbeatIssueCount > 0 ? theme.orangeBg : theme.cyanBg,
+      metrics: [
+        { label: "Total", value: heartbeats.length },
+        { label: "Enabled", value: enabledHeartbeatCount, tone: theme.green },
+        { label: "Paused", value: pausedHeartbeatCount, tone: theme.textMuted },
+        {
+          label: "Issues",
+          value: heartbeatIssueCount,
+          tone: heartbeatIssueCount ? theme.orange : theme.green,
+        },
+      ],
+    },
+    skills: {
+      label: `${enabledSkillCount} enabled / ${skillPatternCount} patterns`,
+      tone: theme.accent,
+      background: theme.accentGlow,
+      metrics: [
+        { label: "Installed", value: skills.length },
+        { label: "Enabled", value: enabledSkillCount, tone: theme.green },
+        { label: "Paused", value: pausedSkillCount, tone: theme.textMuted },
+        { label: "Patterns", value: skillPatternCount, tone: theme.accent },
+      ],
+    },
+  }[activeView];
 
   if (backendError) {
     return (
@@ -5753,11 +6220,13 @@ export default function App() {
       style={{
         minHeight: "100vh",
         background: theme.bg,
+        backgroundImage: theme.boardBg,
+        backgroundSize: "100% 100%, 100% 100%, 100% 100%",
         color: theme.text,
-        fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
+        fontFamily: APP_FONT_STACK,
       }}
     >
-      <style>{`@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.3} }`}</style>
+      <style>{`@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.3} } @keyframes deckIn { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: translateY(0); } }`}</style>
       {/* API error toast */}
       {apiError && (
         <div
@@ -5804,202 +6273,228 @@ export default function App() {
       {/* Header */}
       <div
         style={{
-          borderBottom: `1px solid ${theme.border}`,
-          padding: "16px 28px",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
+          borderBottom: `1px solid ${theme.headerBorder}`,
+          padding: "14px 24px 16px",
           backdropFilter: "blur(10px)",
           position: "sticky",
           top: 0,
           zIndex: 100,
-          background: `${theme.bg}ee`,
+          background: theme.headerBg,
+          boxShadow: theme.shadowSoft,
+          animation: "deckIn 0.25s ease",
         }}
       >
-        <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: 18,
+          }}
+        >
+          <div style={{ display: "flex", alignItems: "center", gap: 13, minWidth: 245 }}>
+            <BrandMark size={42} />
+            <div>
+              <div
+                style={{
+                  fontSize: 21,
+                  fontWeight: 900,
+                  fontFamily: DISPLAY_FONT_STACK,
+                  letterSpacing: 0,
+                  lineHeight: 1,
+                }}
+              >
+                AgentForge
+              </div>
+              <div style={{ fontSize: 11, color: theme.textDim, marginTop: 5, fontWeight: 700 }}>
+                Agent orchestration board
+              </div>
+            </div>
+          </div>
+
           <div
             style={{
-              width: 32,
-              height: 32,
-              borderRadius: 8,
-              background: `linear-gradient(135deg, ${theme.accent}, #a855f7)`,
               display: "flex",
               alignItems: "center",
+              gap: 10,
+              minWidth: 0,
+              flex: 1,
               justifyContent: "center",
-              fontSize: 16,
-              fontWeight: 800,
-              color: "#fff",
             }}
           >
-            ⌘
+            <StatusPill
+              connected={connected}
+              label={activeSummary.label}
+              tone={activeSummary.tone}
+              background={activeSummary.background}
+            />
           </div>
-          <div>
+
+          <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
             <div
               style={{
-                fontSize: 15,
-                fontWeight: 700,
-                fontFamily: "'JetBrains Mono', monospace",
-                letterSpacing: -0.3,
+                display: "flex",
+                background: theme.panelRaised,
+                border: `1px solid ${theme.border}`,
+                borderRadius: 8,
+                padding: 3,
+                gap: 3,
               }}
             >
-              AgentForge
+              {[
+                { key: "tasks", label: "Tasks", icon: KanbanSquare },
+                { key: "heartbeats", label: "Heartbeats", icon: HeartPulse },
+                { key: "skills", label: "Skills", icon: Sparkles },
+              ].map((tab) => (
+                <button
+                  key={tab.key}
+                  onClick={() => setActiveView(tab.key)}
+                  style={{
+                    padding: "7px 10px",
+                    borderRadius: 6,
+                    border: "none",
+                    background: activeView === tab.key ? theme.accent : "transparent",
+                    color: activeView === tab.key ? theme.brandInk : theme.textMuted,
+                    cursor: "pointer",
+                    fontSize: 12,
+                    fontWeight: 900,
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 6,
+                    transition: "background 0.15s ease, color 0.15s ease",
+                  }}
+                >
+                  <IconGlyph icon={tab.icon} size={13} strokeWidth={2.6} />
+                  {tab.label}
+                </button>
+              ))}
             </div>
-            <div style={{ fontSize: 11, color: theme.textDim, marginTop: 1 }}>
-              {connected ? (
-                <span style={{ color: theme.green }}>● Connected</span>
-              ) : (
-                <span style={{ color: theme.red }}>● Disconnected — run `bun taskboard.ts`</span>
-              )}
-              {connected &&
-                ` · ${runningCount} running · ${scheduledCount} scheduled · ${enabledHeartbeatCount} heartbeats`}
-            </div>
+
+            {activeView !== "skills" && (
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 8,
+                  padding: "0 10px",
+                  height: 34,
+                  borderRadius: 8,
+                  border: `1px solid ${theme.border}`,
+                  background: theme.panelRaised,
+                }}
+              >
+                <Search
+                  aria-hidden="true"
+                  size={14}
+                  strokeWidth={2.4}
+                  style={{ color: theme.textDim, flexShrink: 0 }}
+                />
+                <input
+                  placeholder={activeView === "tasks" ? "Search tasks" : "Search heartbeats"}
+                  value={filter}
+                  onChange={(e) => setFilter(e.target.value)}
+                  style={{
+                    border: "none",
+                    background: "transparent",
+                    color: theme.text,
+                    fontSize: 12,
+                    outline: "none",
+                    width: 164,
+                    fontFamily: APP_FONT_STACK,
+                  }}
+                />
+              </div>
+            )}
+
+            {(() => {
+              const cycle = { system: "light", light: "dark", dark: "system" };
+              const icons = { system: MonitorCog, light: Sun, dark: Moon };
+              const labels = { system: "System theme", light: "Light mode", dark: "Dark mode" };
+              const ThemeIcon = icons[colorMode];
+              return (
+                <HeaderButton
+                  title={labels[colorMode]}
+                  onClick={() => setColorMode(cycle[colorMode])}
+                  active={colorMode !== "system"}
+                >
+                  <IconGlyph icon={ThemeIcon} size={15} />
+                </HeaderButton>
+              );
+            })()}
+
+            <HeaderButton title="Settings" onClick={() => setShowSettings(true)}>
+              <IconGlyph icon={Settings} size={15} />
+            </HeaderButton>
+
+            {activeView !== "skills" && (
+              <button
+                onClick={() =>
+                  activeView === "tasks" ? setShowNew(true) : setShowNewHeartbeat(true)
+                }
+                style={{
+                  height: 34,
+                  padding: "0 14px",
+                  borderRadius: 8,
+                  border: `1px solid ${theme.accent}`,
+                  background: theme.accent,
+                  color: theme.brandInk,
+                  cursor: "pointer",
+                  fontSize: 12,
+                  fontWeight: 900,
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 7,
+                  boxShadow: `0 0 24px ${theme.accentGlow}`,
+                  transition: "transform 0.15s ease, box-shadow 0.15s ease",
+                }}
+              >
+                <IconGlyph icon={Plus} size={15} strokeWidth={2.8} />
+                {activeView === "tasks" ? "New Task" : "New Heartbeat"}
+              </button>
+            )}
           </div>
         </div>
 
-        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-          <div
-            style={{
-              display: "flex",
-              background: theme.surface,
-              border: `1px solid ${theme.border}`,
-              borderRadius: 10,
-              padding: 4,
-              gap: 4,
-            }}
-          >
-            {[
-              { key: "tasks", label: "Tasks" },
-              { key: "heartbeats", label: "Heartbeats" },
-              { key: "skills", label: "Skills" },
-            ].map((tab) => (
-              <button
-                key={tab.key}
-                onClick={() => setActiveView(tab.key)}
-                style={{
-                  padding: "6px 10px",
-                  borderRadius: 8,
-                  border: "none",
-                  background: activeView === tab.key ? theme.accentGlow : "transparent",
-                  color: activeView === tab.key ? theme.accent : theme.textMuted,
-                  cursor: "pointer",
-                  fontSize: 12,
-                  fontWeight: 700,
-                }}
-              >
-                {tab.label}
-              </button>
-            ))}
-          </div>
-          <input
-            placeholder={activeView === "tasks" ? "Filter tasks..." : "Filter heartbeats..."}
-            value={filter}
-            onChange={(e) => setFilter(e.target.value)}
-            style={{
-              padding: "8px 14px",
-              borderRadius: 8,
-              border: `1px solid ${theme.border}`,
-              background: theme.surface,
-              color: theme.text,
-              fontSize: 12,
-              outline: "none",
-              width: 180,
-            }}
-          />
-          {/* Color mode toggle */}
-          {(() => {
-            const cycle = { system: "light", light: "dark", dark: "system" };
-            const icons = { system: "⊙", light: "☀", dark: "☾" };
-            const labels = { system: "System theme", light: "Light mode", dark: "Dark mode" };
-            return (
-              <Tooltip text={labels[colorMode]}>
-                <button
-                  onClick={() => setColorMode(cycle[colorMode])}
-                  style={{
-                    padding: "8px 10px",
-                    borderRadius: 8,
-                    border: `1px solid ${theme.border}`,
-                    background: "transparent",
-                    color: theme.textMuted,
-                    cursor: "pointer",
-                    fontSize: 15,
-                    display: "flex",
-                    alignItems: "center",
-                    transition: "all 0.15s",
-                  }}
-                >
-                  {icons[colorMode]}
-                </button>
-              </Tooltip>
-            );
-          })()}
-          <Tooltip text="Settings">
-            <button
-              onClick={() => setShowSettings(true)}
-              style={{
-                padding: "8px 12px",
-                borderRadius: 8,
-                border: `1px solid ${theme.border}`,
-                background: "transparent",
-                color: theme.textMuted,
-                cursor: "pointer",
-                fontSize: 15,
-                display: "flex",
-                alignItems: "center",
-                transition: "all 0.15s",
-              }}
-            >
-              ⚙
-            </button>
-          </Tooltip>
-          {activeView !== "skills" && (
-            <button
-              onClick={() =>
-                activeView === "tasks" ? setShowNew(true) : setShowNewHeartbeat(true)
-              }
-              style={{
-                padding: "8px 18px",
-                borderRadius: 8,
-                border: "none",
-                background: theme.accent,
-                color: "#fff",
-                cursor: "pointer",
-                fontSize: 12,
-                fontWeight: 700,
-                letterSpacing: 0.3,
-                display: "flex",
-                alignItems: "center",
-                gap: 6,
-                boxShadow: `0 0 24px ${theme.accentGlow}`,
-                transition: "transform 0.15s",
-              }}
-            >
-              {activeView === "tasks" ? "+ New Task" : "+ New Heartbeat"}
-            </button>
-          )}
+        <div style={{ display: "flex", gap: 10, marginTop: 14, overflowX: "auto" }}>
+          {activeSummary.metrics.map((metric) => (
+            <MetricTile
+              key={metric.label}
+              label={metric.label}
+              value={metric.value}
+              tone={metric.tone}
+            />
+          ))}
         </div>
       </div>
 
       {activeView === "tasks" ? (
         <div
           style={{
-            display: "flex",
-            gap: 20,
-            padding: 28,
-            minHeight: "calc(100vh - 72px)",
+            padding: 24,
+            minHeight: "calc(100vh - 148px)",
           }}
         >
-          {COLUMNS.map((col) => (
-            <Column
-              key={col.key}
-              col={col}
-              tasks={filtered.filter((t) => col.statuses.includes(t.status))}
-              onAction={handleAction}
-              onViewDetail={setDetail}
-            />
-          ))}
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "repeat(3, minmax(0, 1fr))",
+              gap: 16,
+              alignItems: "start",
+            }}
+          >
+            {COLUMNS.map((col) => (
+              <Column
+                key={col.key}
+                col={col}
+                tasks={filtered.filter((t) => col.statuses.includes(t.status))}
+                onAction={handleAction}
+                onViewDetail={setDetail}
+              />
+            ))}
+          </div>
         </div>
       ) : activeView === "heartbeats" ? (
-        <div style={{ padding: 28, minHeight: "calc(100vh - 72px)" }}>
+        <div style={{ padding: 28, minHeight: "calc(100vh - 148px)" }}>
           <div
             style={{
               display: "grid",
@@ -6026,12 +6521,13 @@ export default function App() {
               <div
                 style={{
                   border: `1px dashed ${theme.border}`,
-                  borderRadius: 12,
+                  borderRadius: 8,
                   padding: 32,
                   textAlign: "center",
                   color: theme.textDim,
                   fontSize: 12,
                   gridColumn: "1 / -1",
+                  background: theme.columnBg,
                 }}
               >
                 No heartbeats yet
@@ -6207,6 +6703,40 @@ export default function App() {
 
 // CSS动画定义
 const styles = `
+  html, body, #root {
+    min-height: 100%;
+    margin: 0;
+  }
+
+  body {
+    overflow-x: hidden;
+  }
+
+  button, input, textarea, select {
+    font: inherit;
+  }
+
+  ::selection {
+    background: ${theme.accentGlow};
+    color: ${theme.text};
+  }
+
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background: ${theme.borderActive};
+    border: 3px solid transparent;
+    border-radius: 8px;
+    background-clip: padding-box;
+  }
+
   @keyframes pulse {
     0%, 100% { opacity: 1; }
     50% { opacity: 0.5; }

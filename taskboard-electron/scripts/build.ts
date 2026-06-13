@@ -57,6 +57,9 @@ export async function buildRenderer(): Promise<void> {
     throw: false,
   });
   if (!result.success) reportFailure("renderer", result);
+  await fs.cp(path.join(appRoot, "assets"), path.join(rendererOutDir, "assets"), {
+    recursive: true,
+  });
   console.log("[build] renderer -> .bun/renderer/index.html");
 }
 
