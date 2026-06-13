@@ -17,6 +17,9 @@
  *   TELEGRAM_BOT_TOKEN        — required, bot token from @BotFather
  *   TELEGRAM_ALLOWED_USERS    — optional, comma-separated Telegram user IDs
  *                               (numeric).  When set, any other user is rejected.
+ *   AGENTFORGE_TELEGRAM_TLS_REJECT_UNAUTHORIZED=false
+ *                             — optional emergency workaround for local
+ *                               proxy/VPN certificates Bun cannot verify.
  *
  * Porting notes
  * ─────────────
@@ -150,7 +153,7 @@ export type TelegramApi = (
 export function make_fetch_api(token: string): TelegramApi {
   return async (method: string, params: Record<string, unknown> = {}) => {
     const body = _telegram_api_body(params);
-    const resp = await fetch(`https://api.telegram.org/bot${token}/${method}`, {
+    const init: RequestInit & { tls?: { rejectUnauthorized?: boolean } } = {
       method: "POST",
       ...(body instanceof FormData
         ? { body }
@@ -158,7 +161,15 @@ export function make_fetch_api(token: string): TelegramApi {
             headers: { "content-type": "application/json" },
             body,
           }),
-    });
+    };
+    const tls = _telegram_tls_options_from_env();
+    if (tls) {
+      init.tls = tls;
+    }
+    const resp = await globalThis.fetch(
+      `https://api.telegram.org/bot${token}/${method}`,
+      init,
+    );
     const data = (await resp.json()) as {
       ok?: boolean;
       result?: unknown;
@@ -200,6 +211,16 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function _telegram_tls_options_from_env(): {
+  rejectUnauthorized: false;
+} | null {
+  const raw = process.env.AGENTFORGE_TELEGRAM_TLS_REJECT_UNAUTHORIZED ?? "";
+  if (/^(0|false|no)$/i.test(raw.trim())) {
+    return { rejectUnauthorized: false };
+  }
+  return null;
+}
+
 export const TELEGRAM_UPLOADABLE_IMAGE_SUFFIXES = new Set([
   ".png",
   ".jpg",
@@ -208,6 +229,10 @@ export const TELEGRAM_UPLOADABLE_IMAGE_SUFFIXES = new Set([
   ".webp",
 ]);
 const TELEGRAM_MARKDOWN_IMAGE_RE = /!\[[^\]]*]\(([^)]+)\)/g;
+const TELEGRAM_POLL_INITIAL_RETRY_MS = 1000;
+const TELEGRAM_POLL_MAX_RETRY_MS = 30000;
+const TELEGRAM_TLS_ERROR_HINT =
+  "TLS certificate verification failed. If this Mac is behind a proxy/VPN with a custom root CA, trust that CA for Bun/AgentForge, or set AGENTFORGE_TELEGRAM_TLS_REJECT_UNAUTHORIZED=false only as a local debugging workaround.";
 
 // ── TelegramChannel ───────────────────────────────────────────────
 
@@ -225,6 +250,10 @@ export class TelegramChannel extends Channel {
   _poll_promise: Promise<void> | null = null;
   /** getUpdates offset (next update_id to fetch). */
   _offset = 0;
+  _poll_retry_delay_ms = TELEGRAM_POLL_INITIAL_RETRY_MS;
+  _last_poll_error = "";
+  _poll_error_repeat_count = 0;
+  _sleep = sleep;
 
   // Maps task_id → (chat_id, origin_message_id, reaction_message_id) for delivery and reactions
   // origin_message_id: the message that started the task, kept for compatibility with older origins
@@ -463,6 +492,7 @@ export class TelegramChannel extends Channel {
         timeout: 30,
         allowed_updates: ["message"],
       })) as TgUpdate[] | null | undefined;
+      this._reset_poll_error_state();
       for (const update of updates ?? []) {
         if (typeof update.update_id === "number") {
           this._offset = update.update_id + 1;
@@ -474,9 +504,41 @@ export class TelegramChannel extends Channel {
         }
       }
     } catch (e) {
-      console.log(`[Telegram] Polling error: ${e}`);
-      await sleep(1000);
+      this._log_polling_error(e);
+      const delay_ms = this._poll_retry_delay_ms;
+      this._poll_retry_delay_ms = Math.min(
+        this._poll_retry_delay_ms * 2,
+        TELEGRAM_POLL_MAX_RETRY_MS,
+      );
+      await this._sleep(delay_ms);
     }
+  }
+
+  _reset_poll_error_state(): void {
+    this._poll_retry_delay_ms = TELEGRAM_POLL_INITIAL_RETRY_MS;
+    this._last_poll_error = "";
+    this._poll_error_repeat_count = 0;
+  }
+
+  _log_polling_error(error: unknown): void {
+    const message = String(error);
+    if (message === this._last_poll_error) {
+      this._poll_error_repeat_count += 1;
+      if (this._poll_error_repeat_count % 10 !== 0) {
+        return;
+      }
+      console.log(
+        `[Telegram] Polling error repeated ${this._poll_error_repeat_count} times: ${message}. Next retry in ${Math.round(this._poll_retry_delay_ms / 1000)}s`,
+      );
+      return;
+    }
+
+    this._last_poll_error = message;
+    this._poll_error_repeat_count = 1;
+    const hint = _is_tls_certificate_error(message)
+      ? ` (${TELEGRAM_TLS_ERROR_HINT})`
+      : "";
+    console.log(`[Telegram] Polling error: ${message}${hint}`);
   }
 
   /**
@@ -1210,6 +1272,10 @@ function _expanduser(p: string): string {
 
 function _is_plain_object(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function _is_tls_certificate_error(message: string): boolean {
+  return /certificate|cert_|tls|unable_to_verify|self.signed/i.test(message);
 }
 
 /** Escape special MarkdownV2 characters. */

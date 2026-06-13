@@ -22,6 +22,7 @@ import {
 } from "../src/bus.ts";
 import { _hooks } from "../src/channels/dir_utils.ts";
 import {
+  make_fetch_api,
   TELEGRAM_AVAILABLE,
   TelegramChannel,
   type TelegramApi,
@@ -298,6 +299,60 @@ test("test_start_app_builds_application_and_registers_handlers", async () => {
   // Handlers were registered (5 commands; the message handler is the
   // _handle_update text fallthrough).
   expect(Object.keys(channel._command_handlers).length).toBe(5);
+});
+
+test("test_poll_once_tls_errors_are_deduplicated_and_backed_off", async () => {
+  const { channel, api } = _make_channel();
+  const delays: number[] = [];
+  (channel as unknown as { _sleep: (ms: number) => Promise<void> })._sleep =
+    async (ms: number) => {
+      delays.push(ms);
+    };
+  api.errors.set(
+    "getUpdates",
+    new Error("unknown certificate verification error"),
+  );
+
+  const log = captureLog();
+  try {
+    await channel._poll_once();
+    await channel._poll_once();
+  } finally {
+    log.restore();
+  }
+
+  expect(delays).toEqual([1000, 2000]);
+  const text = log.text();
+  expect(text).toContain("TLS certificate verification failed");
+  expect(text.match(/Polling error/g) ?? []).toHaveLength(1);
+});
+
+test("test_fetch_api_respects_telegram_tls_reject_unauthorized_override", async () => {
+  const saved = process.env.AGENTFORGE_TELEGRAM_TLS_REJECT_UNAUTHORIZED;
+  process.env.AGENTFORGE_TELEGRAM_TLS_REJECT_UNAUTHORIZED = "false";
+  const originalFetch = globalThis.fetch;
+  type FetchArgs = Parameters<typeof fetch>;
+  const fetchCalls: FetchArgs[] = [];
+  globalThis.fetch = (async (input: FetchArgs[0], init?: FetchArgs[1]) => {
+    fetchCalls.push([input, init]);
+    return new Response(JSON.stringify({ ok: true, result: [] }));
+  }) as typeof fetch;
+  try {
+    await make_fetch_api("123:ABC")("getUpdates", { timeout: 0 });
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (saved === undefined) {
+      delete process.env.AGENTFORGE_TELEGRAM_TLS_REJECT_UNAUTHORIZED;
+    } else {
+      process.env.AGENTFORGE_TELEGRAM_TLS_REJECT_UNAUTHORIZED = saved;
+    }
+  }
+
+  expect(fetchCalls).toHaveLength(1);
+  const init = fetchCalls[0]![1] as RequestInit & {
+    tls?: { rejectUnauthorized?: boolean };
+  };
+  expect(init.tls?.rejectUnauthorized).toBe(false);
 });
 
 // ── _send_text helper ────────────────────────────────────────────
