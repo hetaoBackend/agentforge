@@ -237,6 +237,27 @@ test("test_bus_aware_scheduler_mixin_publishes_task_updates", async () => {
   expect(second!.payload["status"]).toBe("running");
 });
 
+test("test_bus_aware_scheduler_mixin_includes_inbound_task_source", async () => {
+  const bus = new MessageBus();
+  const db = new StubDB({
+    1: { status: "completed", result: "ok", error: null, title: "done" },
+  });
+  const scheduler = new FakeScheduler(db, bus);
+  bus.publish_inbound({
+    type: InboundMessageType.CREATE_TASK,
+    source: "feishu",
+    payload: { task_id: 1 },
+    reply_to: null,
+    metadata: {},
+    created_at: "2026-01-01T00:00:00.000000",
+  });
+
+  scheduler._bus_notify(1);
+
+  const msg = await bus.get_outbound();
+  expect(msg!.metadata["source_channel"]).toBe("feishu");
+});
+
 test("test_bus_aware_scheduler_mixin_noops_without_bus", () => {
   const scheduler = new FakeScheduler(
     new StubDB({ 1: { status: "completed" } }),

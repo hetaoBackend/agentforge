@@ -7,6 +7,7 @@
 import { expect, mock, test } from "bun:test";
 
 import {
+  bus_notify,
   MessageBus,
   makeOutboundMessage,
   OutboundMessageType,
@@ -199,6 +200,25 @@ test("test_create_task_submits_and_tracks_origin", async () => {
   // origin tracked: [channel_id, thread_ts, reaction_ts]
   expect(channel._task_origin.get(1)).toEqual(["C1", "100.1", "100.1"]);
   expect(channel._thread_ts_map.get("100.1")).toBe(1);
+});
+
+test("test_create_task_registers_slack_source_for_bus_notifications", async () => {
+  const { channel, bus, db } = _make_channel();
+
+  await with_resolved_dir("~/myapp", () =>
+    channel._handle_user_message("fix login bug", "C1", null, "100.1"),
+  );
+  db.tasks[1] = {
+    status: "completed",
+    result: "ok",
+    error: null,
+    title: "[Slack] fix login bug",
+  };
+
+  bus_notify(bus, db, 1);
+
+  const msg = await bus.get_outbound();
+  expect(msg!.metadata["source_channel"]).toBe("slack");
 });
 
 test("test_empty_message_replies_help", async () => {
@@ -569,6 +589,23 @@ test("test_send_no_origin_no_default_skips", async () => {
     }),
   );
   await _wait_threads();
+  expect(web.chat_postMessage).not.toHaveBeenCalled();
+});
+
+test("test_send_ignores_task_from_other_channel", async () => {
+  const { channel, db, web } = _make_channel();
+  db.set_setting("slack_default_channel", "C-default");
+
+  channel.send(
+    makeOutboundMessage({
+      type: OutboundMessageType.TASK_COMPLETED,
+      task_id: 14,
+      payload: { title: "Feishu task", result: "ok" },
+      metadata: { source_channel: "feishu" },
+    }),
+  );
+  await _wait_threads();
+
   expect(web.chat_postMessage).not.toHaveBeenCalled();
 });
 

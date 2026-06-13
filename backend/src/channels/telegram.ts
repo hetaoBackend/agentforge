@@ -265,6 +265,9 @@ export class TelegramChannel extends Channel {
     ) {
       return;
     }
+    if (!this._should_handle_outbound(msg)) {
+      return;
+    }
     if (!this._ready) {
       console.log(
         "[Telegram] send() called before event loop ready, dropping message",
@@ -606,6 +609,7 @@ export class TelegramChannel extends Channel {
             update.message!.message_id,
             update.message!.message_id,
           ]);
+          this._remember_task_source(task_id);
 
           // Add "eyes" reaction and send resuming message
           try {
@@ -664,6 +668,7 @@ export class TelegramChannel extends Channel {
 
     const message_id = msg.message_id;
     this._task_origin.set(task_id, [chat_id, message_id, message_id]);
+    this._remember_task_source(task_id);
 
     // Acknowledge with an "eyes" reaction and a brief running hint
     // (≙ the _react() coroutine scheduled via run_coroutine_threadsafe)
@@ -822,6 +827,7 @@ export class TelegramChannel extends Channel {
       update.message!.message_id,
       update.message!.message_id,
     ]);
+    this._remember_task_source(tid);
 
     // Add "eyes" reaction to the user's command message
     try {

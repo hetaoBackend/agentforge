@@ -569,6 +569,7 @@ export class SlackChannel extends Channel {
             question: null,
           });
           this._task_origin.set(task_id, [channel_id, thread_ts, msg_ts]);
+          this._remember_task_source(task_id);
           this._add_reaction(channel_id, msg_ts, "eyes");
           await this._reply(channel_id, thread_ts, ":arrow_forward:");
           console.log(
@@ -612,6 +613,7 @@ export class SlackChannel extends Channel {
     console.log(`[Slack] Task #${task_id} created from message`);
 
     this._task_origin.set(task_id, [channel_id, thread_ts, thread_ts]);
+    this._remember_task_source(task_id);
     console.log(
       `[Slack] Origin set for task #${task_id}: channel=${channel_id}, ` +
         `thread_ts=${thread_ts}`,
@@ -773,6 +775,7 @@ export class SlackChannel extends Channel {
       question: null,
     });
     this._task_origin.set(tid, [channel_id, thread_ts, thread_ts]);
+    this._remember_task_source(tid);
     this._add_reaction(channel_id, thread_ts, "eyes");
     await this._reply(channel_id, thread_ts, ":arrow_forward:");
   }
@@ -794,6 +797,9 @@ export class SlackChannel extends Channel {
       msg.type !== OutboundMessageType.TASK_COMPLETED &&
       msg.type !== OutboundMessageType.TASK_FAILED
     ) {
+      return;
+    }
+    if (!this._should_handle_outbound(msg)) {
       return;
     }
 

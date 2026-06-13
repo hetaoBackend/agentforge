@@ -410,6 +410,9 @@ export class WeixinChannel extends Channel {
     ) {
       return;
     }
+    if (!this._should_handle_outbound(msg)) {
+      return;
+    }
 
     const task_id = msg.task_id;
     const origin = this._task_origin.get(task_id);
@@ -654,6 +657,7 @@ export class WeixinChannel extends Channel {
           context_token,
           message_id,
         });
+        this._remember_task_source(task_id);
         this._set_peer_current_task(peer_key, task_id);
         this._reply_to_event(
           event,
@@ -693,6 +697,7 @@ export class WeixinChannel extends Channel {
       context_token,
       message_id,
     });
+    this._remember_task_source(new_task_id);
     this._set_peer_current_task(peer_key, new_task_id);
     this._reply_to_event(event, `Task #${new_task_id} is running…`);
   }

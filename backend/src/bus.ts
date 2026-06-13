@@ -201,6 +201,7 @@ export class MessageBus {
   inbound_queue: AsyncQueue<InboundMessage>;
   outbound_queue: AsyncQueue<OutboundMessage>;
   private _outbound_listeners: OutboundListener[] = [];
+  private _task_sources: Map<number, string> = new Map();
 
   /** maxsize: queue capacity limit; 0 means unbounded. */
   constructor(maxsize: number = 0) {
@@ -212,7 +213,29 @@ export class MessageBus {
 
   /** Channels call this to enqueue an inbound message. */
   publish_inbound(msg: InboundMessage): void {
+    const task_id = Number(msg.payload["task_id"]);
+    if (
+      msg.source &&
+      msg.source !== "ui" &&
+      Number.isInteger(task_id) &&
+      task_id > 0
+    ) {
+      this.register_task_source(task_id, msg.source);
+    }
     this.inbound_queue.put_nowait(msg);
+  }
+
+  register_task_source(task_id: number, source: string): void {
+    if (!Number.isInteger(task_id) || task_id <= 0 || !source) return;
+    this._task_sources.set(task_id, source);
+  }
+
+  get_task_source(task_id: number): string | null {
+    return this._task_sources.get(task_id) ?? null;
+  }
+
+  clear_task_source(task_id: number): void {
+    this._task_sources.delete(task_id);
   }
 
   /** The scheduler calls this to take the next inbound message (optional). */
@@ -335,6 +358,24 @@ export abstract class Channel {
       reply_to,
       metadata: metadata ?? {},
     });
+  }
+
+  _remember_task_source(task_id: number): void {
+    this.bus.register_task_source(task_id, this.name);
+  }
+
+  _outbound_source(msg: OutboundMessage): string | null {
+    const metadata_source = msg.metadata["source_channel"];
+    if (typeof metadata_source === "string" && metadata_source) {
+      return metadata_source;
+    }
+    const source_msg = msg.source_msg;
+    return source_msg?.source || null;
+  }
+
+  _should_handle_outbound(msg: OutboundMessage): boolean {
+    const source = this._outbound_source(msg);
+    return source === null || source === this.name;
   }
 }
 
@@ -479,8 +520,19 @@ export function bus_notify(
         error: task["error"] ?? null,
         title: task["title"] ?? null,
       },
+      metadata: Object.fromEntries(
+        Object.entries({
+          source_channel: bus.get_task_source(task_id),
+        }).filter(([, value]) => value !== null),
+      ),
     });
     bus.publish_outbound(outbound);
+    if (
+      msg_type === OutboundMessageType.TASK_COMPLETED ||
+      msg_type === OutboundMessageType.TASK_FAILED
+    ) {
+      bus.clear_task_source(task_id);
+    }
   } catch (e) {
     console.log(`[BusAwareSchedulerMixin] _bus_notify error: ${e}`);
   }

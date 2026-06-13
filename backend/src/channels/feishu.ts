@@ -622,6 +622,7 @@ export class FeishuChannel extends Channel {
       msg.type !== OutboundMessageType.TASK_FAILED
     )
       return;
+    if (!this._should_handle_outbound(msg)) return;
     const task_id = msg.task_id;
     if (!this._client) {
       console.log(
@@ -1734,6 +1735,7 @@ export class FeishuChannel extends Channel {
         message["message_id"],
         message["message_id"],
       ]);
+      this._remember_task_source(tid);
       const title =
         (this.db.get_task(tid) as Row | null)?.["title"] ?? `Task #${tid}`;
       const running_msg_id = await this._create_reply(
@@ -1811,6 +1813,7 @@ export class FeishuChannel extends Channel {
         thread_root,
         message["message_id"],
       ]);
+      this._remember_task_source(task_id);
       const title =
         (this.db.get_task(task_id) as Row | null)?.["title"] ??
         `Task #${task_id}`;
@@ -1871,6 +1874,7 @@ export class FeishuChannel extends Channel {
       message["message_id"],
       message["message_id"],
     ]);
+    this._remember_task_source(task_id);
     this._root_msg_map.set(message["message_id"], task_id);
     if (running_msg_id)
       this._start_streaming(task_id, running_msg_id, task.title);
