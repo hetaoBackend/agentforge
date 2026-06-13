@@ -386,7 +386,7 @@ test("test_send_completion_reaction_failure_still_sends", async () => {
   expect(channel._notification_map.get(900)).toBe(5);
 });
 
-test("test_send_failure_default_chat_includes_status_link", async () => {
+test("test_send_failure_default_chat_hides_task_label", async () => {
   // Default-chat-id failure path covers the no-origin branch and error body.
   const { channel, api, db } = _make_channel();
   db.settings.set("telegram_default_chat_id", "-100777");
@@ -407,9 +407,10 @@ test("test_send_failure_default_chat_includes_status_link", async () => {
   }
 
   const text = api.lastText();
-  expect(text).toContain("❌ Task #8: Broke");
+  expect(text).not.toContain("Task #");
+  expect(text).not.toContain("Broke");
   expect(text).toContain("truncated"); // error > 800 → smart truncation
-  expect(text).toContain("/status 8");
+  expect(text).not.toContain("/status");
 });
 
 test("test_send_coroutine_swallows_send_failure", async () => {
@@ -496,7 +497,7 @@ test("test_resume_by_reply_reaction_failure_logged", async () => {
 
   expect(db.updated[db.updated.length - 1]![0]).toBe(5);
   expect(log.text()).toContain("Failed to set resume reaction");
-  expect(api.lastText()).toBe("▶️");
+  expect(api.callsFor("sendMessage").length).toBe(0);
 });
 
 // ── _create_task react coroutine ─────────────────────────────────
@@ -517,8 +518,7 @@ test("test_create_task_react_coroutine_runs", async () => {
   }
 
   expect(api.callsFor("setMessageReaction").length).toBe(1);
-  expect(api.callsFor("sendMessage").length).toBe(1);
-  expect(api.lastText()).toContain("running");
+  expect(api.callsFor("sendMessage").length).toBe(0);
 });
 
 test("test_create_task_react_coroutine_logs_failure", async () => {
@@ -582,5 +582,5 @@ test("test_cmd_resume_reaction_failure_logged", async () => {
   expect(db.updated[db.updated.length - 1]![0]).toBe(1);
   expect(db.updated[db.updated.length - 1]![1]["prompt"]).toBe("keep going");
   expect(log.text()).toContain("Failed to set resume reaction");
-  expect(api.lastText()).toBe("▶️");
+  expect(api.callsFor("sendMessage").length).toBe(0);
 });

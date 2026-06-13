@@ -5,6 +5,7 @@ import http from "node:http";
 import { spawn, type ChildProcess } from "node:child_process";
 import started from "electron-squirrel-startup";
 import chokidar, { type FSWatcher } from "chokidar";
+import { lsofListeningPidsCommand } from "./devPorts.ts";
 
 interface BackendCommand {
   cmd: string;
@@ -76,7 +77,9 @@ function killPortSync(port: number): void {
   // Best-effort: kill any process already holding the port before we spawn
   try {
     const { execSync } = require("node:child_process");
-    const out = execSync(`lsof -ti :${port}`, { encoding: "utf8" }).trim();
+    const out = execSync(lsofListeningPidsCommand(port), {
+      encoding: "utf8",
+    }).trim();
     if (out) {
       out.split("\n").forEach((pid: string) => {
         try {

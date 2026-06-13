@@ -571,7 +571,6 @@ export class SlackChannel extends Channel {
           this._task_origin.set(task_id, [channel_id, thread_ts, msg_ts]);
           this._remember_task_source(task_id);
           this._add_reaction(channel_id, msg_ts, "eyes");
-          await this._reply(channel_id, thread_ts, ":arrow_forward:");
           console.log(
             `[Slack] Auto-resuming task ${task_id} from thread reply`,
           );
@@ -622,9 +621,9 @@ export class SlackChannel extends Channel {
     // Track thread root ts → task_id so replies in the thread can resume
     this._thread_ts_map.set(thread_ts, task_id);
 
-    // Acknowledge with an eyes reaction and a brief running hint
+    // Acknowledge with an eyes reaction and a Feishu-style running hint.
     this._add_reaction(channel_id, thread_ts, "eyes");
-    await this._reply(channel_id, thread_ts, `Task #${task_id} is running…`);
+    await this._reply(channel_id, thread_ts, "Thinking ▌");
   }
 
   // ── commands ──────────────────────────────────────────────────
@@ -777,7 +776,6 @@ export class SlackChannel extends Channel {
     this._task_origin.set(tid, [channel_id, thread_ts, thread_ts]);
     this._remember_task_source(tid);
     this._add_reaction(channel_id, thread_ts, "eyes");
-    await this._reply(channel_id, thread_ts, ":arrow_forward:");
   }
 
   // ── Channel ABC: send outbound message ───────────────────────
@@ -812,13 +810,11 @@ export class SlackChannel extends Channel {
     );
 
     // Build notification text
-    let title: string;
     let text: string;
     if (msg.type === OutboundMessageType.TASK_COMPLETED) {
       const result_text = ((msg.payload["result"] as string | null) || "")
         .trim()
         .slice(0, 10000);
-      title = (msg.payload["title"] as string | null) || `Task #${task_id}`;
       text = result_text || "Done.";
     } else {
       const error_text = (
@@ -826,7 +822,6 @@ export class SlackChannel extends Channel {
       )
         .trim()
         .slice(0, 800);
-      title = (msg.payload["title"] as string | null) || `Task #${task_id}`;
       text = error_text;
     }
 
@@ -856,7 +851,7 @@ export class SlackChannel extends Channel {
             msg.type === OutboundMessageType.TASK_COMPLETED
               ? ":white_check_mark:"
               : ":x:";
-          text = `${status_emoji} *${title}*\n${text}`;
+          text = `${status_emoji}\n${text}`;
           console.log(`[Slack] Falling back to P2P DM with user ${dm_user}`);
         } else {
           console.log(
@@ -871,7 +866,7 @@ export class SlackChannel extends Channel {
           msg.type === OutboundMessageType.TASK_COMPLETED
             ? ":white_check_mark:"
             : ":x:";
-        text = `${status_emoji} *${title}*\n${text}`;
+        text = `${status_emoji}\n${text}`;
       } else {
         console.log(
           `[Slack] No origin, no known user, no slack_default_channel for ` +

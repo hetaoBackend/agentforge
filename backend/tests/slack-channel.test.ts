@@ -185,7 +185,7 @@ test("test_parse_task_id", () => {
 
 test("test_create_task_submits_and_tracks_origin", async () => {
   const scheduler = new StubScheduler();
-  const { channel } = _make_channel(undefined, scheduler);
+  const { channel, web } = _make_channel(undefined, scheduler);
 
   await with_resolved_dir("~/myapp", () =>
     channel._handle_user_message("fix login bug", "C1", null, "100.1"),
@@ -200,6 +200,9 @@ test("test_create_task_submits_and_tracks_origin", async () => {
   // origin tracked: [channel_id, thread_ts, reaction_ts]
   expect(channel._task_origin.get(1)).toEqual(["C1", "100.1", "100.1"]);
   expect(channel._thread_ts_map.get("100.1")).toBe(1);
+  expect(last_text(web)).toBe("Thinking ▌");
+  expect(last_text(web)).not.toContain("Task #");
+  expect(last_text(web)).not.toContain("[Slack]");
 });
 
 test("test_create_task_registers_slack_source_for_bus_notifications", async () => {
@@ -310,11 +313,13 @@ test("test_cmd_resume_paths", async () => {
   await channel._cmd_resume("2 keep going", "C1", "1.0");
   expect(last_text(web)).toContain("no saved session");
 
+  const replies_before_success = web.chat_postMessage.mock.calls.length;
   await channel._cmd_resume("#1 keep going", "C1", "1.0");
   expect(db.updated.at(-1)![0]).toBe(1);
   expect(db.updated.at(-1)![1]["prompt"]).toBe("keep going");
   expect(db.updated.at(-1)![1]["status"]).toBe("pending");
   expect(channel._task_origin.get(1)).toEqual(["C1", "1.0", "1.0"]);
+  expect(web.chat_postMessage.mock.calls.length).toBe(replies_before_success);
 });
 
 test("test_slash_command_dispatch_dir_and_agent", async () => {
@@ -333,7 +338,7 @@ test("test_slash_command_dispatch_dir_and_agent", async () => {
 test("test_thread_reply_resumes_task", async () => {
   const db = new StubDB();
   db.tasks[8] = { id: 8, title: "t", status: "completed", session_id: "s8" };
-  const { channel } = _make_channel(db);
+  const { channel, web } = _make_channel(db);
   channel._notification_map.set("root.1", 8);
 
   await channel._handle_user_message(
@@ -346,16 +351,18 @@ test("test_thread_reply_resumes_task", async () => {
   expect(db.updated.at(-1)![0]).toBe(8);
   expect(db.updated.at(-1)![1]["prompt"]).toBe("continue please");
   expect(channel._task_origin.get(8)).toEqual(["C1", "root.1", "200.1"]);
+  expect(web.chat_postMessage).not.toHaveBeenCalled();
 });
 
 test("test_thread_reply_via_thread_ts_map", async () => {
   const db = new StubDB();
   db.tasks[9] = { id: 9, title: "t", status: "completed", session_id: "s9" };
-  const { channel } = _make_channel(db);
+  const { channel, web } = _make_channel(db);
   channel._thread_ts_map.set("root.9", 9);
 
   await channel._handle_user_message("more work", "C1", "root.9", "300.1");
   expect(db.updated.at(-1)![0]).toBe(9);
+  expect(web.chat_postMessage).not.toHaveBeenCalled();
 });
 
 test("test_thread_reply_no_session_warns", async () => {
@@ -556,7 +563,11 @@ test("test_send_fallback_to_default_channel", async () => {
   await _wait_threads();
   const call = web.chat_postMessage.mock.calls.at(-1)![0] as any;
   expect(call.channel).toBe("C-DEFAULT");
-  expect(call.text).toContain("Job");
+  expect(call.text).toContain(":white_check_mark:");
+  expect(call.text).toContain("ok");
+  expect(call.text).not.toContain("Job");
+  expect(call.text).not.toContain("Task #");
+  expect(call.text).not.toContain("[Slack]");
 });
 
 test("test_send_fallback_to_dm_user", async () => {
@@ -577,6 +588,11 @@ test("test_send_fallback_to_dm_user", async () => {
   await _wait_threads();
   const call = web.chat_postMessage.mock.calls.at(-1)![0] as any;
   expect(call.channel).toBe("D-DM");
+  expect(call.text).toContain(":white_check_mark:");
+  expect(call.text).toContain("ok");
+  expect(call.text).not.toContain("Job");
+  expect(call.text).not.toContain("Task #");
+  expect(call.text).not.toContain("[Slack]");
 });
 
 test("test_send_no_origin_no_default_skips", async () => {

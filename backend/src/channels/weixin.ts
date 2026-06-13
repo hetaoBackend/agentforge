@@ -423,8 +423,6 @@ export class WeixinChannel extends Channel {
       return;
     }
 
-    const title =
-      (msg.payload["title"] as string | null | undefined) || `Task #${task_id}`;
     const task = this.db.get_task(task_id) ?? {};
     let text: string;
     let image_paths: string[];
@@ -440,13 +438,13 @@ export class WeixinChannel extends Channel {
           image_paths,
         );
       }
-      text = `✅ Task #${task_id} · ${title}\n${body}`;
+      text = `✅\n${body}`;
     } else {
       const body = (
         (msg.payload["error"] as string | null | undefined) || "Unknown error"
       ).trim();
       image_paths = [];
-      text = `❌ Task #${task_id} · ${title}\n${body}`;
+      text = `❌\n${body}`;
     }
 
     const request_id = crypto.randomUUID().replaceAll("-", ""); // ≙ uuid.uuid4().hex
@@ -659,10 +657,7 @@ export class WeixinChannel extends Channel {
         });
         this._remember_task_source(task_id);
         this._set_peer_current_task(peer_key, task_id);
-        this._reply_to_event(
-          event,
-          `▶️ 收到！正在唤醒 Task #${task_id}，请稍候～`,
-        );
+        this._reply_to_event(event, "收到，继续处理。");
         return;
       }
       if (
@@ -670,10 +665,7 @@ export class WeixinChannel extends Channel {
         reply_to_message_title ||
         reply_to_message_text
       ) {
-        this._reply_to_event(
-          event,
-          `❌ Task #${task_id} has no saved session to resume.`,
-        );
+        this._reply_to_event(event, "❌ 这条会话还没有可继续的上下文。");
         return;
       }
     }
@@ -699,15 +691,30 @@ export class WeixinChannel extends Channel {
     });
     this._remember_task_source(new_task_id);
     this._set_peer_current_task(peer_key, new_task_id);
-    this._reply_to_event(event, `Task #${new_task_id} is running…`);
+    this._reply_to_event(event, "收到，正在处理。");
   }
 
   _peer_key(account_id: string, peer_id: string): string {
     return `${account_id}:${peer_id}`;
   }
 
+  _peer_current_task_setting_key(peer_key: string): string {
+    return `weixin_peer_current_task:${peer_key}`;
+  }
+
   _get_peer_current_task(peer_key: string): number | null {
-    return this._peer_current_task.get(peer_key) ?? null;
+    const cached = this._peer_current_task.get(peer_key);
+    if (cached !== undefined) return cached;
+
+    const persisted = this.db.get_setting(
+      this._peer_current_task_setting_key(peer_key),
+      "",
+    );
+    if (!persisted || !/^\d+$/.test(persisted)) return null;
+
+    const task_id = parseInt(persisted, 10);
+    this._peer_current_task.set(peer_key, task_id);
+    return task_id;
   }
 
   _set_peer_current_task(peer_key: string, task_id: number): void {
@@ -715,10 +722,15 @@ export class WeixinChannel extends Channel {
       return;
     }
     this._peer_current_task.set(peer_key, task_id);
+    this.db.set_setting(
+      this._peer_current_task_setting_key(peer_key),
+      String(task_id),
+    );
   }
 
   _clear_peer_current_task(peer_key: string): void {
     this._peer_current_task.delete(peer_key);
+    this.db.set_setting(this._peer_current_task_setting_key(peer_key), "");
   }
 
   _default_image_prompt(image_paths: string[]): string {

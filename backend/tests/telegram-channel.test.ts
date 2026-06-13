@@ -391,7 +391,7 @@ test("test_handle_text_message_agent_command", async () => {
 });
 
 test("test_handle_text_message_creates_task", async () => {
-  const { channel, scheduler } = _make_channel();
+  const { channel, api, scheduler } = _make_channel();
   _hooks.extract_working_dir_with_claude = async () => "~/app";
   const update = _fake_update({ text: "fix the bug" });
   await channel._handle_text_message(update, _ctx());
@@ -402,6 +402,88 @@ test("test_handle_text_message_creates_task", async () => {
   expect(task.tags).toBe("telegram");
   expect(task.working_dir).toBe("~/app");
   expect(channel._task_origin.get(1)).toEqual([10, 100, 100]);
+  expect(api.callsFor("sendMessage").length).toBe(0);
+});
+
+test("test_handle_text_message_resumes_current_chat_session", async () => {
+  const { channel, api, db, scheduler } = _make_channel();
+
+  await channel._handle_text_message(
+    _fake_update({ text: "first", chat_id: 10, message_id: 100 }),
+    _ctx(),
+  );
+  db.tasks.set(1, { id: 1, status: "completed", session_id: "s1" });
+  await channel._handle_text_message(
+    _fake_update({ text: "follow up", chat_id: 10, message_id: 101 }),
+    _ctx(),
+  );
+
+  expect(scheduler.submitted.length).toBe(1);
+  expect(db.updated.at(-1)).toEqual([
+    1,
+    {
+      status: "pending",
+      prompt: "follow up",
+      result: null,
+      error: null,
+      question: null,
+    },
+  ]);
+  expect(channel._task_origin.get(1)).toEqual([10, 101, 101]);
+  expect(api.callsFor("sendMessage").length).toBe(0);
+});
+
+test("test_handle_text_message_resumes_persisted_chat_session_after_restart", async () => {
+  const db = new StubDB();
+  const firstScheduler = new StubScheduler();
+  const { channel } = _make_channel({ db, scheduler: firstScheduler });
+
+  await channel._handle_text_message(
+    _fake_update({ text: "first", chat_id: 10, message_id: 100 }),
+    _ctx(),
+  );
+  db.tasks.set(1, { id: 1, status: "completed", session_id: "s1" });
+
+  const restartedScheduler = new StubScheduler();
+  const { channel: restarted } = _make_channel({
+    db,
+    scheduler: restartedScheduler,
+  });
+  await restarted._handle_text_message(
+    _fake_update({ text: "after restart", chat_id: 10, message_id: 101 }),
+    _ctx(),
+  );
+
+  expect(restartedScheduler.submitted.length).toBe(0);
+  expect(db.updated.at(-1)).toEqual([
+    1,
+    {
+      status: "pending",
+      prompt: "after restart",
+      result: null,
+      error: null,
+      question: null,
+    },
+  ]);
+  expect(restarted._task_origin.get(1)).toEqual([10, 101, 101]);
+});
+
+test("test_handle_text_message_new_command_starts_new_chat_session", async () => {
+  const { channel, db, scheduler } = _make_channel();
+
+  await channel._handle_text_message(
+    _fake_update({ text: "first", chat_id: 10, message_id: 100 }),
+    _ctx(),
+  );
+  db.tasks.set(1, { id: 1, status: "completed", session_id: "s1" });
+  await channel._handle_text_message(
+    _fake_update({ text: "/new fresh start", chat_id: 10, message_id: 101 }),
+    _ctx(),
+  );
+
+  expect(scheduler.submitted.length).toBe(2);
+  expect(scheduler.submitted[1]!.prompt).toBe("fresh start");
+  expect(channel._task_origin.get(2)).toEqual([10, 101, 101]);
 });
 
 test("test_handle_text_message_resume_by_reply", async () => {
@@ -418,7 +500,7 @@ test("test_handle_text_message_resume_by_reply", async () => {
   expect(db.updated[db.updated.length - 1]![1]["prompt"]).toBe("continue");
   expect(channel._task_origin.get(5)).toEqual([10, 300, 300]);
   expect(api.callsFor("setMessageReaction").length).toBeGreaterThan(0);
-  expect(api.lastText()).toBe("▶️");
+  expect(api.callsFor("sendMessage").length).toBe(0);
 });
 
 test("test_handle_text_message_resume_no_session", async () => {
@@ -428,7 +510,7 @@ test("test_handle_text_message_resume_no_session", async () => {
   const update = _fake_update({ text: "continue", reply: { message_id: 201 } });
   await channel._handle_text_message(update, _ctx());
   expect(db.updated).toEqual([]);
-  expect(api.lastText()).toContain("no saved session");
+  expect(api.lastText()).toContain("没有可继续的上下文");
 });
 
 test("test_handle_text_message_reply_unknown_notification_creates_task", async () => {
@@ -457,6 +539,8 @@ test("test_cmd_help_authorised_and_not", async () => {
   const { channel, api } = _make_channel({ allowed_users: [1] });
   const ok = _fake_update({ user_id: 1 });
   await channel._cmd_help(ok, _ctx());
+  expect(api.lastText()).not.toContain("task");
+  expect(api.lastText()).toContain("/new");
   expect(api.callsFor("sendMessage").length).toBe(1);
 
   const denied = _fake_update({ user_id: 99 });
@@ -537,6 +621,7 @@ test("test_cmd_resume_paths", async () => {
   await channel._cmd_resume(_fake_update(), _ctx(["2", "go"]));
   expect(api.lastText()).toContain("no saved session");
 
+  const replies_before_success = api.callsFor("sendMessage").length;
   await channel._cmd_resume(
     _fake_update({ message_id: 555 }),
     _ctx(["#1", "keep", "going"]),
@@ -544,7 +629,7 @@ test("test_cmd_resume_paths", async () => {
   expect(db.updated[db.updated.length - 1]![0]).toBe(1);
   expect(db.updated[db.updated.length - 1]![1]["prompt"]).toBe("keep going");
   expect(channel._task_origin.get(1)).toEqual([10, 555, 555]);
-  expect(api.lastText()).toBe("▶️");
+  expect(api.callsFor("sendMessage").length).toBe(replies_before_success);
 });
 
 test("test_cmd_resume_unauthorised", async () => {
@@ -577,7 +662,9 @@ test("test_send_completion_to_origin", async () => {
 
   expect(api.callsFor("sendMessage").length).toBe(1);
   const text = api.lastText();
-  expect(text).toContain("✅ Task #3: Fix login");
+  expect(text).not.toContain("Task #");
+  expect(text).not.toContain("[Telegram]");
+  expect(text).not.toContain("Fix login");
   expect(text).toContain("done");
   expect(channel._notification_map.get(777)).toBe(3);
   expect(channel._task_origin.has(3)).toBe(false);
@@ -598,9 +685,10 @@ test("test_send_failure_to_origin", async () => {
   );
 
   const text = api.lastText();
-  expect(text).toContain("❌ Task #4: Broke");
+  expect(text).not.toContain("Task #");
+  expect(text).not.toContain("Broke");
   expect(text).toContain("boom");
-  expect(text).toContain("/status 4");
+  expect(text).not.toContain("/status");
 });
 
 test("test_send_not_running_drops", async () => {

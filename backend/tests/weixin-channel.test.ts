@@ -415,9 +415,15 @@ describe("Weixin bridge events and commands", () => {
         image_paths: [image],
       }),
     );
-    expect(commands[0]["text"]).toContain("✅ Task #7 · Render\nDone");
+    expect(commands[0]["text"]).not.toContain("Task #");
+    expect(commands[0]["text"]).not.toContain("Render");
+    expect(commands[0]["text"]).toContain("✅");
+    expect(commands[0]["text"]).toContain("Done");
     expect(commands[0]["text"]).not.toContain(image);
-    expect(commands[1]["text"]).toBe("❌ Task #8 · Broken\nboom");
+    expect(commands[1]["text"]).not.toContain("Task #");
+    expect(commands[1]["text"]).not.toContain("Broken");
+    expect(commands[1]["text"]).toContain("❌");
+    expect(commands[1]["text"]).toContain("boom");
     expect(channel._task_origin.has(7)).toBe(false);
     expect(channel._task_origin.has(8)).toBe(false);
   });
@@ -532,6 +538,11 @@ describe("Weixin inbound messages", () => {
         context_token: "ctx2",
         message_id: "msg-resume",
       });
+      expect(
+        writtenCommands(proc).every(
+          (cmd) => !String(cmd["text"]).includes("▶️"),
+        ),
+      ).toBe(true);
 
       db.tasks.set(12, { id: 12, status: "completed" });
       await channel._handle_message_event({
@@ -543,12 +554,85 @@ describe("Weixin inbound messages", () => {
       });
       expect(
         writtenCommands(proc).some((cmd) =>
-          String(cmd["text"]).includes("has no saved session"),
+          String(cmd["text"]).includes("没有可继续的上下文"),
         ),
       ).toBe(true);
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }
+  });
+
+  test("new task and room-session resume replies do not expose task ids", async () => {
+    const proc = fakeBridgeProcess();
+    const { channel, db } = makeChannel();
+    channel._running = true;
+    channel._bridge_proc = proc;
+
+    await channel._handle_message_event({
+      text: "first",
+      account_id: "acct",
+      peer_id: "peer",
+      message_id: "msg-first",
+    });
+    db.tasks.set(1, { id: 1, status: "completed", session_id: "s1" });
+    await channel._handle_message_event({
+      text: "follow up",
+      account_id: "acct",
+      peer_id: "peer",
+      message_id: "msg-follow",
+    });
+
+    const replies = writtenCommands(proc).map((cmd) => String(cmd["text"]));
+    expect(replies[0]).not.toContain("Task #");
+    expect(replies[1]).not.toContain("Task #");
+    expect(replies[1]).not.toContain("▶️");
+  });
+
+  test("room-session resume survives channel restart", async () => {
+    const proc = fakeBridgeProcess();
+    const bus = new MessageBus();
+    const db = new StubDB();
+    const firstScheduler = new StubScheduler();
+    const first = new WeixinChannel(bus, db, firstScheduler);
+    first._running = true;
+    first._bridge_proc = proc;
+
+    await first._handle_message_event({
+      text: "first",
+      account_id: "acct",
+      peer_id: "peer",
+      message_id: "msg-first",
+    });
+    db.tasks.set(1, { id: 1, status: "completed", session_id: "s1" });
+
+    const restartedScheduler = new StubScheduler();
+    const restarted = new WeixinChannel(bus, db, restartedScheduler);
+    restarted._running = true;
+    restarted._bridge_proc = proc;
+    await restarted._handle_message_event({
+      text: "after restart",
+      account_id: "acct",
+      peer_id: "peer",
+      message_id: "msg-follow",
+    });
+
+    expect(restartedScheduler.submitted).toHaveLength(0);
+    expect(db.updated.at(-1)).toEqual([
+      1,
+      {
+        status: "pending",
+        prompt: "after restart",
+        result: null,
+        error: null,
+        question: null,
+      },
+    ]);
+    expect(restarted._task_origin.get(1)).toEqual({
+      account_id: "acct",
+      peer_id: "peer",
+      context_token: "",
+      message_id: "msg-follow",
+    });
   });
 });
 

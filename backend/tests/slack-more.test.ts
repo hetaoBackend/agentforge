@@ -427,6 +427,9 @@ test("test_send_default_channel_failure_prefixes_x_emoji", async () => {
   expect(call.channel).toBe("C-DEF");
   expect(call.text).toContain(":x:");
   expect(call.text).toContain("broke");
+  expect(call.text).not.toContain("Job");
+  expect(call.text).not.toContain("Task #");
+  expect(call.text).not.toContain("[Slack]");
   // The sent ts was tracked back to the task.
   expect(channel._notification_map.get("1700.0001")).toBe(21);
 });

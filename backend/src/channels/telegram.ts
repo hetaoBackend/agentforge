@@ -65,12 +65,10 @@ export function _set_telegram_available(value: boolean): void {
 
 export const HELP_TEXT =
   "👋 *AgentForge Bot*\n\n" +
-  "Send me any message and I'll create a task from it\\.\n" +
-  "Reply to a completion/failure notification to resume that task\\.\n\n" +
+  "Send me any message and I'll continue this chat's session\\.\n" +
+  "Use /new when you want to start a fresh session\\.\n\n" +
   "*Commands:*\n" +
-  "/status `<id>` — task details\n" +
-  "/cancel `<id>` — cancel a task\n" +
-  "/resume `<id> <message>` — resume a task\n" +
+  "/new `<message>` — start a fresh session\n" +
   "/dir `<path>` — set default working directory\n" +
   "　　　　e\\.g\\. `/dir ~/workspace/myproject`\n" +
   "/agent `<name>` — switch coding agent \\(`claude` / `codex`\\)\n" +
@@ -194,6 +192,10 @@ export class TelegramChannel extends Channel {
   // Maps notification message_id → task_id for resume-by-reply
   _notification_map: Map<number, number> = new Map();
 
+  // Telegram has no first-class thread/session primitive for ordinary chats.
+  // Treat each chat as one active agent session until /new starts another.
+  _chat_current_task: Map<string, number> = new Map();
+
   /** Slash-command routing table (≙ the CommandHandler registrations). */
   readonly _command_handlers: Record<
     string,
@@ -280,9 +282,6 @@ export class TelegramChannel extends Channel {
     const task_id = msg.task_id;
     const origin = this._task_origin.get(task_id);
 
-    const title =
-      (msg.payload["title"] as string | null | undefined) || `Task #${task_id}`;
-
     const is_completed = msg.type === OutboundMessageType.TASK_COMPLETED;
     let body: string;
     if (is_completed) {
@@ -299,9 +298,7 @@ export class TelegramChannel extends Channel {
       ).trim();
       // Smart truncation: keep beginning (most informative) and signal cut
       if (error_text.length > 800) {
-        error_text =
-          error_text.slice(0, 800) +
-          "\n…(truncated — use /status for full details)";
+        error_text = error_text.slice(0, 800) + "\n…(truncated)";
       }
       body = error_text;
     }
@@ -312,12 +309,8 @@ export class TelegramChannel extends Channel {
     let text: string;
     if (origin) {
       [chat_id, orig_message_id, reaction_message_id] = origin;
-      // Always include task title and status emoji for clarity
       const status_emoji = is_completed ? "✅" : "❌";
-      text = `${status_emoji} Task #${task_id}: ${title}\n${body}`;
-      if (!is_completed) {
-        text += `\n\n/status ${task_id}`;
-      }
+      text = `${status_emoji}\n${body}`;
     } else {
       const default_chat_id =
         this.db.get_setting("telegram_default_chat_id", "") ?? "";
@@ -332,10 +325,7 @@ export class TelegramChannel extends Channel {
         ? parseInt(String(default_chat_id), 10)
         : default_chat_id;
       const status_emoji = is_completed ? "✅" : "❌";
-      text = `${status_emoji} Task #${task_id}: ${title}\n${body}`;
-      if (!is_completed) {
-        text += `\n\n/status ${task_id}`;
-      }
+      text = `${status_emoji}\n${body}`;
       console.log(
         `[Telegram] Using default chat_id=${chat_id} for task #${task_id}`,
       );
@@ -570,6 +560,21 @@ export class TelegramChannel extends Channel {
 
     let text = (update.message!.text || "").trim();
     if (!text) return;
+    const chat_id = update.message!.chat.id;
+
+    const new_match = /^\/new(?:@\w+)?(?:\s+([\s\S]*))?$/i.exec(text);
+    const force_new_session = Boolean(new_match);
+    if (new_match) {
+      text = (new_match[1] || "").trim();
+      this._clear_chat_current_task(chat_id);
+      if (!text) {
+        await this._reply_text(
+          update,
+          "🆕 已开启新的 Telegram session，请发送新的内容。",
+        );
+        return;
+      }
+    }
 
     // ── /dir command: switch working directory ─────────────────
     const dir_reply = handle_dir_command(text, "telegram", this.db);
@@ -588,11 +593,9 @@ export class TelegramChannel extends Channel {
     // ── 检测转发消息 ───────────────────────────────────────
     text = this._format_forwarded_text(text, update);
 
-    const chat_id = update.message!.chat.id;
-
     // ── reply to a notification → resume task ─────────────────
     const reply = update.message!.reply_to_message;
-    if (reply) {
+    if (reply && !force_new_session) {
       const task_id = this._notification_map.get(reply.message_id);
       if (task_id) {
         const task = this.db.get_task(task_id);
@@ -610,8 +613,9 @@ export class TelegramChannel extends Channel {
             update.message!.message_id,
           ]);
           this._remember_task_source(task_id);
+          this._set_chat_current_task(chat_id, task_id);
 
-          // Add "eyes" reaction and send resuming message
+          // Add "eyes" reaction without sending an extra ack message.
           try {
             await this._api!("setMessageReaction", {
               chat_id,
@@ -621,16 +625,49 @@ export class TelegramChannel extends Channel {
           } catch (e) {
             console.log(`[Telegram] Failed to set resume reaction: ${e}`);
           }
-          await this._reply_text(update, "▶️");
           console.log(`[Telegram] Auto-resuming task ${task_id} from reply`);
           return;
         } else {
-          await this._reply_text(
-            update,
-            `❌ Task #${task_id} has no saved session to resume.`,
-          );
+          await this._reply_text(update, "❌ 这条会话还没有可继续的上下文。");
           return;
         }
+      }
+    }
+
+    const current_task_id = force_new_session
+      ? null
+      : this._get_chat_current_task(chat_id);
+    if (current_task_id !== null) {
+      const task = this.db.get_task(current_task_id);
+      if (task && task["session_id"]) {
+        this.db.update_task(current_task_id, {
+          status: "pending",
+          prompt: text,
+          result: null,
+          error: null,
+          question: null,
+        });
+        this._task_origin.set(current_task_id, [
+          chat_id,
+          update.message!.message_id,
+          update.message!.message_id,
+        ]);
+        this._remember_task_source(current_task_id);
+        this._set_chat_current_task(chat_id, current_task_id);
+
+        try {
+          await this._api!("setMessageReaction", {
+            chat_id,
+            message_id: update.message!.message_id,
+            reaction: [{ type: "emoji", emoji: "👀" }],
+          });
+        } catch (e) {
+          console.log(`[Telegram] Failed to set resume reaction: ${e}`);
+        }
+        console.log(
+          `[Telegram] Auto-resuming task ${current_task_id} from chat session`,
+        );
+        return;
       }
     }
 
@@ -669,19 +706,15 @@ export class TelegramChannel extends Channel {
     const message_id = msg.message_id;
     this._task_origin.set(task_id, [chat_id, message_id, message_id]);
     this._remember_task_source(task_id);
+    this._set_chat_current_task(chat_id, task_id);
 
-    // Acknowledge with an "eyes" reaction and a brief running hint
+    // Acknowledge with an "eyes" reaction without exposing task IDs.
     // (≙ the _react() coroutine scheduled via run_coroutine_threadsafe)
     try {
       await this._api!("setMessageReaction", {
         chat_id,
         message_id,
         reaction: [{ type: "emoji", emoji: "👀" }],
-      });
-      await this._api!("sendMessage", {
-        chat_id,
-        text: `Task #${task_id} is running…`,
-        reply_to_message_id: message_id,
       });
     } catch (e) {
       console.log(`[Telegram] Failed to set reaction: ${e}`);
@@ -828,6 +861,7 @@ export class TelegramChannel extends Channel {
       update.message!.message_id,
     ]);
     this._remember_task_source(tid);
+    this._set_chat_current_task(chat_id, tid);
 
     // Add "eyes" reaction to the user's command message
     try {
@@ -839,8 +873,43 @@ export class TelegramChannel extends Channel {
     } catch (e) {
       console.log(`[Telegram] Failed to set resume reaction: ${e}`);
     }
+  }
 
-    await this._reply_text(update, "▶️");
+  _chat_key(chat_id: number | string): string {
+    return String(chat_id);
+  }
+
+  _chat_current_task_setting_key(chat_id: number | string): string {
+    return `telegram_chat_current_task:${this._chat_key(chat_id)}`;
+  }
+
+  _get_chat_current_task(chat_id: number | string): number | null {
+    const key = this._chat_key(chat_id);
+    const cached = this._chat_current_task.get(key);
+    if (cached !== undefined) return cached;
+
+    const persisted = this.db.get_setting(
+      this._chat_current_task_setting_key(chat_id),
+      "",
+    );
+    if (!persisted || !/^\d+$/.test(persisted)) return null;
+
+    const task_id = parseInt(persisted, 10);
+    this._chat_current_task.set(key, task_id);
+    return task_id;
+  }
+
+  _set_chat_current_task(chat_id: number | string, task_id: number): void {
+    this._chat_current_task.set(this._chat_key(chat_id), task_id);
+    this.db.set_setting(
+      this._chat_current_task_setting_key(chat_id),
+      String(task_id),
+    );
+  }
+
+  _clear_chat_current_task(chat_id: number | string): void {
+    this._chat_current_task.delete(this._chat_key(chat_id));
+    this.db.set_setting(this._chat_current_task_setting_key(chat_id), "");
   }
 }
 
