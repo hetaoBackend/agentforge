@@ -8,6 +8,7 @@ import {
   Moon,
   Play,
   Plus,
+  Radar,
   Search,
   Settings,
   Sparkles,
@@ -177,7 +178,7 @@ const DEFAULT_TIMEOUT_SECONDS = 12000;
 function FormattedOutput({ content, theme }) {
   if (!content) return null;
 
-  // 解析JSON流数据，只显示关键信息
+  // Parse the JSON stream and render only the useful signal.
   const parseStreamJSON = (text) => {
     const lines = text.split("\n");
     const parsedLines = [];
@@ -325,7 +326,7 @@ function FormattedOutput({ content, theme }) {
           }
 
           case "result":
-            // 最终结果
+            // Final result.
             if (event.result) {
               parsedLines.push({
                 type: "result",
@@ -336,7 +337,7 @@ function FormattedOutput({ content, theme }) {
             break;
 
           case "error":
-            // 错误信息
+            // Error details.
             parsedLines.push({
               type: "error",
               text: `❌ Error: ${event.error || "Unknown error"}`,
@@ -345,10 +346,10 @@ function FormattedOutput({ content, theme }) {
             break;
 
           default:
-            // 其他事件类型 - 显示更多信息
+            // Other event types: surface compact context.
             if (eventType) {
               let displayText = `[${eventType}]`;
-              // 尝试显示事件中的关键信息
+              // Try to render the key event fields.
               if (event.message) {
                 const msg = event.message;
                 if (msg.content && Array.isArray(msg.content)) {
@@ -377,9 +378,9 @@ function FormattedOutput({ content, theme }) {
             }
         }
       } catch (_error) {
-        // 如果不是有效的JSON，可能是普通文本输出
+        // If it is not valid JSON, it may be plain text output.
         if (line.trim() && !line.startsWith("{")) {
-          // 只显示有意义的非JSON行
+          // Only render meaningful non-JSON lines.
           if (line.includes("error") || line.includes("Error")) {
             parsedLines.push({
               type: "error",
@@ -393,7 +394,7 @@ function FormattedOutput({ content, theme }) {
               style: { color: theme.green },
             });
           } else if (line.length > 10) {
-            // 只显示较长的非JSON行
+            // Only render longer non-JSON lines.
             parsedLines.push({
               type: "text",
               text: line,
@@ -3116,7 +3117,7 @@ function DetailPanel({ task, onClose, onResume }: any) {
         if (res.ok && !cancelled) {
           const data = await res.json();
           const currentOutput = data.output || "";
-          // 增量更新：只添加新内容
+          // Incremental update: append only new output.
           if (currentOutput.length > lastOutputLength) {
             const newContent = currentOutput.slice(lastOutputLength);
             setLiveOutput((prev) => prev + newContent);
@@ -3126,7 +3127,7 @@ function DetailPanel({ task, onClose, onResume }: any) {
       } catch {}
     };
     poll();
-    const interval = setInterval(poll, 1000); // 缩短轮询间隔到1秒
+    const interval = setInterval(poll, 1000);
     return () => {
       cancelled = true;
       clearInterval(interval);
@@ -3397,7 +3398,7 @@ function DetailPanel({ task, onClose, onResume }: any) {
               overflow: "hidden",
             }}
           >
-            {/* 工具栏 */}
+            {/* Toolbar */}
             <div
               style={{
                 display: "flex",
@@ -3466,7 +3467,7 @@ function DetailPanel({ task, onClose, onResume }: any) {
               </div>
             </div>
 
-            {/* 输出内容区域 */}
+            {/* Output content */}
             {showLiveOutput && (
               <div
                 style={{
@@ -3710,7 +3711,7 @@ function DetailPanel({ task, onClose, onResume }: any) {
           )}
           {resumeSent && (
             <div style={{ fontSize: 12, color: theme.green, marginTop: 6 }}>
-              ✨ 已发送！任务正在重新唤醒，请稍候~
+              Sent. The task is waking up again.
             </div>
           )}
           <button
@@ -4092,17 +4093,17 @@ function SettingsModal({
                   onChange={(e) => setSkillEnabled(e.target.checked)}
                   style={{ width: 16, height: 16, cursor: "pointer" }}
                 />
-                Skill Library 自动扫描
+                Skill Library automatic scans
               </label>
               <div style={hintStyle}>
-                定时让 agent 扫描已完成任务、检测复发模式（消耗 token，默认关闭）。
-                手动「扫一遍」按钮不受此开关影响。
+                Run scheduled sweeps over completed tasks to detect recurring patterns. This uses
+                tokens and is off by default. The manual scan button is not affected.
               </div>
             </div>
             {skillEnabled && (
               <>
                 <div style={{ marginBottom: 20 }}>
-                  <label style={labelStyle}>扫描 Agent</label>
+                  <label style={labelStyle}>Sweep Agent</label>
                   <select
                     value={skillSweepAgent}
                     onChange={(e) => setSkillSweepAgent(e.target.value)}
@@ -4111,17 +4112,19 @@ function SettingsModal({
                     <option value="claude">Claude Code (claude CLI)</option>
                     <option value="codex">Codex CLI (openai/codex)</option>
                   </select>
-                  <div style={hintStyle}>运行 sweep 的 agent。</div>
+                  <div style={hintStyle}>Agent used for skill sweeps.</div>
                 </div>
                 <div style={{ marginBottom: 20 }}>
-                  <label style={labelStyle}>扫描节奏 (cron)</label>
+                  <label style={labelStyle}>Sweep Cadence (cron)</label>
                   <input
                     value={skillSweepCron}
                     onChange={(e) => setSkillSweepCron(e.target.value)}
                     placeholder="0 3 * * *"
                     style={{ ...fieldStyle, fontFamily: "monospace" }}
                   />
-                  <div style={hintStyle}>默认每日凌晨 3 点。增量扫描，只看上次以来的新任务。</div>
+                  <div style={hintStyle}>
+                    Default: 3 AM daily. Incremental scans only inspect tasks since the last sweep.
+                  </div>
                 </div>
               </>
             )}
@@ -5285,10 +5288,11 @@ function SkillPatternCard({ p, tasks, onDraft, onApprove, onDismiss }) {
   return (
     <div
       style={{
-        background: theme.surface,
+        background: theme.columnBg,
         border: `1px solid ${borderColor}`,
-        borderRadius: 12,
+        borderRadius: 8,
         padding: 16,
+        boxShadow: theme.shadowSoft,
         opacity: muted ? 0.5 : 1,
       }}
     >
@@ -5298,7 +5302,18 @@ function SkillPatternCard({ p, tasks, onDraft, onApprove, onDismiss }) {
           {p.pattern_key}
         </span>
       </div>
-      <div style={{ color: theme.textMuted, fontSize: 13, marginBottom: 10 }}>
+      <div
+        style={{
+          color: theme.textMuted,
+          fontSize: 13,
+          marginBottom: 10,
+          lineHeight: 1.5,
+          display: "-webkit-box",
+          WebkitBoxOrient: "vertical",
+          WebkitLineClamp: 2,
+          overflow: "hidden",
+        }}
+      >
         {p.summary || "—"}
       </div>
       <div
@@ -5311,11 +5326,13 @@ function SkillPatternCard({ p, tasks, onDraft, onApprove, onDismiss }) {
           alignItems: "center",
         }}
       >
-        <span>复发 {p.recurrence_count}×</span>
-        <span>{taskCount} 个任务</span>
+        <span>Recurs {p.recurrence_count}x</span>
+        <span>
+          {taskCount} {taskCount === 1 ? "task" : "tasks"}
+        </span>
         <span>{p.status}</span>
         {ready && p.status !== "promoted" && (
-          <span style={{ color: theme.accent, fontWeight: 700 }}>✓ 达标</span>
+          <span style={{ color: theme.accent, fontWeight: 700 }}>Ready</span>
         )}
         <button
           onClick={() => setExpanded((v) => !v)}
@@ -5329,7 +5346,7 @@ function SkillPatternCard({ p, tasks, onDraft, onApprove, onDismiss }) {
             fontWeight: 700,
           }}
         >
-          {expanded ? "收起 ▲" : "详情 ▼"}
+          {expanded ? "Hide" : "Details"}
         </button>
       </div>
 
@@ -5346,19 +5363,21 @@ function SkillPatternCard({ p, tasks, onDraft, onApprove, onDismiss }) {
           }}
         >
           <div style={{ marginBottom: 6 }}>
-            <span style={{ color: theme.textDim }}>首次 </span>
+            <span style={{ color: theme.textDim }}>First seen </span>
             {(p.first_seen || "").replace("T", " ").slice(0, 19) || "—"}
-            <span style={{ color: theme.textDim }}>　最近 </span>
+            <span style={{ color: theme.textDim }}> · Last seen </span>
             {(p.last_seen || "").replace("T", " ").slice(0, 19) || "—"}
           </div>
-          <div style={{ color: theme.textDim, marginBottom: 4 }}>贡献的任务（{taskCount}）：</div>
+          <div style={{ color: theme.textDim, marginBottom: 4 }}>
+            Contributing tasks ({taskCount}):
+          </div>
           <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
             {taskIds.length === 0 && <span style={{ color: theme.textDim }}>—</span>}
             {taskIds.map((tid) => {
               const t = (tasks || []).find((x) => x.id === tid);
               return (
                 <span key={tid} style={{ fontFamily: "monospace" }}>
-                  #{tid} {t ? t.title : <span style={{ color: theme.textDim }}>(已删除)</span>}
+                  #{tid} {t ? t.title : <span style={{ color: theme.textDim }}>(deleted)</span>}
                 </span>
               );
             })}
@@ -5378,13 +5397,15 @@ function SkillPatternCard({ p, tasks, onDraft, onApprove, onDismiss }) {
             border: `1px solid ${p.draft_worthy ? "rgba(34,197,94,0.3)" : "rgba(245,158,11,0.35)"}`,
           }}
         >
-          {p.draft_worthy ? "✓ agent 建议沉淀" : "⚠ agent 认为价值有限（可仍批准或驳回）"}
-          {p.draft_worthiness_reason ? `：${p.draft_worthiness_reason}` : ""}
+          {p.draft_worthy
+            ? "Agent recommends turning this into a skill"
+            : "Agent thinks this may have limited value. You can still approve or reject it."}
+          {p.draft_worthiness_reason ? `: ${p.draft_worthiness_reason}` : ""}
         </div>
       )}
 
       {p.status === "promoted" && (
-        <div style={{ fontSize: 12, color: theme.green, fontWeight: 700 }}>✓ 已沉淀为 Skill</div>
+        <div style={{ fontSize: 12, color: theme.green, fontWeight: 700 }}>Promoted to Skill</div>
       )}
 
       {(p.status === "candidate" || p.status === "tracking") &&
@@ -5392,24 +5413,26 @@ function SkillPatternCard({ p, tasks, onDraft, onApprove, onDismiss }) {
         draftStatus !== "drafting" && (
           <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
             <button onClick={() => onDraft(p.id)} style={btn(theme.accent, "#fff")}>
-              {draftStatus === "error" ? "重试蒸馏" : "蒸馏成 Skill"}
+              {draftStatus === "error" ? "Retry Distill" : "Distill Skill"}
             </button>
             <button onClick={() => onDismiss(p.id)} style={btn("transparent", theme.textMuted)}>
-              驳回
+              Reject
             </button>
             {p.status === "tracking" && (
               <span style={{ color: theme.textDim, fontSize: 11 }}>
-                未达自动阈值，可手动蒸馏（agent 会判断是否值得）
+                Below the automatic threshold. You can still distill it manually.
               </span>
             )}
             {draftStatus === "error" && (
-              <span style={{ color: theme.red, fontSize: 11 }}>蒸馏失败：{p.draft_error}</span>
+              <span style={{ color: theme.red, fontSize: 11 }}>
+                Distill failed: {p.draft_error}
+              </span>
             )}
           </div>
         )}
 
       {draftStatus === "drafting" && (
-        <div style={{ fontSize: 12, color: theme.textMuted }}>蒸馏中…</div>
+        <div style={{ fontSize: 12, color: theme.textMuted }}>Distilling…</div>
       )}
 
       {draftStatus === "ready" &&
@@ -5430,7 +5453,7 @@ function SkillPatternCard({ p, tasks, onDraft, onApprove, onDismiss }) {
                     borderRadius: 6,
                   }}
                 >
-                  {fm.name || "(无 name)"}
+                  {fm.name || "(no name)"}
                 </span>
                 <span style={{ fontSize: 11, color: theme.textDim }}>
                   → ~/.claude/skills/{fm.name || "…"}/SKILL.md
@@ -5452,7 +5475,7 @@ function SkillPatternCard({ p, tasks, onDraft, onApprove, onDismiss }) {
                     letterSpacing: 0.3,
                   }}
                 >
-                  SKILL.md · 可编辑（frontmatter 决定名称与触发描述）
+                  SKILL.md · editable. Frontmatter controls the name and trigger description.
                 </div>
                 <textarea
                   value={body}
@@ -5480,7 +5503,7 @@ function SkillPatternCard({ p, tasks, onDraft, onApprove, onDismiss }) {
                   onClick={() => onApprove(p.id, { body })}
                   style={{ ...btn(theme.green, "#fff"), padding: "8px 18px", fontSize: 12 }}
                 >
-                  ✓ 批准并写入
+                  Approve and Write
                 </button>
                 <button
                   onClick={() => onDismiss(p.id)}
@@ -5490,7 +5513,7 @@ function SkillPatternCard({ p, tasks, onDraft, onApprove, onDismiss }) {
                     fontSize: 12,
                   }}
                 >
-                  驳回
+                  Reject
                 </button>
               </div>
             </div>
@@ -5522,7 +5545,7 @@ function SkillRegistryCard({ s, tasks, onToggle, onDelete }) {
         const d = await res.json();
         setContent(d.content ?? "");
       } catch (e) {
-        setContent(`(加载失败：${e.message})`);
+        setContent(`(failed to load: ${e.message})`);
       } finally {
         setLoading(false);
       }
@@ -5532,10 +5555,11 @@ function SkillRegistryCard({ s, tasks, onToggle, onDelete }) {
   return (
     <div
       style={{
-        background: theme.surface,
+        background: theme.columnBg,
         border: `1px solid ${theme.border}`,
-        borderRadius: 12,
+        borderRadius: 8,
         padding: 14,
+        boxShadow: theme.shadowSoft,
         opacity: s.enabled ? 1 : 0.55,
       }}
     >
@@ -5556,10 +5580,21 @@ function SkillRegistryCard({ s, tasks, onToggle, onDelete }) {
             fontWeight: 700,
           }}
         >
-          {expanded ? "收起 ▲" : "查看 SKILL.md ▼"}
+          {expanded ? "Hide" : "View SKILL.md"}
         </button>
       </div>
-      <div style={{ color: theme.textMuted, fontSize: 12, marginBottom: 10, lineHeight: 1.5 }}>
+      <div
+        style={{
+          color: theme.textMuted,
+          fontSize: 12,
+          marginBottom: 10,
+          lineHeight: 1.5,
+          display: "-webkit-box",
+          WebkitBoxOrient: "vertical",
+          WebkitLineClamp: 2,
+          overflow: "hidden",
+        }}
+      >
         {s.description || "—"}
       </div>
 
@@ -5567,16 +5602,17 @@ function SkillRegistryCard({ s, tasks, onToggle, onDelete }) {
         <div style={{ marginBottom: 10 }}>
           <div style={{ fontSize: 11, color: theme.textDim, marginBottom: 6 }}>
             <span style={{ fontFamily: "monospace" }}>{s.path}</span>
-            {s.source_pattern_key && <span>　来源 pattern：{s.source_pattern_key}</span>}
+            {s.source_pattern_key && <span> · Source pattern: {s.source_pattern_key}</span>}
             {sourceTaskIds.length > 0 && (
               <span>
-                　来源任务：
+                {" "}
+                · Source tasks:{" "}
                 {sourceTaskIds
                   .map((tid) => {
                     const t = (tasks || []).find((x) => x.id === tid);
-                    return `#${tid}${t ? "（" + t.title + "）" : ""}`;
+                    return `#${tid}${t ? " (" + t.title + ")" : ""}`;
                   })
-                  .join("、")}
+                  .join(", ")}
               </span>
             )}
           </div>
@@ -5597,7 +5633,7 @@ function SkillRegistryCard({ s, tasks, onToggle, onDelete }) {
               overflow: "auto",
             }}
           >
-            {loading ? "加载中…" : content}
+            {loading ? "Loading…" : content}
           </pre>
         </div>
       )}
@@ -5619,7 +5655,7 @@ function SkillRegistryCard({ s, tasks, onToggle, onDelete }) {
             onChange={(e) => onToggle(s.id, e.target.checked)}
             style={{ cursor: "pointer" }}
           />
-          {s.enabled ? "已启用（claude/codex 加载中）" : "已停用（symlink 已摘除）"}
+          {s.enabled ? "Enabled for Claude/Codex" : "Disabled (symlinks removed)"}
         </label>
         <button
           onClick={() => onDelete(s.id)}
@@ -5635,7 +5671,7 @@ function SkillRegistryCard({ s, tasks, onToggle, onDelete }) {
             fontWeight: 700,
           }}
         >
-          删除
+          Delete
         </button>
       </div>
     </div>
@@ -5646,7 +5682,7 @@ function SkillsView({
   skillData,
   skills,
   tasks,
-  onSweep,
+  filter,
   onDraft,
   onApprove,
   onDismiss,
@@ -5656,16 +5692,59 @@ function SkillsView({
   // Only recurrence >= 2 is worth surfacing; single-occurrence rows are noise.
   // (The backend still tracks them so the count can accumulate across sweeps.)
   const patterns = (skillData.patterns || []).filter((p) => p.recurrence_count >= 2);
+  const skillQuery = (filter || "").trim().toLowerCase();
+  const matchesQuery = (values) => {
+    if (!skillQuery) return true;
+    return values.some((value) =>
+      String(value ?? "")
+        .toLowerCase()
+        .includes(skillQuery),
+    );
+  };
+  const taskTitle = (id) => (tasks || []).find((t) => t.id === id)?.title || "";
+  const parseIds = (raw) => {
+    try {
+      return JSON.parse(raw || "[]");
+    } catch {
+      return [];
+    }
+  };
+  const filteredSkills = (skills || []).filter((s) =>
+    matchesQuery([
+      s.name,
+      s.description,
+      s.kind,
+      s.path,
+      s.source_pattern_key,
+      s.enabled ? "enabled" : "disabled",
+      ...parseIds(s.source_task_ids).map(taskTitle),
+    ]),
+  );
+  const filteredPatterns = patterns.filter((p) =>
+    matchesQuery([
+      p.pattern_key,
+      p.summary,
+      p.kind,
+      p.status,
+      p.draft_status,
+      p.draft_error,
+      p.draft_worthiness_reason,
+      p.draft_body,
+      ...parseIds(p.contributing_task_ids).map(taskTitle),
+    ]),
+  );
   const sweep = skillData.sweep || {};
   const running = sweep.running;
   const last = sweep.last;
   let lastNote = null;
-  if (last) {
+  if (running) {
+    lastNote = "Sweep running…";
+  } else if (last) {
     lastNote = last.error
-      ? `上次扫描失败：${last.error}`
+      ? `Last sweep failed: ${last.error}`
       : last.scanned === 0
-        ? `上次扫描：没有已完成的任务可分析（agent ${last.agent}）`
-        : `上次扫描：分析 ${last.scanned} 个任务、新增 ${last.new ?? 0} 次复发、候选 ${last.candidates ?? 0}（agent ${last.agent}）`;
+        ? `Last sweep: no completed tasks to analyze (agent ${last.agent})`
+        : `Last sweep: analyzed ${last.scanned} tasks, added ${last.new ?? 0} recurrences, found ${last.candidates ?? 0} candidates (agent ${last.agent})`;
   }
   const [showRegistry, setShowRegistry] = useState(true);
   const [showPatterns, setShowPatterns] = useState(true);
@@ -5677,7 +5756,7 @@ function SkillsView({
         display: "flex",
         alignItems: "center",
         gap: 8,
-        width: "100%",
+        width: "auto",
         background: "transparent",
         border: "none",
         cursor: "pointer",
@@ -5690,99 +5769,107 @@ function SkillsView({
     >
       <span style={{ color: theme.textDim, fontSize: 11 }}>{open ? "▼" : "▶"}</span>
       {label}
-      <span style={{ color: theme.textDim, fontWeight: 600 }}>（{count}）</span>
+      <span style={{ color: theme.textDim, fontWeight: 600 }}>({count})</span>
     </button>
   );
 
   return (
-    <div style={{ padding: 28, minHeight: "calc(100vh - 72px)" }}>
+    <div style={{ padding: 24, minHeight: "calc(100vh - 148px)" }}>
       <div
         style={{
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          marginBottom: 16,
-          gap: 12,
+          marginBottom: 18,
+          minHeight: 30,
+          maxWidth: 920,
         }}
       >
         <div style={{ color: theme.textMuted, fontSize: 12 }}>
-          跨任务复发模式账本 · 复发 ≥2 即可手动蒸馏为 Skill（达 ≥3 且跨 ≥2 任务自动标记候选）
+          Cross-task recurrence ledger. Recurrence &gt;= 2 can be distilled manually; recurrence
+          &gt;= 3 across 2+ tasks becomes a candidate.
           {lastNote && <span style={{ marginLeft: 10, color: theme.textDim }}>· {lastNote}</span>}
         </div>
-        <button
-          onClick={onSweep}
-          disabled={running}
-          style={{
-            padding: "8px 18px",
-            borderRadius: 8,
-            border: "none",
-            background: running ? theme.border : theme.accent,
-            color: "#fff",
-            cursor: running ? "default" : "pointer",
-            fontSize: 12,
-            fontWeight: 700,
-            letterSpacing: 0.3,
-            whiteSpace: "nowrap",
-            boxShadow: running ? "none" : `0 0 24px ${theme.accentGlow}`,
-          }}
-        >
-          {running ? "扫描中…" : "扫一遍"}
-        </button>
       </div>
 
       {(skills || []).length > 0 && (
         <div style={{ marginBottom: 26 }}>
-          {sectionHeader("已沉淀 Skills", skills.length, showRegistry, () =>
-            setShowRegistry((v) => !v),
+          {sectionHeader(
+            "Installed Skills",
+            skillQuery ? `${filteredSkills.length}/${skills.length}` : skills.length,
+            showRegistry,
+            () => setShowRegistry((v) => !v),
           )}
-          {showRegistry && (
-            <div
-              style={{
-                display: "grid",
-                gridTemplateColumns: "repeat(auto-fit, minmax(360px, 1fr))",
-                gap: 12,
-              }}
-            >
-              {skills.map((s) => (
-                <SkillRegistryCard
-                  key={s.id}
-                  s={s}
-                  tasks={tasks}
-                  onToggle={onToggleSkill}
-                  onDelete={onDeleteSkill}
-                />
-              ))}
-            </div>
-          )}
+          {showRegistry &&
+            (filteredSkills.length === 0 ? (
+              <div
+                style={{
+                  border: `1px dashed ${theme.border}`,
+                  borderRadius: 8,
+                  padding: 28,
+                  textAlign: "center",
+                  color: theme.textDim,
+                  fontSize: 12,
+                  background: theme.field,
+                  maxWidth: 520,
+                }}
+              >
+                No installed skills match this search.
+              </div>
+            ) : (
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "repeat(auto-fill, minmax(min(100%, 380px), 520px))",
+                  gap: 12,
+                  justifyContent: "start",
+                }}
+              >
+                {filteredSkills.map((s) => (
+                  <SkillRegistryCard
+                    key={s.id}
+                    s={s}
+                    tasks={tasks}
+                    onToggle={onToggleSkill}
+                    onDelete={onDeleteSkill}
+                  />
+                ))}
+              </div>
+            ))}
         </div>
       )}
 
-      {sectionHeader("检测到的模式", patterns.length, showPatterns, () =>
-        setShowPatterns((v) => !v),
+      {sectionHeader(
+        "Detected Patterns",
+        skillQuery ? `${filteredPatterns.length}/${patterns.length}` : patterns.length,
+        showPatterns,
+        () => setShowPatterns((v) => !v),
       )}
       {showPatterns &&
-        (patterns.length === 0 ? (
+        (filteredPatterns.length === 0 ? (
           <div
             style={{
               border: `1px dashed ${theme.border}`,
-              borderRadius: 12,
+              borderRadius: 8,
               padding: 32,
               textAlign: "center",
               color: theme.textDim,
               fontSize: 12,
+              background: theme.field,
+              maxWidth: 520,
             }}
           >
-            还没有复发 ≥2 的模式 — 点「扫一遍」让 agent 分析最近完成的任务（复发 1 次的暂不展示）
+            {patterns.length === 0
+              ? "No patterns with recurrence >= 2 yet. Run a scan to analyze recent completed tasks."
+              : "No detected patterns match this search."}
           </div>
         ) : (
           <div
             style={{
               display: "grid",
-              gridTemplateColumns: "repeat(auto-fit, minmax(360px, 1fr))",
+              gridTemplateColumns: "repeat(auto-fill, minmax(min(100%, 380px), 520px))",
               gap: 14,
+              justifyContent: "start",
             }}
           >
-            {patterns.map((p) => (
+            {filteredPatterns.map((p) => (
               <SkillPatternCard
                 key={p.id}
                 p={p}
@@ -5814,7 +5901,7 @@ export default function App() {
   const [detail, setDetail] = useState<any>(null);
   const [heartbeatDetail, setHeartbeatDetail] = useState<any>(null);
   const [connected, setConnected] = useState(false);
-  const [filter, setFilter] = useState("");
+  const [filters, setFilters] = useState({ tasks: "", heartbeats: "", skills: "" });
   const [taskTimeout, setTaskTimeout] = useState(DEFAULT_TIMEOUT_SECONDS);
   const [defaultAgent, setDefaultAgent] = useState(DEFAULT_AGENT);
   const [feishuSettings, setFeishuSettings] = useState<any>({});
@@ -6094,6 +6181,28 @@ export default function App() {
     }
   };
 
+  const filter =
+    activeView === "tasks"
+      ? filters.tasks
+      : activeView === "heartbeats"
+        ? filters.heartbeats
+        : filters.skills;
+  const setActiveFilter = (value) => {
+    setFilters((prev) =>
+      activeView === "tasks"
+        ? { ...prev, tasks: value }
+        : activeView === "heartbeats"
+          ? { ...prev, heartbeats: value }
+          : { ...prev, skills: value },
+    );
+  };
+  const searchPlaceholder =
+    activeView === "tasks"
+      ? "Search tasks"
+      : activeView === "heartbeats"
+        ? "Search heartbeats"
+        : "Search skills";
+
   const filtered = filter
     ? tasks.filter(
         (t) =>
@@ -6370,41 +6479,39 @@ export default function App() {
               ))}
             </div>
 
-            {activeView !== "skills" && (
-              <div
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 8,
+                padding: "0 10px",
+                height: 34,
+                borderRadius: 8,
+                border: `1px solid ${theme.border}`,
+                background: theme.panelRaised,
+              }}
+            >
+              <Search
+                aria-hidden="true"
+                size={14}
+                strokeWidth={2.4}
+                style={{ color: theme.textDim, flexShrink: 0 }}
+              />
+              <input
+                placeholder={searchPlaceholder}
+                value={filter}
+                onChange={(e) => setActiveFilter(e.target.value)}
                 style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 8,
-                  padding: "0 10px",
-                  height: 34,
-                  borderRadius: 8,
-                  border: `1px solid ${theme.border}`,
-                  background: theme.panelRaised,
+                  border: "none",
+                  background: "transparent",
+                  color: theme.text,
+                  fontSize: 12,
+                  outline: "none",
+                  width: 164,
+                  fontFamily: APP_FONT_STACK,
                 }}
-              >
-                <Search
-                  aria-hidden="true"
-                  size={14}
-                  strokeWidth={2.4}
-                  style={{ color: theme.textDim, flexShrink: 0 }}
-                />
-                <input
-                  placeholder={activeView === "tasks" ? "Search tasks" : "Search heartbeats"}
-                  value={filter}
-                  onChange={(e) => setFilter(e.target.value)}
-                  style={{
-                    border: "none",
-                    background: "transparent",
-                    color: theme.text,
-                    fontSize: 12,
-                    outline: "none",
-                    width: 164,
-                    fontFamily: APP_FONT_STACK,
-                  }}
-                />
-              </div>
-            )}
+              />
+            </div>
 
             {(() => {
               const cycle = { system: "light", light: "dark", dark: "system" };
@@ -6426,7 +6533,31 @@ export default function App() {
               <IconGlyph icon={Settings} size={15} />
             </HeaderButton>
 
-            {activeView !== "skills" && (
+            {activeView === "skills" ? (
+              <button
+                onClick={handleSweep}
+                disabled={!!skillData.sweep?.running}
+                style={{
+                  height: 34,
+                  padding: "0 14px",
+                  borderRadius: 8,
+                  border: `1px solid ${skillData.sweep?.running ? theme.border : theme.accent}`,
+                  background: skillData.sweep?.running ? theme.border : theme.accent,
+                  color: skillData.sweep?.running ? theme.textMuted : theme.brandInk,
+                  cursor: skillData.sweep?.running ? "default" : "pointer",
+                  fontSize: 12,
+                  fontWeight: 900,
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 7,
+                  boxShadow: skillData.sweep?.running ? "none" : `0 0 24px ${theme.accentGlow}`,
+                  transition: "transform 0.15s ease, box-shadow 0.15s ease",
+                }}
+              >
+                <IconGlyph icon={Radar} size={15} strokeWidth={2.8} />
+                {skillData.sweep?.running ? "Scanning" : "Run Scan"}
+              </button>
+            ) : (
               <button
                 onClick={() =>
                   activeView === "tasks" ? setShowNew(true) : setShowNewHeartbeat(true)
@@ -6540,7 +6671,7 @@ export default function App() {
           skillData={skillData}
           skills={skills}
           tasks={tasks}
-          onSweep={handleSweep}
+          filter={filter}
           onDraft={handleSkillDraft}
           onApprove={handleSkillApprove}
           onDismiss={handleSkillDismiss}
@@ -6701,7 +6832,7 @@ export default function App() {
   );
 }
 
-// CSS动画定义
+// CSS animation definitions.
 const styles = `
   html, body, #root {
     min-height: 100%;
@@ -6772,7 +6903,7 @@ const styles = `
   }
 `;
 
-// 注入样式
+// Inject styles.
 if (typeof document !== "undefined" && !document.querySelector("#live-output-styles")) {
   const styleEl = document.createElement("style");
   styleEl.id = "live-output-styles";
