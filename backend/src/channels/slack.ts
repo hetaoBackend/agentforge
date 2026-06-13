@@ -847,11 +847,9 @@ export class SlackChannel extends Channel {
         if (dm_ch) {
           channel_id = dm_ch;
           thread_ts = null;
-          const status_emoji =
-            msg.type === OutboundMessageType.TASK_COMPLETED
-              ? ":white_check_mark:"
-              : ":x:";
-          text = `${status_emoji}\n${text}`;
+          if (msg.type === OutboundMessageType.TASK_FAILED) {
+            text = `:x:\n${text}`;
+          }
           console.log(`[Slack] Falling back to P2P DM with user ${dm_user}`);
         } else {
           console.log(
@@ -862,11 +860,9 @@ export class SlackChannel extends Channel {
       } else if (default_channel) {
         channel_id = default_channel;
         thread_ts = null;
-        const status_emoji =
-          msg.type === OutboundMessageType.TASK_COMPLETED
-            ? ":white_check_mark:"
-            : ":x:";
-        text = `${status_emoji}\n${text}`;
+        if (msg.type === OutboundMessageType.TASK_FAILED) {
+          text = `:x:\n${text}`;
+        }
       } else {
         console.log(
           `[Slack] No origin, no known user, no slack_default_channel for ` +

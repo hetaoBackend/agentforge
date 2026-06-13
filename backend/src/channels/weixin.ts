@@ -280,9 +280,6 @@ export class WeixinChannel extends Channel {
   // gives each peer a current AgentForge session until /new starts another.
   _peer_current_task: Map<string, number> = new Map();
 
-  // notification message_id -> task_id for resume-by-reply
-  _notification_map: Map<string, number> = new Map();
-
   // request_id -> task_id for sent acknowledgements from the bridge
   _pending_notifications: Map<string, number> = new Map();
 
@@ -438,7 +435,7 @@ export class WeixinChannel extends Channel {
           image_paths,
         );
       }
-      text = `✅\n${body}`;
+      text = body;
     } else {
       const body = (
         (msg.payload["error"] as string | null | undefined) || "Unknown error"
@@ -455,7 +452,6 @@ export class WeixinChannel extends Channel {
       account_id: origin["account_id"] ?? "",
       peer_id: origin["peer_id"],
       context_token: origin["context_token"] ?? "",
-      reply_to_message_id: origin["message_id"] ?? "",
       text,
     };
     if (image_paths.length > 0) {
@@ -565,19 +561,10 @@ export class WeixinChannel extends Channel {
     if (!request_id || (!message_id && !quoted_message_id)) {
       return;
     }
-    const task_id = this._pending_notifications.get(request_id);
-    if (task_id === undefined) {
+    if (!this._pending_notifications.has(request_id)) {
       return;
     }
-    if (message_id) {
-      this._notification_map.set(message_id, task_id);
-    }
-    if (quoted_message_id) {
-      this._notification_map.set(quoted_message_id, task_id);
-    }
-    if (quoted_message_id) {
-      this._pending_notifications.delete(request_id);
-    }
+    this._pending_notifications.delete(request_id);
   }
 
   async _handle_message_event(event: Record<string, unknown>): Promise<void> {
@@ -587,12 +574,6 @@ export class WeixinChannel extends Channel {
       return;
     }
 
-    const reply_to_message_id =
-      (event["reply_to_message_id"] as string | undefined) || "";
-    const reply_to_message_title =
-      (event["reply_to_message_title"] as string | undefined) || "";
-    const reply_to_message_text =
-      (event["reply_to_message_text"] as string | undefined) || "";
     const peer_id =
       (event["peer_id"] as string | undefined) ||
       (event["from_user_id"] as string | undefined) ||
@@ -628,23 +609,11 @@ export class WeixinChannel extends Channel {
       return;
     }
 
-    let task_id: number | null = null;
-    if (reply_to_message_id) {
-      task_id = this._notification_map.get(reply_to_message_id) ?? null;
-    }
+    const task_id = force_new_session
+      ? null
+      : this._get_peer_current_task(peer_key);
 
-    if (task_id === null) {
-      task_id = this._extract_task_id_from_reply_reference(
-        reply_to_message_title,
-        reply_to_message_text,
-      );
-    }
-
-    if (task_id === null && !force_new_session) {
-      task_id = this._get_peer_current_task(peer_key);
-    }
-
-    if (task_id !== null && !force_new_session) {
+    if (task_id !== null) {
       const task = this.db.get_task(task_id);
       if (task && task["session_id"]) {
         const updates = this._build_resume_updates(text, image_paths);
@@ -658,14 +627,6 @@ export class WeixinChannel extends Channel {
         this._remember_task_source(task_id);
         this._set_peer_current_task(peer_key, task_id);
         this._reply_to_event(event, "收到，继续处理。");
-        return;
-      }
-      if (
-        reply_to_message_id ||
-        reply_to_message_title ||
-        reply_to_message_text
-      ) {
-        this._reply_to_event(event, "❌ 这条会话还没有可继续的上下文。");
         return;
       }
     }
@@ -1100,22 +1061,8 @@ export class WeixinChannel extends Channel {
       account_id: (event["account_id"] as string | undefined) ?? "",
       peer_id,
       context_token: (event["context_token"] as string | undefined) ?? "",
-      reply_to_message_id: (event["message_id"] as string | undefined) ?? "",
       text,
     });
-  }
-
-  _extract_task_id_from_reply_reference(...parts: string[]): number | null {
-    for (const part of parts) {
-      if (!part) {
-        continue;
-      }
-      const match = /\bTask\s+#(\d+)\b/.exec(part);
-      if (match) {
-        return parseInt(match[1]!, 10);
-      }
-    }
-    return null;
   }
 
   _send_command(payload: Record<string, unknown>): void {

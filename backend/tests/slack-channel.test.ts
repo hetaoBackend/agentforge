@@ -563,7 +563,8 @@ test("test_send_fallback_to_default_channel", async () => {
   await _wait_threads();
   const call = web.chat_postMessage.mock.calls.at(-1)![0] as any;
   expect(call.channel).toBe("C-DEFAULT");
-  expect(call.text).toContain(":white_check_mark:");
+  expect(call.text).not.toStartWith(":white_check_mark:");
+  expect(call.text).toBe("ok");
   expect(call.text).toContain("ok");
   expect(call.text).not.toContain("Job");
   expect(call.text).not.toContain("Task #");
@@ -588,7 +589,8 @@ test("test_send_fallback_to_dm_user", async () => {
   await _wait_threads();
   const call = web.chat_postMessage.mock.calls.at(-1)![0] as any;
   expect(call.channel).toBe("D-DM");
-  expect(call.text).toContain(":white_check_mark:");
+  expect(call.text).not.toStartWith(":white_check_mark:");
+  expect(call.text).toBe("ok");
   expect(call.text).toContain("ok");
   expect(call.text).not.toContain("Job");
   expect(call.text).not.toContain("Task #");

@@ -43,6 +43,14 @@ class StubDB {
   update_task(task_id: number, updates: Record<string, unknown>): void {
     this.updated.push([task_id, updates]);
   }
+
+  get_task_runs(_task_id: number, _limit?: number): unknown {
+    return [];
+  }
+
+  get_run_output_events(_run_id: number, _limit?: number): unknown {
+    return [];
+  }
 }
 
 class StubScheduler {

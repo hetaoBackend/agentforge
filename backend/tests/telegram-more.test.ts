@@ -56,6 +56,14 @@ class StubDB {
     Object.assign(task, updates);
     this.tasks.set(task_id, task);
   }
+
+  get_task_runs(_task_id: number, _limit?: number): unknown {
+    return [];
+  }
+
+  get_run_output_events(_run_id: number, _limit?: number): unknown {
+    return [];
+  }
 }
 
 class StubScheduler {
@@ -383,7 +391,9 @@ test("test_send_completion_reaction_failure_still_sends", async () => {
 
   expect(log.text()).toContain("Failed to set reaction on message 100");
   expect(api.callsFor("sendMessage").length).toBe(1);
-  expect(channel._notification_map.get(900)).toBe(5);
+  expect(api.callsFor("sendMessage")[0]!.params).not.toHaveProperty(
+    "reply_to_message_id",
+  );
 });
 
 test("test_send_failure_default_chat_hides_task_label", async () => {
@@ -475,12 +485,12 @@ test("test_format_forwarded_from_unknown_chat_type", () => {
   expect(out).toContain("转发自: Mystery");
 });
 
-// ── resume-by-reply reaction failure branch ──────────────────────
+// ── current-session resume reaction failure branch ───────────────
 
-test("test_resume_by_reply_reaction_failure_logged", async () => {
+test("test_current_session_resume_reaction_failure_logged", async () => {
   const { channel, api, db } = _make_channel();
   db.tasks.set(5, { id: 5, status: "completed", session_id: "s5" });
-  channel._notification_map.set(200, 5);
+  channel._set_chat_current_task(10, 5);
   api.errors.set("setMessageReaction", new Error("no react"));
   const update = _fake_update({
     text: "continue",

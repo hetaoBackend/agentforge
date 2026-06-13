@@ -276,24 +276,23 @@ describe("Weixin bridge events and commands", () => {
     );
   });
 
-  test("sent events map bridge message ids back to task ids", () => {
+  test("sent events clear pending notification requests", () => {
     const { channel } = makeChannel();
     channel._pending_notifications.set("req-1", 42);
 
     channel._handle_sent_event({ request_id: "", message_id: "om_x" });
     channel._handle_sent_event({ request_id: "unknown", message_id: "om_x" });
-    expect(channel._notification_map.size).toBe(0);
-
-    channel._handle_sent_event({ request_id: "req-1", message_id: "msg-1" });
-    expect(channel._notification_map.get("msg-1")).toBe(42);
     expect(channel._pending_notifications.has("req-1")).toBe(true);
 
+    channel._handle_sent_event({ request_id: "req-1", message_id: "msg-1" });
+    expect(channel._pending_notifications.has("req-1")).toBe(false);
+
+    channel._pending_notifications.set("req-2", 43);
     channel._handle_sent_event({
-      request_id: "req-1",
+      request_id: "req-2",
       quoted_message_id: "quote-1",
     });
-    expect(channel._notification_map.get("quote-1")).toBe(42);
-    expect(channel._pending_notifications.has("req-1")).toBe(false);
+    expect(channel._pending_notifications.has("req-2")).toBe(false);
   });
 
   test("request login and logout reset status and write bridge commands", () => {
@@ -411,13 +410,14 @@ describe("Weixin bridge events and commands", () => {
         account_id: "acct",
         peer_id: "peer",
         context_token: "ctx",
-        reply_to_message_id: "origin-msg",
         image_paths: [image],
       }),
     );
+    expect(commands[0]).not.toHaveProperty("reply_to_message_id");
+    expect(commands[1]).not.toHaveProperty("reply_to_message_id");
     expect(commands[0]["text"]).not.toContain("Task #");
     expect(commands[0]["text"]).not.toContain("Render");
-    expect(commands[0]["text"]).toContain("✅");
+    expect(String(commands[0]["text"])).not.toStartWith("✅");
     expect(commands[0]["text"]).toContain("Done");
     expect(commands[0]["text"]).not.toContain(image);
     expect(commands[1]["text"]).not.toContain("Task #");
@@ -512,7 +512,11 @@ describe("Weixin inbound messages", () => {
         session_id: "sess-1",
         status: "completed",
       });
-      channel._notification_map.set("notice-1", 1);
+      db.tasks.set(9, {
+        id: 9,
+        session_id: "sess-9",
+        status: "completed",
+      });
       await channel._handle_message_event({
         text: "continue",
         reply_to_message_id: "notice-1",
@@ -538,6 +542,7 @@ describe("Weixin inbound messages", () => {
         context_token: "ctx2",
         message_id: "msg-resume",
       });
+      expect(channel._task_origin.has(9)).toBe(false);
       expect(
         writtenCommands(proc).every(
           (cmd) => !String(cmd["text"]).includes("▶️"),
@@ -552,11 +557,9 @@ describe("Weixin inbound messages", () => {
         peer_id: "other-peer",
         message_id: "msg-no-session",
       });
-      expect(
-        writtenCommands(proc).some((cmd) =>
-          String(cmd["text"]).includes("没有可继续的上下文"),
-        ),
-      ).toBe(true);
+      expect(scheduler.submitted).toHaveLength(2);
+      expect(scheduler.submitted[1]!.prompt).toBe("resume?");
+      expect(writtenCommands(proc).at(-1)?.["text"]).toBe("收到，正在处理。");
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }
@@ -831,13 +834,9 @@ describe("Weixin image and task-output helpers", () => {
         account_id: "acct",
         peer_id: "user-1",
         context_token: "ctx",
-        reply_to_message_id: "msg-1",
         text: "hello",
       }),
     ]);
-    expect(
-      channel._extract_task_id_from_reply_reference("", "Task #123 done"),
-    ).toBe(123);
-    expect(channel._extract_task_id_from_reply_reference("nothing")).toBeNull();
+    expect(writtenCommands(proc)[0]).not.toHaveProperty("reply_to_message_id");
   });
 });

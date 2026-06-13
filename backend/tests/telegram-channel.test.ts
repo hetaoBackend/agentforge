@@ -9,6 +9,9 @@
 // simply awaits its API calls.
 
 import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 
 import {
   MessageBus,
@@ -34,6 +37,8 @@ class StubDB {
   settings = new Map<string, string>();
   tasks = new Map<number, Record<string, unknown>>();
   updated: Array<[number, Record<string, unknown>]> = [];
+  runs: unknown = [];
+  events: unknown = [];
 
   get_setting(key: string, defaultValue: string | null = null): string | null {
     return this.settings.get(key) ?? defaultValue;
@@ -52,6 +57,14 @@ class StubDB {
     const task = this.tasks.get(task_id) ?? { id: task_id };
     Object.assign(task, updates);
     this.tasks.set(task_id, task);
+  }
+
+  get_task_runs(_task_id: number, _limit?: number): unknown {
+    return this.runs;
+  }
+
+  get_run_output_events(_run_id: number, _limit?: number): unknown {
+    return this.events;
   }
 }
 
@@ -486,31 +499,34 @@ test("test_handle_text_message_new_command_starts_new_chat_session", async () =>
   expect(channel._task_origin.get(2)).toEqual([10, 101, 101]);
 });
 
-test("test_handle_text_message_resume_by_reply", async () => {
+test("test_handle_text_message_reply_does_not_switch_chat_session", async () => {
   const { channel, api, db } = _make_channel();
+  db.tasks.set(1, { id: 1, status: "completed", session_id: "s1" });
   db.tasks.set(5, { id: 5, status: "completed", session_id: "s5" });
-  channel._notification_map.set(200, 5);
+  channel._set_chat_current_task(10, 1);
   const update = _fake_update({
     text: "continue",
     message_id: 300,
     reply: { message_id: 200 },
   });
   await channel._handle_text_message(update, _ctx());
-  expect(db.updated[db.updated.length - 1]![0]).toBe(5);
+  expect(db.updated[db.updated.length - 1]![0]).toBe(1);
   expect(db.updated[db.updated.length - 1]![1]["prompt"]).toBe("continue");
-  expect(channel._task_origin.get(5)).toEqual([10, 300, 300]);
+  expect(channel._task_origin.get(1)).toEqual([10, 300, 300]);
   expect(api.callsFor("setMessageReaction").length).toBeGreaterThan(0);
   expect(api.callsFor("sendMessage").length).toBe(0);
 });
 
-test("test_handle_text_message_resume_no_session", async () => {
-  const { channel, api, db } = _make_channel();
+test("test_handle_text_message_reply_without_current_session_creates_task", async () => {
+  const { channel, api, db, scheduler } = _make_channel();
   db.tasks.set(6, { id: 6, status: "completed" }); // no session_id
-  channel._notification_map.set(201, 6);
   const update = _fake_update({ text: "continue", reply: { message_id: 201 } });
   await channel._handle_text_message(update, _ctx());
   expect(db.updated).toEqual([]);
-  expect(api.lastText()).toContain("没有可继续的上下文");
+  expect(scheduler.submitted).toHaveLength(1);
+  expect(scheduler.submitted[0]!.prompt).toBe("continue");
+  expect(api.callsFor("setMessageReaction").length).toBe(1);
+  expect(api.callsFor("sendMessage").length).toBe(0);
 });
 
 test("test_handle_text_message_reply_unknown_notification_creates_task", async () => {
@@ -541,7 +557,12 @@ test("test_cmd_help_authorised_and_not", async () => {
   await channel._cmd_help(ok, _ctx());
   expect(api.lastText()).not.toContain("task");
   expect(api.lastText()).toContain("/new");
+  expect(api.lastText()).not.toContain("\\.");
+  expect(api.lastText()).toContain("current session");
   expect(api.callsFor("sendMessage").length).toBe(1);
+  expect(api.callsFor("sendMessage")[0]!.params).not.toHaveProperty(
+    "parse_mode",
+  );
 
   const denied = _fake_update({ user_id: 99 });
   await channel._cmd_help(denied, _ctx());
@@ -666,8 +687,101 @@ test("test_send_completion_to_origin", async () => {
   expect(text).not.toContain("[Telegram]");
   expect(text).not.toContain("Fix login");
   expect(text).toContain("done");
-  expect(channel._notification_map.get(777)).toBe(3);
+  expect(text).not.toStartWith("✅");
+  expect(api.callsFor("sendMessage")[0]!.params).not.toHaveProperty(
+    "reply_to_message_id",
+  );
   expect(channel._task_origin.has(3)).toBe(false);
+});
+
+test("test_send_completion_renders_markdown_as_telegram_html", async () => {
+  const { channel, api } = _make_channel();
+  _patch_loop(channel);
+  channel._task_origin.set(30, [10, 100, 100]);
+
+  await channel.send(
+    makeOutboundMessage({
+      type: OutboundMessageType.TASK_COMPLETED,
+      task_id: 30,
+      payload: {
+        title: "Render",
+        result: "**Done**\n\n```ts\nconst ok = 1 < 2;\n```",
+      },
+    }),
+  );
+
+  const params = api.callsFor("sendMessage")[0]!.params;
+  expect(params["parse_mode"]).toBe("HTML");
+  expect(params["text"]).toContain("<b>Done</b>");
+  expect(params["text"]).toContain(
+    '<pre><code class="language-ts">const ok = 1 &lt; 2;</code></pre>',
+  );
+});
+
+test("test_send_completion_sends_generated_images_as_photos", async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "agentforge-tg-"));
+  const image = path.join(tmpDir, "generated.png");
+  fs.writeFileSync(
+    image,
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+  );
+  const { channel, api, db } = _make_channel();
+  _patch_loop(channel);
+  db.tasks.set(32, { id: 32, title: "Render", working_dir: tmpDir });
+  db.runs = [{ id: 320 }];
+  db.events = [
+    { event_type: "generated_image", content: "{bad json" },
+    {
+      event_type: "generated_image",
+      content: JSON.stringify({ path: image }),
+    },
+  ];
+  channel._task_origin.set(32, [10, 100, 100]);
+
+  try {
+    await channel.send(
+      makeOutboundMessage({
+        type: OutboundMessageType.TASK_COMPLETED,
+        task_id: 32,
+        payload: {
+          title: "Render",
+          result: `Done\n- ${image}\n![out](generated.png)`,
+        },
+      }),
+    );
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+
+  const send = api.callsFor("sendMessage")[0]!;
+  expect(send.params["chat_id"]).toBe(10);
+  expect(send.params["text"]).toContain("Done");
+  expect(String(send.params["text"])).not.toContain(image);
+  expect(String(send.params["text"])).not.toContain("generated.png");
+  expect(String(send.params["text"])).not.toStartWith("✅");
+
+  const photos = api.callsFor("sendPhoto");
+  expect(photos).toHaveLength(1);
+  expect(photos[0]!.params["chat_id"]).toBe(10);
+  expect(photos[0]!.params["photo"]).toBeInstanceOf(Blob);
+});
+
+test("test_send_completion_escapes_html_when_rendering_markdown", async () => {
+  const { channel, api } = _make_channel();
+  _patch_loop(channel);
+  channel._task_origin.set(31, [10, 100, 100]);
+
+  await channel.send(
+    makeOutboundMessage({
+      type: OutboundMessageType.TASK_COMPLETED,
+      task_id: 31,
+      payload: { title: "Render", result: "**1 < 2 & 3 > 2**" },
+    }),
+  );
+
+  const params = api.callsFor("sendMessage")[0]!.params;
+  expect(params["parse_mode"]).toBe("HTML");
+  expect(params["text"]).toBe("<b>1 &lt; 2 &amp; 3 &gt; 2</b>");
 });
 
 test("test_send_failure_to_origin", async () => {
@@ -689,6 +803,9 @@ test("test_send_failure_to_origin", async () => {
   expect(text).not.toContain("Broke");
   expect(text).toContain("boom");
   expect(text).not.toContain("/status");
+  expect(api.callsFor("sendMessage")[0]!.params).not.toHaveProperty(
+    "reply_to_message_id",
+  );
 });
 
 test("test_send_not_running_drops", async () => {
@@ -734,6 +851,8 @@ test("test_send_uses_default_chat_id", async () => {
   const sends = api.callsFor("sendMessage");
   expect(sends.length).toBe(1);
   expect(sends[0]!.params["chat_id"]).toBe(-100123);
+  expect(String(sends[0]!.params["text"])).not.toStartWith("✅");
+  expect(sends[0]!.params["text"]).toBe("ok");
 });
 
 test("test_send_no_origin_no_default_skips", async () => {

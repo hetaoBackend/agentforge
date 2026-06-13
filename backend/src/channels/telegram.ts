@@ -38,6 +38,10 @@
  *   asyncio.run_coroutine_threadsafe(coro) → plain `await` (single runtime)
  */
 
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+
 import {
   Channel,
   MessageBus,
@@ -64,19 +68,18 @@ export function _set_telegram_available(value: boolean): void {
 }
 
 export const HELP_TEXT =
-  "👋 *AgentForge Bot*\n\n" +
-  "Send me any message and I'll continue this chat's session\\.\n" +
-  "Use /new when you want to start a fresh session\\.\n\n" +
-  "*Commands:*\n" +
-  "/new `<message>` — start a fresh session\n" +
-  "/dir `<path>` — set default working directory\n" +
-  "　　　　e\\.g\\. `/dir ~/workspace/myproject`\n" +
-  "/agent `<name>` — switch coding agent \\(`claude` / `codex`\\)\n" +
+  "AgentForge Bot\n\n" +
+  "Send me any message and I'll continue this chat's current session.\n" +
+  "Use /new when you want to start a fresh session.\n\n" +
+  "Commands:\n" +
+  "/new <message> — start a fresh session\n" +
+  "/dir <path> — set default working directory\n" +
+  "　　　　e.g. /dir ~/workspace/myproject\n" +
+  "/agent <name> — switch coding agent (claude / codex)\n" +
   "/help — show this message\n\n" +
-  "*Tips:*\n" +
-  "• You can also mention a path in your message and it will be used automatically\\.\n" +
-  "　e\\.g\\. _在 ~/myapp 里帮我修复登录 bug_\n" +
-  "• Reply to any result notification to continue the conversation\\.";
+  "Tips:\n" +
+  "• You can also mention a path in your message and it will be used automatically.\n" +
+  "　e.g. 在 ~/myapp 里帮我修复登录 bug";
 
 // ── Bot-API-shaped update types ───────────────────────────────────
 
@@ -120,6 +123,8 @@ export interface TgContext {
 /** Minimal structural view of TaskDB used by this channel. */
 export interface TelegramDB extends TaskDBLike, SettingsDB {
   update_task(task_id: number, updates: Record<string, unknown>): void;
+  get_task_runs(task_id: number, limit?: number): unknown;
+  get_run_output_events(run_id: number, limit?: number): unknown;
 }
 
 /**
@@ -144,10 +149,15 @@ export type TelegramApi = (
 /** Default TelegramApi implementation: fetch against api.telegram.org. */
 export function make_fetch_api(token: string): TelegramApi {
   return async (method: string, params: Record<string, unknown> = {}) => {
+    const body = _telegram_api_body(params);
     const resp = await fetch(`https://api.telegram.org/bot${token}/${method}`, {
       method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(params),
+      ...(body instanceof FormData
+        ? { body }
+        : {
+            headers: { "content-type": "application/json" },
+            body,
+          }),
     });
     const data = (await resp.json()) as {
       ok?: boolean;
@@ -163,9 +173,41 @@ export function make_fetch_api(token: string): TelegramApi {
   };
 }
 
+function _telegram_api_body(
+  params: Record<string, unknown>,
+): string | FormData {
+  if (!Object.values(params).some((value) => value instanceof Blob)) {
+    return JSON.stringify(params);
+  }
+
+  const form = new FormData();
+  for (const [key, value] of Object.entries(params)) {
+    if (value instanceof Blob) {
+      const maybe_name =
+        "name" in value && typeof value.name === "string" ? value.name : key;
+      form.append(key, value, maybe_name);
+    } else if (value !== undefined && value !== null) {
+      form.append(
+        key,
+        typeof value === "string" ? value : JSON.stringify(value),
+      );
+    }
+  }
+  return form;
+}
+
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
+
+export const TELEGRAM_UPLOADABLE_IMAGE_SUFFIXES = new Set([
+  ".png",
+  ".jpg",
+  ".jpeg",
+  ".gif",
+  ".webp",
+]);
+const TELEGRAM_MARKDOWN_IMAGE_RE = /!\[[^\]]*]\(([^)]+)\)/g;
 
 // ── TelegramChannel ───────────────────────────────────────────────
 
@@ -184,13 +226,10 @@ export class TelegramChannel extends Channel {
   /** getUpdates offset (next update_id to fetch). */
   _offset = 0;
 
-  // Maps task_id → (chat_id, reply_message_id, reaction_message_id) for reply-back and reactions
-  // reply_message_id: used for reply_to_message_id when posting completion
+  // Maps task_id → (chat_id, origin_message_id, reaction_message_id) for delivery and reactions
+  // origin_message_id: the message that started the task, kept for compatibility with older origins
   // reaction_message_id: used for adding emoji reactions (may differ on resume)
   _task_origin: Map<number, [number | string, number, number]> = new Map();
-
-  // Maps notification message_id → task_id for resume-by-reply
-  _notification_map: Map<number, number> = new Map();
 
   // Telegram has no first-class thread/session primitive for ordinary chats.
   // Treat each chat as one active agent session until /new starts another.
@@ -283,6 +322,7 @@ export class TelegramChannel extends Channel {
     const origin = this._task_origin.get(task_id);
 
     const is_completed = msg.type === OutboundMessageType.TASK_COMPLETED;
+    let image_paths: string[] = [];
     let body: string;
     if (is_completed) {
       let result_text = (
@@ -292,6 +332,16 @@ export class TelegramChannel extends Channel {
         result_text = result_text.slice(0, 10000) + "\n…(truncated)";
       }
       body = result_text || "Done.";
+      const task = this.db.get_task(task_id) ?? null;
+      image_paths = this._collect_generated_image_paths(task_id, body, task);
+      if (image_paths.length > 0) {
+        body = this._hide_generated_image_paths(
+          body,
+          image_paths.length,
+          image_paths,
+          ((task ?? {})["working_dir"] as string | null | undefined) ?? null,
+        );
+      }
     } else {
       let error_text = (
         (msg.payload["error"] as string | null | undefined) || "Unknown error"
@@ -309,8 +359,7 @@ export class TelegramChannel extends Channel {
     let text: string;
     if (origin) {
       [chat_id, orig_message_id, reaction_message_id] = origin;
-      const status_emoji = is_completed ? "✅" : "❌";
-      text = `${status_emoji}\n${body}`;
+      text = is_completed ? body : `❌\n${body}`;
     } else {
       const default_chat_id =
         this.db.get_setting("telegram_default_chat_id", "") ?? "";
@@ -324,8 +373,7 @@ export class TelegramChannel extends Channel {
       chat_id = /^\d+$/.test(String(default_chat_id).replace(/^-+/, ""))
         ? parseInt(String(default_chat_id), 10)
         : default_chat_id;
-      const status_emoji = is_completed ? "✅" : "❌";
-      text = `${status_emoji}\n${body}`;
+      text = is_completed ? body : `❌\n${body}`;
       console.log(
         `[Telegram] Using default chat_id=${chat_id} for task #${task_id}`,
       );
@@ -355,19 +403,13 @@ export class TelegramChannel extends Channel {
         }
       }
 
-      const params: Record<string, unknown> = { chat_id, text };
-      if (orig_message_id !== null)
-        params["reply_to_message_id"] = orig_message_id;
-      const sent = (await api("sendMessage", params)) as
-        | { message_id: number }
-        | null
-        | undefined;
-      if (sent) {
-        this._notification_map.set(sent.message_id, task_id);
-        console.log(
-          `[Telegram] Notification msg_id=${sent.message_id} mapped to task #${task_id}`,
-        );
-      }
+      const params: Record<string, unknown> = {
+        chat_id,
+        text: _telegram_markdown_to_html(text),
+        parse_mode: "HTML",
+      };
+      await api("sendMessage", params);
+      await this._send_generated_images(chat_id, image_paths);
     } catch (e) {
       console.log(`[Telegram] Failed to send notification to ${chat_id}: ${e}`);
     }
@@ -479,6 +521,27 @@ export class TelegramChannel extends Channel {
     }
   }
 
+  async _send_generated_images(
+    chat_id: number | string,
+    image_paths: string[],
+  ): Promise<void> {
+    if (!this._api || image_paths.length === 0) {
+      return;
+    }
+    for (const image_path of image_paths) {
+      try {
+        await this._api("sendPhoto", {
+          chat_id,
+          photo: Bun.file(image_path),
+        });
+      } catch (e) {
+        console.log(
+          `[Telegram] Failed to send generated image ${image_path}: ${e}`,
+        );
+      }
+    }
+  }
+
   _is_allowed(user_id: number): boolean {
     if (this._allowed_users.size === 0) return true;
     return this._allowed_users.has(user_id);
@@ -545,7 +608,7 @@ export class TelegramChannel extends Channel {
     return parts.join("\n");
   }
 
-  /** Handle any non-command text: resume-by-reply or create task. */
+  /** Handle any non-command text: continue the chat session or create a task. */
   async _handle_text_message(
     update: TgUpdate,
     _context: TgContext,
@@ -592,47 +655,6 @@ export class TelegramChannel extends Channel {
 
     // ── 检测转发消息 ───────────────────────────────────────
     text = this._format_forwarded_text(text, update);
-
-    // ── reply to a notification → resume task ─────────────────
-    const reply = update.message!.reply_to_message;
-    if (reply && !force_new_session) {
-      const task_id = this._notification_map.get(reply.message_id);
-      if (task_id) {
-        const task = this.db.get_task(task_id);
-        if (task && task["session_id"]) {
-          this.db.update_task(task_id, {
-            status: "pending",
-            prompt: text,
-            result: null,
-            error: null,
-            question: null,
-          });
-          this._task_origin.set(task_id, [
-            chat_id,
-            update.message!.message_id,
-            update.message!.message_id,
-          ]);
-          this._remember_task_source(task_id);
-          this._set_chat_current_task(chat_id, task_id);
-
-          // Add "eyes" reaction without sending an extra ack message.
-          try {
-            await this._api!("setMessageReaction", {
-              chat_id,
-              message_id: update.message!.message_id,
-              reaction: [{ type: "emoji", emoji: "👀" }],
-            });
-          } catch (e) {
-            console.log(`[Telegram] Failed to set resume reaction: ${e}`);
-          }
-          console.log(`[Telegram] Auto-resuming task ${task_id} from reply`);
-          return;
-        } else {
-          await this._reply_text(update, "❌ 这条会话还没有可继续的上下文。");
-          return;
-        }
-      }
-    }
 
     const current_task_id = force_new_session
       ? null
@@ -731,7 +753,7 @@ export class TelegramChannel extends Channel {
       );
       return;
     }
-    await this._reply_text(update, HELP_TEXT, { parse_mode: "MarkdownV2" });
+    await this._reply_text(update, HELP_TEXT);
   }
 
   async _cmd_status(update: TgUpdate, context: TgContext): Promise<void> {
@@ -911,14 +933,343 @@ export class TelegramChannel extends Channel {
     this._chat_current_task.delete(this._chat_key(chat_id));
     this.db.set_setting(this._chat_current_task_setting_key(chat_id), "");
   }
+
+  _collect_generated_image_paths(
+    task_id: number,
+    content: string,
+    task: Record<string, unknown> | null = null,
+  ): string[] {
+    const paths = this._generated_image_paths_for_task(task_id);
+    paths.push(
+      ...this._generated_image_paths_from_markdown(
+        content,
+        ((task ?? {})["working_dir"] as string | null | undefined) ?? null,
+      ),
+    );
+    return this._dedupe_image_paths(paths);
+  }
+
+  _generated_image_paths_for_task(task_id: number): string[] {
+    let runs: unknown;
+    try {
+      runs = this.db.get_task_runs(task_id, 1);
+    } catch (exc) {
+      console.log(
+        `[Telegram] Failed to load runs for generated images: ${exc}`,
+      );
+      return [];
+    }
+    if (!Array.isArray(runs) || runs.length === 0) {
+      return [];
+    }
+
+    const first: unknown = runs[0];
+    const run_id = _is_plain_object(first) ? first["id"] : null;
+    if (!run_id) {
+      return [];
+    }
+    let events: unknown;
+    try {
+      events = this.db.get_run_output_events(run_id as number, 1000);
+    } catch (exc) {
+      console.log(
+        `[Telegram] Failed to load output events for generated images: ${exc}`,
+      );
+      return [];
+    }
+    if (!Array.isArray(events)) {
+      return [];
+    }
+
+    const paths: string[] = [];
+    for (const event of events) {
+      if (
+        !_is_plain_object(event) ||
+        event["event_type"] !== "generated_image"
+      ) {
+        continue;
+      }
+      let payload: unknown;
+      try {
+        payload = JSON.parse((event["content"] as string | undefined) || "{}");
+      } catch {
+        continue;
+      }
+      const p = _is_plain_object(payload) ? payload["path"] : null;
+      if (p) {
+        paths.push(p as string);
+      }
+    }
+    return paths;
+  }
+
+  _generated_image_paths_from_markdown(
+    content: string,
+    working_dir: string | null = null,
+  ): string[] {
+    const paths: string[] = [];
+    for (const match of (content || "").matchAll(TELEGRAM_MARKDOWN_IMAGE_RE)) {
+      const image_path = this._local_image_path_from_reference(
+        match[1]!,
+        working_dir,
+      );
+      if (image_path) {
+        paths.push(image_path);
+      }
+    }
+    return paths;
+  }
+
+  _local_image_path_from_reference(
+    reference: string,
+    working_dir: string | null = null,
+  ): string | null {
+    let target = this._markdown_image_reference_target(reference);
+    if (
+      !target ||
+      target.startsWith("http://") ||
+      target.startsWith("https://") ||
+      target.startsWith("data:")
+    ) {
+      return null;
+    }
+    if (target.startsWith("file://")) {
+      target = _file_url_path(target);
+    } else if (target.startsWith("sandbox:")) {
+      target = target.slice("sandbox:".length);
+    }
+    target = _unquote(target).trim();
+    if (!target) {
+      return null;
+    }
+
+    let p = _expanduser(target);
+    if (!path.isAbsolute(p) && working_dir) {
+      p = path.join(_expanduser(working_dir), p);
+    }
+    return this._canonical_image_path(p);
+  }
+
+  _markdown_image_reference_target(reference: string): string {
+    const raw = (reference || "").trim();
+    if (!raw) {
+      return "";
+    }
+    if (raw.startsWith("<")) {
+      const end = raw.indexOf(">");
+      if (end >= 0) {
+        return raw.slice(1, end).trim();
+      }
+    }
+    if (raw[0] === "'" || raw[0] === '"') {
+      const end = raw.indexOf(raw[0]!, 1);
+      if (end > 0) {
+        return raw.slice(1, end).trim();
+      }
+    }
+    const titled = /^(.+?)\s+['"][^'"]*['"]\s*$/.exec(raw);
+    return (titled ? titled[1]! : raw).trim();
+  }
+
+  _dedupe_image_paths(image_paths: string[]): string[] {
+    const deduped: string[] = [];
+    const seen = new Set<string>();
+    for (const image_path of image_paths) {
+      const canonical = this._canonical_image_path(image_path);
+      if (!canonical || seen.has(canonical)) {
+        continue;
+      }
+      seen.add(canonical);
+      deduped.push(canonical);
+    }
+    return deduped;
+  }
+
+  _canonical_image_path(image_path: string): string | null {
+    try {
+      const p = _expanduser(image_path);
+      if (
+        !TELEGRAM_UPLOADABLE_IMAGE_SUFFIXES.has(path.extname(p).toLowerCase())
+      ) {
+        return null;
+      }
+      const stat = fs.statSync(p, { throwIfNoEntry: false });
+      if (!stat || !stat.isFile()) {
+        return null;
+      }
+      return fs.realpathSync(path.resolve(p));
+    } catch {
+      return null;
+    }
+  }
+
+  _hide_generated_image_paths(
+    content: string,
+    image_count: number,
+    uploaded_paths: string[] | null = null,
+    working_dir: string | null = null,
+  ): string {
+    const uploaded = new Set<string>();
+    for (const p of uploaded_paths ?? []) {
+      const canonical = this._canonical_image_path(p);
+      if (canonical) {
+        uploaded.add(canonical);
+      }
+    }
+    const lines: string[] = [];
+    for (const line of (content || "").split(/\r\n|\r|\n/)) {
+      const stripped = line.trim();
+      if (!stripped) {
+        lines.push("");
+        continue;
+      }
+      if (this._line_is_uploaded_image_path(stripped, uploaded, working_dir)) {
+        continue;
+      }
+      const cleaned_line = this._remove_uploaded_markdown_image_refs(
+        line,
+        uploaded,
+        working_dir,
+      );
+      const visible = cleaned_line.trim();
+      if (visible && visible !== "-" && visible !== "*" && visible !== "+") {
+        lines.push(cleaned_line.replace(/\s+$/, ""));
+      }
+    }
+    const cleaned = lines.join("\n").trim();
+    if (!cleaned || cleaned.startsWith("已生成")) {
+      return `已生成 ${image_count} 张图片。`;
+    }
+    return cleaned;
+  }
+
+  _line_is_uploaded_image_path(
+    stripped_line: string,
+    uploaded_paths: Set<string>,
+    working_dir: string | null = null,
+  ): boolean {
+    if (!stripped_line.startsWith("- ")) {
+      return false;
+    }
+    const candidate = stripped_line.slice(2).trim();
+    const canonical =
+      this._local_image_path_from_reference(candidate, working_dir) ??
+      this._canonical_image_path(candidate);
+    if (canonical && uploaded_paths.has(canonical)) {
+      return true;
+    }
+    return stripped_line.includes("/.codex/generated_images/");
+  }
+
+  _remove_uploaded_markdown_image_refs(
+    line: string,
+    uploaded_paths: Set<string>,
+    working_dir: string | null = null,
+  ): string {
+    if (uploaded_paths.size === 0) {
+      return line;
+    }
+
+    return line.replace(TELEGRAM_MARKDOWN_IMAGE_RE, (match, ref: string) => {
+      const image_path = this._local_image_path_from_reference(
+        ref,
+        working_dir,
+      );
+      const canonical = image_path
+        ? this._canonical_image_path(image_path)
+        : null;
+      return canonical !== null && uploaded_paths.has(canonical) ? "" : match;
+    });
+  }
 }
 
 // ── helpers ──────────────────────────────────────────────────────────────────
+
+/** ≙ urlparse(target).path for file:// references (scheme + netloc dropped). */
+function _file_url_path(target: string): string {
+  const rest = target.slice("file://".length);
+  const slash = rest.indexOf("/");
+  return slash >= 0 ? rest.slice(slash) : "";
+}
+
+/** ≙ urllib.parse.unquote (left untouched when percent-decoding fails). */
+function _unquote(value: string): string {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
+}
+
+/** ≙ Path.expanduser(). */
+function _expanduser(p: string): string {
+  if (p === "~") return os.homedir();
+  if (p.startsWith("~/")) return path.join(os.homedir(), p.slice(2));
+  return p;
+}
+
+function _is_plain_object(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
 
 /** Escape special MarkdownV2 characters. */
 export function _escape_md(text: string): string {
   const special = "\\_*[]()~`>#+-=|{}.!";
   return [...text].map((c) => (special.includes(c) ? `\\${c}` : c)).join("");
+}
+
+function _escape_html(text: string): string {
+  return text
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
+
+function _escape_html_attr(text: string): string {
+  return _escape_html(text).replace(/"/g, "&quot;");
+}
+
+function _safe_telegram_link_href(url: string): string | null {
+  const trimmed = url.trim();
+  if (!/^(https?:\/\/|tg:\/\/)/i.test(trimmed)) {
+    return null;
+  }
+  return _escape_html_attr(trimmed);
+}
+
+export function _telegram_markdown_to_html(text: string): string {
+  const code_blocks: string[] = [];
+  const with_code_placeholders = text.replace(
+    /```([A-Za-z0-9_+.-]*)[ \t]*\n([\s\S]*?)```/g,
+    (_match, lang: string, code: string) => {
+      const normalized_code = String(code).replace(/\n$/, "");
+      const safe_lang = /^[A-Za-z0-9_+.-]+$/.test(lang)
+        ? ` class="language-${_escape_html_attr(lang)}"`
+        : "";
+      const html = `<pre><code${safe_lang}>${_escape_html(normalized_code)}</code></pre>`;
+      const index = code_blocks.push(html) - 1;
+      return `\u0000CODE_BLOCK_${index}\u0000`;
+    },
+  );
+
+  let html = _escape_html(with_code_placeholders);
+
+  html = html.replace(
+    /\[([^\]\n]+)\]\(([^)\s]+)\)/g,
+    (match: string, label: string, url: string) => {
+      const href = _safe_telegram_link_href(url);
+      return href ? `<a href="${href}">${label}</a>` : match;
+    },
+  );
+  html = html.replace(/^#{1,6}\s+(.+)$/gm, "<b>$1</b>");
+  html = html.replace(/\*\*([^*\n]+)\*\*/g, "<b>$1</b>");
+  html = html.replace(/__([^_\n]+)__/g, "<b>$1</b>");
+  html = html.replace(/`([^`\n]+)`/g, "<code>$1</code>");
+
+  return html.replace(
+    /\u0000CODE_BLOCK_(\d+)\u0000/g,
+    (_match, idx: string) => code_blocks[Number(idx)] ?? "",
+  );
 }
 
 // ── factory helper ───────────────────────────────────────────────────────────
