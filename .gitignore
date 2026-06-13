@@ -11,6 +11,7 @@ wheels/
 
 # JS/Bun dependencies
 node_modules/
+.worktrees/
 
 # Virtual environments
 .venv
