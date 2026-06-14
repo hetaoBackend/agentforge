@@ -8,9 +8,11 @@ import { expect, mock, test } from "bun:test";
 
 import {
   bus_notify,
+  InboundMessageType,
   MessageBus,
   makeOutboundMessage,
   OutboundMessageType,
+  type InboundMessage,
 } from "../src/bus.ts";
 import { _hooks as dir_hooks } from "../src/channels/dir_utils.ts";
 import { SlackChannel } from "../src/channels/slack.ts";
@@ -45,10 +47,26 @@ class StubDB implements SlackTaskDB {
 
 class StubScheduler {
   submitted: Task[] = [];
+  inbound: InboundMessage[] = [];
+  nextBriefId = 1;
 
   submit_task(task: Task): number {
     this.submitted.push(task);
     return this.submitted.length;
+  }
+
+  handle_inbound_message(msg: InboundMessage): Record<string, unknown> {
+    this.inbound.push(msg);
+    if (msg.type === InboundMessageType.CREATE_BRIEF) {
+      return { brief_id: this.nextBriefId++, status: "draft" };
+    }
+    if (msg.type === InboundMessageType.CONFIRM_BRIEF) {
+      return { task_id: this.submitted.length + 1, status: "created" };
+    }
+    if (msg.type === InboundMessageType.DISCARD_BRIEF) {
+      return { brief_id: msg.payload["brief_id"], status: "discarded" };
+    }
+    return { status: "ignored" };
   }
 }
 
@@ -245,6 +263,50 @@ test("test_unknown_command_replies_help", async () => {
   const { channel, web } = _make_channel();
   await channel._handle_user_message("/bogus", "C1", null, "1.0");
   expect(last_text(web)).toContain("AgentForge Bot");
+});
+
+test("test_brief_command_creates_draft_without_submitting_task", async () => {
+  const scheduler = new StubScheduler();
+  const { channel, web } = _make_channel(undefined, scheduler);
+
+  await with_resolved_dir("~/repo", () =>
+    channel._handle_user_message(
+      "/brief fix the login redirect",
+      "C1",
+      null,
+      "1.0",
+    ),
+  );
+
+  expect(scheduler.submitted).toHaveLength(0);
+  expect(scheduler.inbound).toHaveLength(1);
+  expect(scheduler.inbound[0]!.type).toBe(InboundMessageType.CREATE_BRIEF);
+  expect(scheduler.inbound[0]!.payload["goal"]).toBe("fix the login redirect");
+  expect(scheduler.inbound[0]!.payload["working_dir"]).toBe("~/repo");
+  expect(scheduler.inbound[0]!.payload["source_ref"]).toBe("C1:1.0");
+  expect(last_text(web)).toContain("Draft task brief #1");
+  expect(last_text(web)).toContain("/confirm-brief 1");
+});
+
+test("test_confirm_and_discard_brief_commands_use_text_fallback", async () => {
+  const scheduler = new StubScheduler();
+  const { channel, bus, web } = _make_channel(undefined, scheduler);
+
+  await channel._handle_user_message("/confirm-brief 4", "C1", null, "2.0");
+
+  expect(scheduler.inbound[0]!.type).toBe(InboundMessageType.CONFIRM_BRIEF);
+  expect(scheduler.inbound[0]!.payload["brief_id"]).toBe(4);
+  expect(channel._task_origin.get(1)).toEqual(["C1", "2.0", "2.0"]);
+  expect(channel._thread_ts_map.get("2.0")).toBe(1);
+  expect(bus.get_task_source(1)).toBe("slack");
+  expect(last_text(web)).toContain("Task #1");
+  expect(last_text(web)).toContain("Thinking");
+
+  await channel._handle_user_message("/discard-brief #4", "C1", null, "3.0");
+
+  expect(scheduler.inbound[1]!.type).toBe(InboundMessageType.DISCARD_BRIEF);
+  expect(scheduler.inbound[1]!.payload["brief_id"]).toBe(4);
+  expect(last_text(web)).toContain("discarded");
 });
 
 // ── commands ─────────────────────────────────────────────────────

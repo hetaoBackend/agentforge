@@ -25,11 +25,25 @@
  *   event loop).
  */
 
-import { Channel, OutboundMessageType } from "../bus.ts";
-import type { MessageBus, OutboundMessage, TaskDBLike } from "../bus.ts";
+import { Channel, InboundMessageType, OutboundMessageType } from "../bus.ts";
+import type {
+  InboundMessage,
+  MessageBus,
+  OutboundMessage,
+  TaskDBLike,
+} from "../bus.ts";
 import { makeTask, ScheduleType } from "../types.ts";
 import { handle_agent_command, resolve_agent } from "./agent_utils.ts";
 import type { SettingsDB } from "./agent_utils.ts";
+import {
+  build_brief_payload,
+  format_brief_created_reply,
+  format_brief_discarded_reply,
+  format_brief_help,
+  format_brief_started_reply,
+  parse_brief_command,
+  type BriefCommand,
+} from "./brief_utils.ts";
 import { handle_dir_command, resolve_working_dir } from "./dir_utils.ts";
 import type { Task } from "../types.ts";
 
@@ -238,6 +252,7 @@ export interface SlackTaskDB extends TaskDBLike, SettingsDB {
  */
 export interface SchedulerLike {
   submit_task(task: Task): number;
+  handle_inbound_message?(msg: InboundMessage): Record<string, unknown>;
 }
 
 // ── channel ───────────────────────────────────────────────────────────────
@@ -525,8 +540,11 @@ export class SlackChannel extends Channel {
       const ws = text.search(/\s/);
       const cmd = (ws === -1 ? text : text.slice(0, ws)).toLowerCase();
       const args = ws === -1 ? "" : text.slice(ws + 1).trim();
+      const brief_cmd = parse_brief_command(text);
 
-      if (cmd === "/status") {
+      if (brief_cmd !== null) {
+        await this._handle_brief_command(brief_cmd, channel_id, msg_ts);
+      } else if (cmd === "/status") {
         await this._cmd_status(args, channel_id, msg_ts);
       } else if (cmd === "/cancel") {
         await this._cmd_cancel(args, channel_id, msg_ts);
@@ -627,6 +645,107 @@ export class SlackChannel extends Channel {
   }
 
   // ── commands ──────────────────────────────────────────────────
+
+  async _handle_brief_command(
+    command: BriefCommand,
+    channel_id: string,
+    msg_ts: string,
+  ): Promise<void> {
+    if (command.action === "help") {
+      await this._reply(channel_id, msg_ts, format_brief_help(command.reason));
+      return;
+    }
+    if (!this.scheduler.handle_inbound_message) {
+      await this._reply(
+        channel_id,
+        msg_ts,
+        ":x: Task brief flow is not available in this scheduler.",
+      );
+      return;
+    }
+
+    try {
+      if (command.action === "create") {
+        const payload = build_brief_payload({
+          channel: "slack",
+          goal: command.goal,
+          source_ref: `${channel_id}:${msg_ts}`,
+          source_metadata: { channel_id, message_ts: msg_ts },
+          working_dir: await resolve_working_dir(
+            command.goal,
+            "slack",
+            this.db,
+          ),
+          agent: resolve_agent("slack", this.db),
+        });
+        const result = this.scheduler.handle_inbound_message(
+          this._make_inbound(
+            InboundMessageType.CREATE_BRIEF,
+            payload,
+            channel_id,
+            { channel_id, message_ts: msg_ts },
+          ),
+        );
+        const brief_id = Number(result["brief_id"]);
+        await this._reply(
+          channel_id,
+          msg_ts,
+          format_brief_created_reply(brief_id, String(payload["title"])),
+        );
+        return;
+      }
+
+      if (command.action === "confirm") {
+        const result = this.scheduler.handle_inbound_message(
+          this._make_inbound(
+            InboundMessageType.CONFIRM_BRIEF,
+            { brief_id: command.brief_id },
+            channel_id,
+            { channel_id, message_ts: msg_ts },
+          ),
+        );
+        const task_id = Number(result["task_id"]);
+        if (Number.isInteger(task_id) && task_id > 0) {
+          this._task_origin.set(task_id, [channel_id, msg_ts, msg_ts]);
+          this._thread_ts_map.set(msg_ts, task_id);
+          this._remember_task_source(task_id);
+          this._add_reaction(channel_id, msg_ts, "eyes");
+          await this._reply(
+            channel_id,
+            msg_ts,
+            format_brief_started_reply(command.brief_id, task_id),
+          );
+        } else {
+          await this._reply(
+            channel_id,
+            msg_ts,
+            ":x: Brief confirmation failed.",
+          );
+        }
+        return;
+      }
+
+      const result = this.scheduler.handle_inbound_message(
+        this._make_inbound(
+          InboundMessageType.DISCARD_BRIEF,
+          { brief_id: command.brief_id },
+          channel_id,
+          { channel_id, message_ts: msg_ts },
+        ),
+      );
+      await this._reply(
+        channel_id,
+        msg_ts,
+        format_brief_discarded_reply(Number(result["brief_id"])),
+      );
+    } catch (e) {
+      await this._reply(
+        channel_id,
+        msg_ts,
+        `:x: ${e instanceof Error ? e.message : String(e)}`,
+      );
+    }
+  }
 
   async _cmd_status(
     args: string,
