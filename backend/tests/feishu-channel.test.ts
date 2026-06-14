@@ -10,9 +10,11 @@ import os from "node:os";
 import path from "node:path";
 
 import {
+  InboundMessageType,
   MessageBus,
   makeOutboundMessage,
   OutboundMessageType,
+  type InboundMessage,
 } from "../src/bus.ts";
 import { _hooks as dirHooks } from "../src/channels/dir_utils.ts";
 import {
@@ -75,12 +77,28 @@ class StubDB implements FeishuTaskDB {
 
 class StubScheduler implements FeishuScheduler {
   submitted: Task[] = [];
+  inbound: InboundMessage[] = [];
   listeners: OutputListener[] = [];
   removed: OutputListener[] = [];
+  nextBriefId = 1;
 
   submit_task(task: Task): number {
     this.submitted.push(task);
     return this.submitted.length;
+  }
+
+  handle_inbound_message(msg: InboundMessage): Row {
+    this.inbound.push(msg);
+    if (msg.type === InboundMessageType.CREATE_BRIEF) {
+      return { brief_id: this.nextBriefId++, status: "draft" };
+    }
+    if (msg.type === InboundMessageType.CONFIRM_BRIEF) {
+      return { task_id: this.submitted.length + 1, status: "created" };
+    }
+    if (msg.type === InboundMessageType.DISCARD_BRIEF) {
+      return { brief_id: msg.payload["brief_id"], status: "discarded" };
+    }
+    return { status: "ignored" };
   }
 
   add_output_listener(cb: OutputListener): void {
@@ -1260,6 +1278,82 @@ describe("Feishu inbound handling", () => {
     ]);
     expect((channel._create_reply as any).mock.calls[0][0]).toBe("om_root");
     expect((channel._start_streaming as any).mock.calls[0][0]).toBe(1);
+  });
+
+  test("brief command creates a draft without submitting a task", async () => {
+    const { channel, db, scheduler } = makeChannel();
+    db.settings["default_agent"] = "codex";
+    channel._send_message = mock(async () => "om_reply") as any;
+    channel._add_reaction = mock(() => undefined) as any;
+
+    await withResolvedDir("/tmp/repo", async () => {
+      await channel._handle_inbound(
+        makeEvent({
+          content: textPayload("/brief fix the login redirect"),
+          messageId: "om_brief",
+          chatId: "oc_product",
+        }),
+      );
+    });
+
+    expect(scheduler.submitted).toHaveLength(0);
+    expect(scheduler.inbound).toHaveLength(1);
+    expect(scheduler.inbound[0]!.type).toBe(InboundMessageType.CREATE_BRIEF);
+    expect(scheduler.inbound[0]!.payload["goal"]).toBe(
+      "fix the login redirect",
+    );
+    expect(scheduler.inbound[0]!.payload["working_dir"]).toBe("/tmp/repo");
+    expect(scheduler.inbound[0]!.payload["source_ref"]).toBe("om_brief");
+    expect(scheduler.inbound[0]!.payload["source_metadata"]).toEqual({
+      chat_id: "oc_product",
+      chat_type: "p2p",
+      message_id: "om_brief",
+      sender_id: "ou_sender",
+    });
+    const sent = (channel._send_message as any).mock.calls.at(-1);
+    expect(sent[0]).toBe("ou_sender");
+    expect(sent[1]).toContain("Draft task brief #1");
+    expect(sent[1]).toContain("/confirm-brief 1");
+  });
+
+  test("confirm and discard brief commands use text fallback", async () => {
+    const { channel, bus, scheduler } = makeChannel();
+    channel._send_message = mock(async () => "om_reply") as any;
+    channel._create_reply = mock(async () => "om_running") as any;
+    channel._start_streaming = mock(() => undefined) as any;
+    channel._add_reaction = mock(() => undefined) as any;
+
+    await channel._handle_inbound(
+      makeEvent({
+        content: textPayload("/confirm-brief 4"),
+        messageId: "om_confirm",
+      }),
+    );
+
+    expect(scheduler.inbound[0]!.type).toBe(InboundMessageType.CONFIRM_BRIEF);
+    expect(scheduler.inbound[0]!.payload["brief_id"]).toBe(4);
+    expect(channel._task_origin.get(1)).toEqual([
+      "ou_sender",
+      "om_confirm",
+      "om_confirm",
+    ]);
+    expect(channel._root_msg_map.get("om_confirm")).toBe(1);
+    expect(bus.get_task_source(1)).toBe("feishu");
+    expect((channel._create_reply as any).mock.calls[0][0]).toBe("om_confirm");
+    expect((channel._start_streaming as any).mock.calls[0][0]).toBe(1);
+
+    await channel._handle_inbound(
+      makeEvent({
+        content: textPayload("/discard-brief #4"),
+        messageId: "om_discard",
+      }),
+    );
+
+    expect(scheduler.inbound[1]!.type).toBe(InboundMessageType.DISCARD_BRIEF);
+    expect(scheduler.inbound[1]!.payload["brief_id"]).toBe(4);
+    const sent = (channel._send_message as any).mock.calls.at(-1);
+    expect(sent[0]).toBe("ou_sender");
+    expect(sent[1]).toContain("discarded");
   });
 
   test("post message with only an image creates default image-analysis prompt", async () => {
