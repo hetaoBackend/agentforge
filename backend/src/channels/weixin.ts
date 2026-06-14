@@ -51,12 +51,17 @@ import {
 } from "./agent_utils.ts";
 import {
   build_brief_payload,
+  build_runbook_payload,
   format_brief_created_reply,
   format_brief_discarded_reply,
   format_brief_help,
   format_brief_started_reply,
+  format_runbook_brief_reply,
+  format_runbook_created_reply,
   parse_brief_command,
+  parse_runbook_fallback,
   type BriefCommand,
+  type ParsedRunbookCommand,
 } from "./brief_utils.ts";
 import { handle_dir_command, resolve_working_dir } from "./dir_utils.ts";
 
@@ -632,6 +637,17 @@ export class WeixinChannel extends Channel {
       });
       return;
     }
+    const runbook_command = parse_runbook_fallback(text, this.db);
+    if (runbook_command !== null) {
+      await this._handle_runbook_command(runbook_command, event, {
+        account_id,
+        peer_id,
+        context_token,
+        message_id,
+        peer_key,
+      });
+      return;
+    }
 
     const task_id = force_new_session
       ? null
@@ -776,6 +792,80 @@ export class WeixinChannel extends Channel {
         event,
         format_brief_discarded_reply(Number(result["brief_id"])),
       );
+    } catch (exc) {
+      this._reply_to_event(
+        event,
+        `❌ ${exc instanceof Error ? exc.message : String(exc)}`,
+      );
+    }
+  }
+
+  async _handle_runbook_command(
+    command: ParsedRunbookCommand,
+    event: Record<string, unknown>,
+    source: {
+      account_id: string;
+      peer_id: string;
+      context_token: string;
+      message_id: string;
+      peer_key: string;
+    },
+  ): Promise<void> {
+    if (!this.scheduler.handle_inbound_message) {
+      this._reply_to_event(
+        event,
+        "❌ Runbook flow is not available in this scheduler.",
+      );
+      return;
+    }
+
+    const metadata = this._brief_source_metadata(source);
+    const source_ref = source.message_id || source.peer_key;
+    try {
+      const payload = build_runbook_payload({
+        channel: "weixin",
+        command,
+        source_ref,
+        source_metadata: metadata,
+        working_dir: await resolve_working_dir(
+          command.raw_args || command.name,
+          "weixin",
+          this.db,
+        ),
+        agent: resolve_agent("weixin", this.db),
+      });
+      const result = this.scheduler.handle_inbound_message(
+        this._make_inbound(
+          InboundMessageType.RUN_RUNBOOK,
+          payload,
+          source.peer_id,
+          metadata,
+        ),
+      );
+      if (result["status"] === "created") {
+        const task_id = Number(result["task_id"]);
+        this._task_origin.set(task_id, {
+          account_id: source.account_id,
+          peer_id: source.peer_id,
+          context_token: source.context_token,
+          message_id: source.message_id,
+        });
+        this._remember_task_source(task_id);
+        this._set_peer_current_task(source.peer_key, task_id);
+        this._reply_to_event(
+          event,
+          format_runbook_created_reply(task_id, command.name),
+        );
+        return;
+      }
+      if (result["status"] === "draft") {
+        this._reply_to_event(
+          event,
+          format_runbook_brief_reply(Number(result["brief_id"]), command.name),
+        );
+        return;
+      }
+      this._reply_to_event(event, "❌ Runbook failed.");
     } catch (exc) {
       this._reply_to_event(
         event,

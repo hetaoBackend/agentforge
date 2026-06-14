@@ -1,4 +1,16 @@
+import {
+  parse_runbook_command,
+  runbook_from_row,
+  type ParsedRunbookCommand,
+  type RunbookDefinition,
+} from "../runbooks.ts";
+
+export type { ParsedRunbookCommand } from "../runbooks.ts";
+
 type Row = Record<string, unknown>;
+type RunbookDB = {
+  get_im_runbooks?: (enabled_only?: boolean) => Row[];
+};
 
 export type BriefCommand =
   | { action: "create"; goal: string }
@@ -70,6 +82,41 @@ export function build_brief_payload(args: {
   };
 }
 
+function runbook_definitions_from_db(db: RunbookDB | null): RunbookDefinition[] {
+  if (!db?.get_im_runbooks) return [];
+  try {
+    return db.get_im_runbooks(true).map((row) => runbook_from_row(row));
+  } catch {
+    return [];
+  }
+}
+
+export function parse_runbook_fallback(
+  text: string,
+  db: RunbookDB | null = null,
+): ParsedRunbookCommand | null {
+  return parse_runbook_command(text, runbook_definitions_from_db(db));
+}
+
+export function build_runbook_payload(args: {
+  channel: string;
+  command: ParsedRunbookCommand;
+  source_ref: string;
+  source_metadata?: Row;
+  working_dir?: string | null;
+  agent?: string | null;
+}): Row {
+  return {
+    name: args.command.name,
+    raw_args: args.command.raw_args,
+    source_channel: args.channel,
+    source_ref: args.source_ref,
+    source_metadata: args.source_metadata ?? {},
+    working_dir: args.working_dir ?? null,
+    agent: args.agent ?? null,
+  };
+}
+
 export function format_brief_help(reason: BriefHelpReason): string {
   if (reason === "missing_goal") {
     return "Usage: `/brief <what should AgentForge do?>`";
@@ -98,4 +145,23 @@ export function format_brief_started_reply(
 
 export function format_brief_discarded_reply(brief_id: number): string {
   return `Draft task brief #${brief_id} discarded.`;
+}
+
+export function format_runbook_created_reply(
+  task_id: number,
+  runbook: string,
+): string {
+  return `Runbook /${runbook} created Task #${task_id}. Thinking ▌`;
+}
+
+export function format_runbook_brief_reply(
+  brief_id: number,
+  runbook: string,
+): string {
+  return [
+    `Runbook /${runbook} created Draft task brief #${brief_id}.`,
+    "",
+    `Run: \`/confirm-brief ${brief_id}\``,
+    `Discard: \`/discard-brief ${brief_id}\``,
+  ].join("\n");
 }

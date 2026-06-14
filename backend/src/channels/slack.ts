@@ -37,11 +37,16 @@ import { handle_agent_command, resolve_agent } from "./agent_utils.ts";
 import type { SettingsDB } from "./agent_utils.ts";
 import {
   build_brief_payload,
+  build_runbook_payload,
   format_brief_created_reply,
   format_brief_discarded_reply,
   format_brief_help,
   format_brief_started_reply,
+  format_runbook_brief_reply,
+  format_runbook_created_reply,
   parse_brief_command,
+  parse_runbook_fallback,
+  type ParsedRunbookCommand,
   type BriefCommand,
 } from "./brief_utils.ts";
 import { handle_dir_command, resolve_working_dir } from "./dir_utils.ts";
@@ -541,9 +546,12 @@ export class SlackChannel extends Channel {
       const cmd = (ws === -1 ? text : text.slice(0, ws)).toLowerCase();
       const args = ws === -1 ? "" : text.slice(ws + 1).trim();
       const brief_cmd = parse_brief_command(text);
+      const runbook_cmd = parse_runbook_fallback(text, this.db);
 
       if (brief_cmd !== null) {
         await this._handle_brief_command(brief_cmd, channel_id, msg_ts);
+      } else if (runbook_cmd !== null) {
+        await this._handle_runbook_command(runbook_cmd, channel_id, msg_ts);
       } else if (cmd === "/status") {
         await this._cmd_status(args, channel_id, msg_ts);
       } else if (cmd === "/cancel") {
@@ -738,6 +746,72 @@ export class SlackChannel extends Channel {
         msg_ts,
         format_brief_discarded_reply(Number(result["brief_id"])),
       );
+    } catch (e) {
+      await this._reply(
+        channel_id,
+        msg_ts,
+        `:x: ${e instanceof Error ? e.message : String(e)}`,
+      );
+    }
+  }
+
+  async _handle_runbook_command(
+    command: ParsedRunbookCommand,
+    channel_id: string,
+    msg_ts: string,
+  ): Promise<void> {
+    if (!this.scheduler.handle_inbound_message) {
+      await this._reply(
+        channel_id,
+        msg_ts,
+        ":x: Runbook flow is not available in this scheduler.",
+      );
+      return;
+    }
+
+    try {
+      const payload = build_runbook_payload({
+        channel: "slack",
+        command,
+        source_ref: `${channel_id}:${msg_ts}`,
+        source_metadata: { channel_id, message_ts: msg_ts },
+        working_dir: await resolve_working_dir(
+          command.raw_args || command.name,
+          "slack",
+          this.db,
+        ),
+        agent: resolve_agent("slack", this.db),
+      });
+      const result = this.scheduler.handle_inbound_message(
+        this._make_inbound(
+          InboundMessageType.RUN_RUNBOOK,
+          payload,
+          channel_id,
+          { channel_id, message_ts: msg_ts },
+        ),
+      );
+      if (result["status"] === "created") {
+        const task_id = Number(result["task_id"]);
+        this._task_origin.set(task_id, [channel_id, msg_ts, msg_ts]);
+        this._thread_ts_map.set(msg_ts, task_id);
+        this._remember_task_source(task_id);
+        this._add_reaction(channel_id, msg_ts, "eyes");
+        await this._reply(
+          channel_id,
+          msg_ts,
+          format_runbook_created_reply(task_id, command.name),
+        );
+        return;
+      }
+      if (result["status"] === "draft") {
+        await this._reply(
+          channel_id,
+          msg_ts,
+          format_runbook_brief_reply(Number(result["brief_id"]), command.name),
+        );
+        return;
+      }
+      await this._reply(channel_id, msg_ts, ":x: Runbook failed.");
     } catch (e) {
       await this._reply(
         channel_id,

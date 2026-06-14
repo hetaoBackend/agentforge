@@ -85,6 +85,20 @@ class StubScheduler implements WeixinScheduler {
     if (msg.type === InboundMessageType.DISCARD_BRIEF) {
       return { brief_id: msg.payload["brief_id"], status: "discarded" };
     }
+    if (msg.type === InboundMessageType.RUN_RUNBOOK) {
+      if (msg.payload["name"] === "release-check") {
+        return {
+          brief_id: this.nextBriefId++,
+          runbook: msg.payload["name"],
+          status: "draft",
+        };
+      }
+      return {
+        runbook: msg.payload["name"],
+        status: "created",
+        task_id: this.submitted.length + 1,
+      };
+    }
     return { status: "ignored" };
   }
 }
@@ -684,6 +698,59 @@ describe("Weixin inbound messages", () => {
     expect(scheduler.inbound[1]!.type).toBe(InboundMessageType.DISCARD_BRIEF);
     expect(scheduler.inbound[1]!.payload["brief_id"]).toBe(4);
     expect(writtenCommands(proc).at(-1)!["text"]).toContain("discarded");
+  });
+
+  test("runbook commands use text fallback", async () => {
+    const proc = fakeBridgeProcess();
+    const { channel, bus, scheduler } = makeChannel();
+    channel._running = true;
+    channel._bridge_proc = proc;
+
+    await withResolvedDir("/tmp/repo", async () => {
+      await channel._handle_message_event({
+        text: "/review-pr https://github.com/acme/app/pull/42",
+        account_id: "acct",
+        peer_id: "peer",
+        context_token: "ctx",
+        message_id: "msg-runbook",
+      });
+    });
+
+    expect(scheduler.inbound[0]!.type).toBe(InboundMessageType.RUN_RUNBOOK);
+    expect(scheduler.inbound[0]!.payload["name"]).toBe("review-pr");
+    expect(scheduler.inbound[0]!.payload["raw_args"]).toBe(
+      "https://github.com/acme/app/pull/42",
+    );
+    expect(scheduler.inbound[0]!.payload["working_dir"]).toBe("/tmp/repo");
+    expect(channel._task_origin.get(1)).toEqual({
+      account_id: "acct",
+      peer_id: "peer",
+      context_token: "ctx",
+      message_id: "msg-runbook",
+    });
+    expect(channel._get_peer_current_task("acct:peer")).toBe(1);
+    expect(bus.get_task_source(1)).toBe("weixin");
+    expect(writtenCommands(proc).at(-1)!["text"]).toContain(
+      "Runbook /review-pr",
+    );
+    expect(writtenCommands(proc).at(-1)!["text"]).toContain("Task #1");
+
+    await channel._handle_message_event({
+      text: "/release-check",
+      account_id: "acct",
+      peer_id: "peer",
+      context_token: "ctx",
+      message_id: "msg-release",
+    });
+
+    expect(scheduler.inbound[1]!.type).toBe(InboundMessageType.RUN_RUNBOOK);
+    expect(scheduler.inbound[1]!.payload["name"]).toBe("release-check");
+    expect(writtenCommands(proc).at(-1)!["text"]).toContain(
+      "Draft task brief #1",
+    );
+    expect(writtenCommands(proc).at(-1)!["text"]).toContain(
+      "/confirm-brief 1",
+    );
   });
 
   test("room-session resume survives channel restart", async () => {

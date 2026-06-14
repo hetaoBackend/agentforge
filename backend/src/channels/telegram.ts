@@ -59,12 +59,17 @@ import {
 } from "./agent_utils.ts";
 import {
   build_brief_payload,
+  build_runbook_payload,
   format_brief_created_reply,
   format_brief_discarded_reply,
   format_brief_help,
   format_brief_started_reply,
+  format_runbook_brief_reply,
+  format_runbook_created_reply,
   parse_brief_command,
+  parse_runbook_fallback,
   type BriefCommand,
+  type ParsedRunbookCommand,
 } from "./brief_utils.ts";
 import { handle_dir_command, resolve_working_dir } from "./dir_utils.ts";
 
@@ -884,6 +889,11 @@ export class TelegramChannel extends Channel {
       await this._handle_brief_command(brief_command, update);
       return;
     }
+    const runbook_command = parse_runbook_fallback(text, this.db);
+    if (runbook_command !== null) {
+      await this._handle_runbook_command(runbook_command, update);
+      return;
+    }
 
     // ── 检测转发消息 ───────────────────────────────────────
     text = this._format_forwarded_text(text, update);
@@ -1032,6 +1042,81 @@ export class TelegramChannel extends Channel {
         update,
         format_brief_discarded_reply(Number(result["brief_id"])),
       );
+    } catch (e) {
+      await this._reply_text(
+        update,
+        `❌ ${e instanceof Error ? e.message : String(e)}`,
+      );
+    }
+  }
+
+  async _handle_runbook_command(
+    command: ParsedRunbookCommand,
+    update: TgUpdate,
+  ): Promise<void> {
+    if (!this.scheduler.handle_inbound_message) {
+      await this._reply_text(
+        update,
+        "❌ Runbook flow is not available in this scheduler.",
+      );
+      return;
+    }
+
+    const msg = update.message!;
+    const chat_id = msg.chat.id;
+    const message_id = msg.message_id;
+    const metadata = this._brief_source_metadata(update);
+    try {
+      const payload = build_runbook_payload({
+        channel: "telegram",
+        command,
+        source_ref: `${chat_id}:${message_id}`,
+        source_metadata: metadata,
+        working_dir: await resolve_working_dir(
+          command.raw_args || command.name,
+          "telegram",
+          this.db,
+        ),
+        agent: resolve_agent("telegram", this.db),
+      });
+      const result = this.scheduler.handle_inbound_message(
+        this._make_inbound(
+          InboundMessageType.RUN_RUNBOOK,
+          payload,
+          String(chat_id),
+          metadata,
+        ),
+      );
+      if (result["status"] === "created") {
+        const task_id = Number(result["task_id"]);
+        this._task_origin.set(task_id, [chat_id, message_id, message_id]);
+        this._remember_task_source(task_id);
+        this._set_chat_current_task(chat_id, task_id);
+        try {
+          await this._api!("setMessageReaction", {
+            chat_id,
+            message_id,
+            reaction: [{ type: "emoji", emoji: "👀" }],
+          });
+        } catch (e) {
+          console.log(`[Telegram] Failed to set runbook reaction: ${e}`);
+        }
+        await this._start_streaming(
+          task_id,
+          chat_id,
+          message_id,
+          format_runbook_created_reply(task_id, command.name),
+        );
+        return;
+      }
+      if (result["status"] === "draft") {
+        await this._reply_text(
+          update,
+          format_runbook_brief_reply(Number(result["brief_id"]), command.name),
+        );
+        return;
+      }
+      await this._reply_text(update, "❌ Runbook failed.");
     } catch (e) {
       await this._reply_text(
         update,

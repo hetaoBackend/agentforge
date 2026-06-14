@@ -33,12 +33,17 @@ import {
 } from "./agent_utils.ts";
 import {
   build_brief_payload,
+  build_runbook_payload,
   format_brief_created_reply,
   format_brief_discarded_reply,
   format_brief_help,
   format_brief_started_reply,
+  format_runbook_brief_reply,
+  format_runbook_created_reply,
   parse_brief_command,
+  parse_runbook_fallback,
   type BriefCommand,
+  type ParsedRunbookCommand,
 } from "./brief_utils.ts";
 import { handle_dir_command, resolve_working_dir } from "./dir_utils.ts";
 
@@ -1593,6 +1598,16 @@ export class FeishuChannel extends Channel {
       await this._handle_brief_command(brief_cmd, reply_to, message, sender_id);
       return;
     }
+    const runbook_cmd = parse_runbook_fallback(content, this.db);
+    if (runbook_cmd !== null) {
+      await this._handle_runbook_command(
+        runbook_cmd,
+        reply_to,
+        message,
+        sender_id,
+      );
+      return;
+    }
     if (content.startsWith("/dir ") || content.startsWith("/cd ")) {
       const reply = handle_dir_command(content, "feishu", this.db);
       if (reply) await this._send_message(reply_to, reply);
@@ -1887,6 +1902,77 @@ export class FeishuChannel extends Channel {
         reply_to,
         format_brief_discarded_reply(Number(result["brief_id"])),
       );
+    } catch (e) {
+      await this._send_message(
+        reply_to,
+        `❌ ${e instanceof Error ? e.message : String(e)}`,
+      );
+    }
+  }
+
+  async _handle_runbook_command(
+    command: ParsedRunbookCommand,
+    reply_to: string,
+    message: Row,
+    sender_id: string,
+  ): Promise<void> {
+    if (!this.scheduler.handle_inbound_message) {
+      await this._send_message(
+        reply_to,
+        "❌ Runbook flow is not available in this scheduler.",
+      );
+      return;
+    }
+
+    const message_id = asString(message["message_id"], reply_to);
+    const metadata = this._brief_source_metadata(message, sender_id);
+    try {
+      const payload = build_runbook_payload({
+        channel: "feishu",
+        command,
+        source_ref: message_id,
+        source_metadata: metadata,
+        working_dir: await resolve_working_dir(
+          command.raw_args || command.name,
+          "feishu",
+          this.db,
+        ),
+        agent: resolve_agent("feishu", this.db),
+      });
+      const result = this.scheduler.handle_inbound_message(
+        this._make_inbound(
+          InboundMessageType.RUN_RUNBOOK,
+          payload,
+          reply_to,
+          metadata,
+        ),
+      );
+      if (result["status"] === "created") {
+        const task_id = Number(result["task_id"]);
+        this._task_origin.set(task_id, [reply_to, message_id, message_id]);
+        this._root_msg_map.set(message_id, task_id);
+        this._remember_task_source(task_id);
+        const title =
+          (this.db.get_task(task_id) as Row | null)?.["title"] ??
+          `Task #${task_id}`;
+        const running_msg_id = await this._create_reply(
+          message_id,
+          this._build_legacy_markdown_card(
+            format_runbook_created_reply(task_id, command.name),
+          ),
+        );
+        if (running_msg_id)
+          this._start_streaming(task_id, running_msg_id, String(title));
+        return;
+      }
+      if (result["status"] === "draft") {
+        await this._send_message(
+          reply_to,
+          format_runbook_brief_reply(Number(result["brief_id"]), command.name),
+        );
+        return;
+      }
+      await this._send_message(reply_to, "❌ Runbook failed.");
     } catch (e) {
       await this._send_message(
         reply_to,

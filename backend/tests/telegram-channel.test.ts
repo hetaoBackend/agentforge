@@ -94,6 +94,20 @@ class StubScheduler {
     if (msg.type === InboundMessageType.DISCARD_BRIEF) {
       return { brief_id: msg.payload["brief_id"], status: "discarded" };
     }
+    if (msg.type === InboundMessageType.RUN_RUNBOOK) {
+      if (msg.payload["name"] === "release-check") {
+        return {
+          brief_id: this.nextBriefId++,
+          runbook: msg.payload["name"],
+          status: "draft",
+        };
+      }
+      return {
+        runbook: msg.payload["name"],
+        status: "created",
+        task_id: this.submitted.length + 1,
+      };
+    }
     return { status: "ignored" };
   }
 
@@ -526,6 +540,49 @@ test("test_confirm_and_discard_brief_commands_use_text_fallback", async () => {
   expect(scheduler.inbound[1]!.type).toBe(InboundMessageType.DISCARD_BRIEF);
   expect(scheduler.inbound[1]!.payload["brief_id"]).toBe(4);
   expect(api.lastText()).toContain("discarded");
+});
+
+test("test_runbook_commands_use_text_fallback", async () => {
+  const { channel, api, scheduler } = _make_channel();
+  _hooks.extract_working_dir_with_claude = async () => "~/repo";
+
+  await channel._handle_text_message(
+    _fake_update({
+      text: "/review-pr https://github.com/acme/app/pull/42",
+      chat_id: 10,
+      message_id: 335,
+      user_id: 7,
+    }),
+    _ctx(),
+  );
+
+  expect(scheduler.inbound[0]!.type).toBe(InboundMessageType.RUN_RUNBOOK);
+  expect(scheduler.inbound[0]!.payload["name"]).toBe("review-pr");
+  expect(scheduler.inbound[0]!.payload["raw_args"]).toBe(
+    "https://github.com/acme/app/pull/42",
+  );
+  expect(scheduler.inbound[0]!.payload["working_dir"]).toBe("~/repo");
+  expect(channel._task_origin.get(1)).toEqual([10, 335, 335]);
+  expect(channel._get_chat_current_task(10)).toBe(1);
+  expect(channel.bus.get_task_source(1)).toBe("telegram");
+  expect(api.lastText()).toContain("Runbook /review-pr");
+  expect(api.lastText()).toContain("Task #1");
+  expect(scheduler.listeners).toHaveLength(1);
+
+  await channel._handle_text_message(
+    _fake_update({
+      text: "/release-check",
+      chat_id: 10,
+      message_id: 336,
+      user_id: 7,
+    }),
+    _ctx(),
+  );
+
+  expect(scheduler.inbound[1]!.type).toBe(InboundMessageType.RUN_RUNBOOK);
+  expect(scheduler.inbound[1]!.payload["name"]).toBe("release-check");
+  expect(api.lastText()).toContain("Draft task brief #1");
+  expect(api.lastText()).toContain("/confirm-brief 1");
 });
 
 test("test_handle_text_message_resumes_current_chat_session", async () => {

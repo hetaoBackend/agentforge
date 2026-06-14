@@ -98,6 +98,20 @@ class StubScheduler implements FeishuScheduler {
     if (msg.type === InboundMessageType.DISCARD_BRIEF) {
       return { brief_id: msg.payload["brief_id"], status: "discarded" };
     }
+    if (msg.type === InboundMessageType.RUN_RUNBOOK) {
+      if (msg.payload["name"] === "release-check") {
+        return {
+          brief_id: this.nextBriefId++,
+          runbook: msg.payload["name"],
+          status: "draft",
+        };
+      }
+      return {
+        runbook: msg.payload["name"],
+        status: "created",
+        task_id: this.submitted.length + 1,
+      };
+    }
     return { status: "ignored" };
   }
 
@@ -1354,6 +1368,52 @@ describe("Feishu inbound handling", () => {
     const sent = (channel._send_message as any).mock.calls.at(-1);
     expect(sent[0]).toBe("ou_sender");
     expect(sent[1]).toContain("discarded");
+  });
+
+  test("runbook commands use text fallback", async () => {
+    const { channel, bus, scheduler } = makeChannel();
+    channel._send_message = mock(async () => "om_reply") as any;
+    channel._create_reply = mock(async () => "om_running") as any;
+    channel._start_streaming = mock(() => undefined) as any;
+    channel._add_reaction = mock(() => undefined) as any;
+
+    await withResolvedDir("/tmp/repo", async () => {
+      await channel._handle_inbound(
+        makeEvent({
+          content: textPayload("/review-pr https://github.com/acme/app/pull/42"),
+          messageId: "om_runbook",
+        }),
+      );
+    });
+
+    expect(scheduler.inbound[0]!.type).toBe(InboundMessageType.RUN_RUNBOOK);
+    expect(scheduler.inbound[0]!.payload["name"]).toBe("review-pr");
+    expect(scheduler.inbound[0]!.payload["raw_args"]).toBe(
+      "https://github.com/acme/app/pull/42",
+    );
+    expect(scheduler.inbound[0]!.payload["working_dir"]).toBe("/tmp/repo");
+    expect(channel._task_origin.get(1)).toEqual([
+      "ou_sender",
+      "om_runbook",
+      "om_runbook",
+    ]);
+    expect(channel._root_msg_map.get("om_runbook")).toBe(1);
+    expect(bus.get_task_source(1)).toBe("feishu");
+    expect((channel._create_reply as any).mock.calls[0][0]).toBe("om_runbook");
+    expect((channel._start_streaming as any).mock.calls[0][0]).toBe(1);
+
+    await channel._handle_inbound(
+      makeEvent({
+        content: textPayload("/release-check"),
+        messageId: "om_release",
+      }),
+    );
+
+    expect(scheduler.inbound[1]!.type).toBe(InboundMessageType.RUN_RUNBOOK);
+    expect(scheduler.inbound[1]!.payload["name"]).toBe("release-check");
+    const sent = (channel._send_message as any).mock.calls.at(-1);
+    expect(sent[1]).toContain("Draft task brief #1");
+    expect(sent[1]).toContain("/confirm-brief 1");
   });
 
   test("post message with only an image creates default image-analysis prompt", async () => {
