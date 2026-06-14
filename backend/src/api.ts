@@ -14,11 +14,7 @@ import {
 } from "./skill_suggestions.ts";
 import type { TaskDB } from "./db.ts";
 import type { TaskScheduler } from "./scheduler.ts";
-import {
-  BUILTIN_RUNBOOKS,
-  runbook_from_row,
-  type RunbookDefinition,
-} from "./runbooks.ts";
+import { runbook_from_row, type RunbookDefinition } from "./runbooks.ts";
 import {
   DEFAULT_AGENT,
   DEFAULT_TIMEOUT_SECONDS,
@@ -136,6 +132,16 @@ function asBool(value: unknown): boolean {
 function asString(value: unknown, fallback = ""): string {
   if (value === null || value === undefined) return fallback;
   return String(value);
+}
+
+function slugifyCommandName(value: string): string {
+  const compact = value.trim().replace(/\s+/g, "-").replace(/^\/+/, "");
+  const ascii = compact
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "");
+  return ascii || compact || "custom-command";
 }
 
 function parseJsonList(value: unknown): any[] {
@@ -343,12 +349,12 @@ function validateIMRunbookPayload(
       response: [{ error: "name cannot be empty", field: "name" }, 400],
     };
   }
-  if (!/^[a-z][a-z0-9-]*$/.test(name)) {
+  if (!/^[^\s/@]+$/u.test(name)) {
     return {
       response: [
         {
           error:
-            "name must start with a letter and contain only lowercase letters, numbers, and hyphens",
+            "name must be a single slash-command word without spaces, slashes, or bot mentions",
           field: "name",
         },
         400,
@@ -441,6 +447,59 @@ function validateIMRunbookPayload(
   };
 }
 
+function commandFromTaskPayload(
+  ctx: ApiContext,
+  body: Row,
+): { runbook?: IMRunbook; response?: ResponseData } {
+  const taskId = Number(body["task_id"]);
+  if (!Number.isInteger(taskId) || taskId <= 0) {
+    return {
+      response: [{ error: "task_id is required", field: "task_id" }, 400],
+    };
+  }
+  const task = ctx.db.get_task(taskId);
+  if (!task) {
+    return { response: [{ error: "task not found" }, 404] };
+  }
+
+  const title = asString(task["title"] ?? "Custom command").trim();
+  const prompt = asString(task["prompt"] ?? "").trim();
+  const description =
+    asString(body["description"]).trim() ||
+    title.replace(/^\[[^\]]+\]\s*/, "") ||
+    "Custom AgentForge command";
+  const name = asString(body["name"]).trim() || slugifyCommandName(description);
+  const promptTemplate = [
+    "Repeat this AgentForge workflow with the user's latest input.",
+    "",
+    "Original task title:",
+    title,
+    "",
+    "Original task prompt:",
+    prompt || "(no prompt recorded)",
+    "",
+    "Latest input:",
+    "{{raw_args}}",
+  ].join("\n");
+
+  return validateIMRunbookPayload({
+    name,
+    aliases: body["aliases"] ?? [],
+    description,
+    source_type: RunbookSourceType.TASK,
+    source_id: String(taskId),
+    command_schema: body["command_schema"] ?? { args: [] },
+    prompt_template: promptTemplate,
+    default_agent:
+      body["default_agent"] === undefined
+        ? task["agent"]
+        : body["default_agent"],
+    confirmation_policy:
+      body["confirmation_policy"] ?? RunbookConfirmationPolicy.REQUIRED,
+    enabled: body["enabled"] ?? true,
+  });
+}
+
 function runbookResponse(runbook: RunbookDefinition, extras: Row = {}): Row {
   return {
     id: null,
@@ -461,14 +520,9 @@ function runbookResponse(runbook: RunbookDefinition, extras: Row = {}): Row {
 }
 
 function allIMRunbooks(ctx: ApiContext): Row[] {
-  return [
-    ...BUILTIN_RUNBOOKS.map((runbook) =>
-      runbookResponse(runbook, { source_type: RunbookSourceType.BUILTIN }),
-    ),
-    ...ctx.db
-      .get_im_runbooks()
-      .map((row) => runbookResponse(runbook_from_row(row), row)),
-  ];
+  return ctx.db
+    .get_im_runbooks()
+    .map((row) => runbookResponse(runbook_from_row(row), row));
 }
 
 function digestPayload(body: Row): Row {
@@ -1264,7 +1318,7 @@ async function handlePost(
     if (brief["status"] !== TaskBriefStatus.DRAFT) {
       return jsonResponse(
         {
-          error: `Cannot confirm task brief with status '${brief["status"]}'.`,
+          error: `Cannot confirm draft task with status '${brief["status"]}'.`,
         },
         409,
         origin,
@@ -1296,7 +1350,7 @@ async function handlePost(
     if (brief["status"] !== TaskBriefStatus.DRAFT) {
       return jsonResponse(
         {
-          error: `Cannot discard task brief with status '${brief["status"]}'.`,
+          error: `Cannot discard draft task with status '${brief["status"]}'.`,
         },
         409,
         origin,
@@ -1308,6 +1362,18 @@ async function handlePost(
 
   if (path === "/api/im-runbooks") {
     const validated = validateIMRunbookPayload(body);
+    if (validated.response) {
+      return jsonResponse(
+        validated.response[0],
+        validated.response[1] ?? 200,
+        origin,
+      );
+    }
+    const id = ctx.db.add_im_runbook(validated.runbook!);
+    return jsonResponse(ctx.db.get_im_runbook(id), 201, origin);
+  }
+  if (path === "/api/im-runbooks/from-task") {
+    const validated = commandFromTaskPayload(ctx, body);
     if (validated.response) {
       return jsonResponse(
         validated.response[0],
@@ -1838,7 +1904,7 @@ async function handlePut(
     if (existing["status"] !== TaskBriefStatus.DRAFT) {
       return jsonResponse(
         {
-          error: `Cannot edit task brief with status '${existing["status"]}'.`,
+          error: `Cannot edit draft task with status '${existing["status"]}'.`,
         },
         409,
         origin,

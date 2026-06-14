@@ -41,6 +41,32 @@ class StubDB {
   updated: Array<[number, Record<string, unknown>]> = [];
   runs: unknown = [];
   events: unknown = [];
+  runbooks: Record<string, unknown>[] = [
+    {
+      name: "看-pr",
+      aliases: [],
+      description: "看 PR",
+      source_type: "template",
+      source_id: null,
+      command_schema: { args: ["url"] },
+      prompt_template: "Review this pull request:\n{{raw_args}}",
+      default_agent: null,
+      confirmation_policy: "auto",
+      enabled: true,
+    },
+    {
+      name: "检查发布",
+      aliases: [],
+      description: "检查发布",
+      source_type: "template",
+      source_id: null,
+      command_schema: { args: [] },
+      prompt_template: "检查发布风险",
+      default_agent: null,
+      confirmation_policy: "required",
+      enabled: true,
+    },
+  ];
 
   get_setting(key: string, defaultValue: string | null = null): string | null {
     return this.settings.get(key) ?? defaultValue;
@@ -68,6 +94,12 @@ class StubDB {
   get_run_output_events(_run_id: number, _limit?: number): unknown {
     return this.events;
   }
+
+  get_im_runbooks(enabled_only: boolean = false): Record<string, unknown>[] {
+    return enabled_only
+      ? this.runbooks.filter((runbook) => runbook["enabled"] !== false)
+      : this.runbooks;
+  }
 }
 
 class StubScheduler {
@@ -92,7 +124,7 @@ class StubScheduler {
       return { brief_id: msg.payload["brief_id"], status: "discarded" };
     }
     if (msg.type === InboundMessageType.RUN_RUNBOOK) {
-      if (msg.payload["name"] === "release-check") {
+      if (msg.payload["name"] === "检查发布") {
         return {
           brief_id: this.nextBriefId++,
           runbook: msg.payload["name"],
@@ -472,12 +504,10 @@ test("test_handle_text_message_creates_task", async () => {
   expect(api.callsFor("sendMessage").length).toBe(0);
 });
 
-test("test_brief_command_creates_draft_without_submitting_task", async () => {
+test("test_brief_command_is_not_the_draft_entrypoint", async () => {
   const { channel, api, db, scheduler } = _make_channel();
   _hooks.extract_working_dir_with_claude = async () => "~/repo";
   db.settings.set("default_agent", "codex");
-  db.tasks.set(5, { id: 5, status: "completed", session_id: "s5" });
-  channel._set_chat_current_task(10, 5);
 
   await channel._handle_text_message(
     _fake_update({
@@ -489,20 +519,11 @@ test("test_brief_command_creates_draft_without_submitting_task", async () => {
     _ctx(),
   );
 
-  expect(scheduler.submitted).toHaveLength(0);
+  expect(scheduler.submitted).toHaveLength(1);
+  expect(scheduler.submitted[0]!.prompt).toBe("/brief fix the login redirect");
   expect(db.updated).toEqual([]);
-  expect(scheduler.inbound).toHaveLength(1);
-  expect(scheduler.inbound[0]!.type).toBe(InboundMessageType.CREATE_BRIEF);
-  expect(scheduler.inbound[0]!.payload["goal"]).toBe("fix the login redirect");
-  expect(scheduler.inbound[0]!.payload["working_dir"]).toBe("~/repo");
-  expect(scheduler.inbound[0]!.payload["source_ref"]).toBe("10:222");
-  expect(scheduler.inbound[0]!.payload["source_metadata"]).toEqual({
-    chat_id: 10,
-    message_id: 222,
-    user_id: 7,
-  });
-  expect(api.lastText()).toContain("Draft task brief #1");
-  expect(api.lastText()).toContain("/confirm-brief 1");
+  expect(scheduler.inbound).toHaveLength(0);
+  expect(api.callsFor("sendMessage")).toHaveLength(0);
 });
 
 test("test_confirm_and_discard_brief_commands_use_text_fallback", async () => {
@@ -510,7 +531,7 @@ test("test_confirm_and_discard_brief_commands_use_text_fallback", async () => {
 
   await channel._handle_text_message(
     _fake_update({
-      text: "/confirm-brief 4",
+      text: "/run-draft 4",
       chat_id: 10,
       message_id: 333,
       user_id: 7,
@@ -528,7 +549,7 @@ test("test_confirm_and_discard_brief_commands_use_text_fallback", async () => {
 
   await channel._handle_text_message(
     _fake_update({
-      text: "/discard-brief #4",
+      text: "/cancel-draft #4",
       chat_id: 10,
       message_id: 334,
       user_id: 7,
@@ -547,7 +568,7 @@ test("test_runbook_commands_use_text_fallback", async () => {
 
   await channel._handle_text_message(
     _fake_update({
-      text: "/review-pr https://github.com/acme/app/pull/42",
+      text: "/看-pr https://github.com/acme/app/pull/42",
       chat_id: 10,
       message_id: 335,
       user_id: 7,
@@ -556,7 +577,7 @@ test("test_runbook_commands_use_text_fallback", async () => {
   );
 
   expect(scheduler.inbound[0]!.type).toBe(InboundMessageType.RUN_RUNBOOK);
-  expect(scheduler.inbound[0]!.payload["name"]).toBe("review-pr");
+  expect(scheduler.inbound[0]!.payload["name"]).toBe("看-pr");
   expect(scheduler.inbound[0]!.payload["raw_args"]).toBe(
     "https://github.com/acme/app/pull/42",
   );
@@ -564,12 +585,12 @@ test("test_runbook_commands_use_text_fallback", async () => {
   expect(channel._task_origin.get(1)).toEqual([10, 335, 335]);
   expect(channel._get_chat_current_task(10)).toBe(1);
   expect(channel.bus.get_task_source(1)).toBe("telegram");
-  expect(api.lastText()).toContain("Runbook /review-pr");
+  expect(api.lastText()).toContain("Command /看-pr");
   expect(api.lastText()).toContain("Task #1");
 
   await channel._handle_text_message(
     _fake_update({
-      text: "/release-check",
+      text: "/检查发布",
       chat_id: 10,
       message_id: 336,
       user_id: 7,
@@ -578,9 +599,9 @@ test("test_runbook_commands_use_text_fallback", async () => {
   );
 
   expect(scheduler.inbound[1]!.type).toBe(InboundMessageType.RUN_RUNBOOK);
-  expect(scheduler.inbound[1]!.payload["name"]).toBe("release-check");
-  expect(api.lastText()).toContain("Draft task brief #1");
-  expect(api.lastText()).toContain("/confirm-brief 1");
+  expect(scheduler.inbound[1]!.payload["name"]).toBe("检查发布");
+  expect(api.lastText()).toContain("Draft task #1");
+  expect(api.lastText()).toContain("/run-draft 1");
 });
 
 test("test_skill_suggestion_commands_use_text_fallback", async () => {

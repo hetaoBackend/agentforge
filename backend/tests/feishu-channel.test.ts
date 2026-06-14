@@ -41,6 +41,32 @@ class StubDB implements FeishuTaskDB {
   runs: Row[] = [];
   events: Row[] = [];
   byRoot = new Map<string, Row>();
+  runbooks: Row[] = [
+    {
+      name: "看-pr",
+      aliases: [],
+      description: "看 PR",
+      source_type: "template",
+      source_id: null,
+      command_schema: { args: ["url"] },
+      prompt_template: "Review this pull request:\n{{raw_args}}",
+      default_agent: null,
+      confirmation_policy: "auto",
+      enabled: true,
+    },
+    {
+      name: "检查发布",
+      aliases: [],
+      description: "检查发布",
+      source_type: "template",
+      source_id: null,
+      command_schema: { args: [] },
+      prompt_template: "检查发布风险",
+      default_agent: null,
+      confirmation_policy: "required",
+      enabled: true,
+    },
+  ];
 
   get_setting(key: string, defaultValue: string | null = null): string | null {
     return this.settings[key] ?? defaultValue;
@@ -68,6 +94,12 @@ class StubDB implements FeishuTaskDB {
 
   get_run_output_events(_run_id: number, _limit?: number): Row[] {
     return this.events;
+  }
+
+  get_im_runbooks(enabled_only: boolean = false): Row[] {
+    return enabled_only
+      ? this.runbooks.filter((runbook) => runbook["enabled"] !== false)
+      : this.runbooks;
   }
 
   get_task_by_feishu_root_msg(root_msg_id: string): Row | null {
@@ -99,7 +131,7 @@ class StubScheduler implements FeishuScheduler {
       return { brief_id: msg.payload["brief_id"], status: "discarded" };
     }
     if (msg.type === InboundMessageType.RUN_RUNBOOK) {
-      if (msg.payload["name"] === "release-check") {
+      if (msg.payload["name"] === "检查发布") {
         return {
           brief_id: this.nextBriefId++,
           runbook: msg.payload["name"],
@@ -1313,7 +1345,7 @@ describe("Feishu inbound handling", () => {
     expect((channel._start_streaming as any).mock.calls[0][0]).toBe(1);
   });
 
-  test("brief command creates a draft without submitting a task", async () => {
+  test("brief command is not the draft entrypoint", async () => {
     const { channel, db, scheduler } = makeChannel();
     db.settings["default_agent"] = "codex";
     channel._send_message = mock(async () => "om_reply") as any;
@@ -1329,24 +1361,12 @@ describe("Feishu inbound handling", () => {
       );
     });
 
-    expect(scheduler.submitted).toHaveLength(0);
-    expect(scheduler.inbound).toHaveLength(1);
-    expect(scheduler.inbound[0]!.type).toBe(InboundMessageType.CREATE_BRIEF);
-    expect(scheduler.inbound[0]!.payload["goal"]).toBe(
-      "fix the login redirect",
+    expect(scheduler.submitted).toHaveLength(1);
+    expect(scheduler.submitted[0]!.prompt).toBe(
+      "/brief fix the login redirect",
     );
-    expect(scheduler.inbound[0]!.payload["working_dir"]).toBe("/tmp/repo");
-    expect(scheduler.inbound[0]!.payload["source_ref"]).toBe("om_brief");
-    expect(scheduler.inbound[0]!.payload["source_metadata"]).toEqual({
-      chat_id: "oc_product",
-      chat_type: "p2p",
-      message_id: "om_brief",
-      sender_id: "ou_sender",
-    });
-    const sent = (channel._send_message as any).mock.calls.at(-1);
-    expect(sent[0]).toBe("ou_sender");
-    expect(sent[1]).toContain("Draft task brief #1");
-    expect(sent[1]).toContain("/confirm-brief 1");
+    expect(scheduler.inbound).toHaveLength(0);
+    expect((channel._send_message as any).mock.calls).toHaveLength(0);
   });
 
   test("confirm and discard brief commands use text fallback", async () => {
@@ -1358,7 +1378,7 @@ describe("Feishu inbound handling", () => {
 
     await channel._handle_inbound(
       makeEvent({
-        content: textPayload("/confirm-brief 4"),
+        content: textPayload("/run-draft 4"),
         messageId: "om_confirm",
       }),
     );
@@ -1377,7 +1397,7 @@ describe("Feishu inbound handling", () => {
 
     await channel._handle_inbound(
       makeEvent({
-        content: textPayload("/discard-brief #4"),
+        content: textPayload("/cancel-draft #4"),
         messageId: "om_discard",
       }),
     );
@@ -1399,16 +1419,14 @@ describe("Feishu inbound handling", () => {
     await withResolvedDir("/tmp/repo", async () => {
       await channel._handle_inbound(
         makeEvent({
-          content: textPayload(
-            "/review-pr https://github.com/acme/app/pull/42",
-          ),
+          content: textPayload("/看-pr https://github.com/acme/app/pull/42"),
           messageId: "om_runbook",
         }),
       );
     });
 
     expect(scheduler.inbound[0]!.type).toBe(InboundMessageType.RUN_RUNBOOK);
-    expect(scheduler.inbound[0]!.payload["name"]).toBe("review-pr");
+    expect(scheduler.inbound[0]!.payload["name"]).toBe("看-pr");
     expect(scheduler.inbound[0]!.payload["raw_args"]).toBe(
       "https://github.com/acme/app/pull/42",
     );
@@ -1425,16 +1443,16 @@ describe("Feishu inbound handling", () => {
 
     await channel._handle_inbound(
       makeEvent({
-        content: textPayload("/release-check"),
+        content: textPayload("/检查发布"),
         messageId: "om_release",
       }),
     );
 
     expect(scheduler.inbound[1]!.type).toBe(InboundMessageType.RUN_RUNBOOK);
-    expect(scheduler.inbound[1]!.payload["name"]).toBe("release-check");
+    expect(scheduler.inbound[1]!.payload["name"]).toBe("检查发布");
     const sent = (channel._send_message as any).mock.calls.at(-1);
-    expect(sent[1]).toContain("Draft task brief #1");
-    expect(sent[1]).toContain("/confirm-brief 1");
+    expect(sent[1]).toContain("Draft task #1");
+    expect(sent[1]).toContain("/run-draft 1");
   });
 
   test("skill suggestion commands use text fallback", async () => {

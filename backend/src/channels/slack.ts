@@ -678,7 +678,7 @@ export class SlackChannel extends Channel {
       await this._reply(
         channel_id,
         msg_ts,
-        ":x: Task brief flow is not available in this scheduler.",
+        ":x: Draft task flow is not available in this scheduler.",
       );
       return;
     }
@@ -738,7 +738,7 @@ export class SlackChannel extends Channel {
           await this._reply(
             channel_id,
             msg_ts,
-            ":x: Brief confirmation failed.",
+            ":x: Draft task confirmation failed.",
           );
         }
         return;
@@ -775,7 +775,7 @@ export class SlackChannel extends Channel {
       await this._reply(
         channel_id,
         msg_ts,
-        ":x: Runbook flow is not available in this scheduler.",
+        ":x: Custom command flow is not available in this scheduler.",
       );
       return;
     }
@@ -822,7 +822,7 @@ export class SlackChannel extends Channel {
         );
         return;
       }
-      await this._reply(channel_id, msg_ts, ":x: Runbook failed.");
+      await this._reply(channel_id, msg_ts, ":x: Custom command failed.");
     } catch (e) {
       await this._reply(
         channel_id,

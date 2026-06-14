@@ -748,7 +748,7 @@ export class TelegramChannel extends Channel {
     if (!this.scheduler.handle_inbound_message) {
       await this._reply_text(
         update,
-        "❌ Task brief flow is not available in this scheduler.",
+        "❌ Draft task flow is not available in this scheduler.",
       );
       return;
     }
@@ -798,7 +798,7 @@ export class TelegramChannel extends Channel {
         );
         const task_id = Number(result["task_id"]);
         if (!Number.isInteger(task_id) || task_id <= 0) {
-          await this._reply_text(update, "❌ Brief confirmation failed.");
+          await this._reply_text(update, "❌ Draft task confirmation failed.");
           return;
         }
 
@@ -848,7 +848,7 @@ export class TelegramChannel extends Channel {
     if (!this.scheduler.handle_inbound_message) {
       await this._reply_text(
         update,
-        "❌ Runbook flow is not available in this scheduler.",
+        "❌ Custom command flow is not available in this scheduler.",
       );
       return;
     }
@@ -905,7 +905,7 @@ export class TelegramChannel extends Channel {
         );
         return;
       }
-      await this._reply_text(update, "❌ Runbook failed.");
+      await this._reply_text(update, "❌ Custom command failed.");
     } catch (e) {
       await this._reply_text(
         update,

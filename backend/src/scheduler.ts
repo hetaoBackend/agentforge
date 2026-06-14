@@ -359,11 +359,11 @@ export class TaskScheduler extends BusAwareSchedulerMixin {
     }
     const brief = this.db.get_task_brief(brief_id);
     if (!brief) {
-      throw new Error("task brief not found");
+      throw new Error("draft task not found");
     }
     if (brief["status"] !== TaskBriefStatus.DRAFT) {
       throw new Error(
-        `Cannot confirm task brief with status '${brief["status"]}'.`,
+        `Cannot confirm draft task with status '${brief["status"]}'.`,
       );
     }
     const source_channel = String(brief["source_channel"] ?? "").trim();
@@ -391,11 +391,11 @@ export class TaskScheduler extends BusAwareSchedulerMixin {
     }
     const brief = this.db.get_task_brief(brief_id);
     if (!brief) {
-      throw new Error("task brief not found");
+      throw new Error("draft task not found");
     }
     if (brief["status"] !== TaskBriefStatus.DRAFT) {
       throw new Error(
-        `Cannot discard task brief with status '${brief["status"]}'.`,
+        `Cannot discard draft task with status '${brief["status"]}'.`,
       );
     }
     this.db.discard_task_brief(brief_id);

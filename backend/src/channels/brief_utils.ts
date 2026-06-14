@@ -16,7 +16,7 @@ export type BriefCommand =
   | { action: "create"; goal: string }
   | { action: "confirm"; brief_id: number }
   | { action: "discard"; brief_id: number }
-  | { action: "help"; reason: "missing_goal" | "invalid_brief_id" };
+  | { action: "help"; reason: "invalid_brief_id" };
 type BriefHelpReason = Extract<BriefCommand, { action: "help" }>["reason"];
 
 export type SkillSuggestionCommand =
@@ -41,18 +41,22 @@ export function parse_brief_command(text: string): BriefCommand | null {
   const cmd = match[1]!.toLowerCase();
   const args = (match[2] ?? "").trim();
 
-  if (cmd === "brief") {
-    return args
-      ? { action: "create", goal: args }
-      : { action: "help", reason: "missing_goal" };
-  }
-  if (cmd === "confirm-brief" || cmd === "run-brief") {
+  if (
+    cmd === "run-draft" ||
+    cmd === "confirm-draft" ||
+    cmd === "confirm-brief" ||
+    cmd === "run-brief"
+  ) {
     const brief_id = parseBriefId(args);
     return brief_id === null
       ? { action: "help", reason: "invalid_brief_id" }
       : { action: "confirm", brief_id };
   }
-  if (cmd === "discard-brief") {
+  if (
+    cmd === "cancel-draft" ||
+    cmd === "discard-draft" ||
+    cmd === "discard-brief"
+  ) {
     const brief_id = parseBriefId(args);
     return brief_id === null
       ? { action: "help", reason: "invalid_brief_id" }
@@ -162,11 +166,8 @@ export function build_runbook_payload(args: {
   };
 }
 
-export function format_brief_help(reason: BriefHelpReason): string {
-  if (reason === "missing_goal") {
-    return "Usage: `/brief <what should AgentForge do?>`";
-  }
-  return "Usage: `/confirm-brief <brief_id>` or `/discard-brief <brief_id>`";
+export function format_brief_help(_reason: BriefHelpReason): string {
+  return "Usage: `/run-draft <draft_id>` or `/cancel-draft <draft_id>`";
 }
 
 export function format_skill_suggestion_help(
@@ -201,10 +202,10 @@ export function format_brief_created_reply(
   title: string,
 ): string {
   return [
-    `Draft task brief #${brief_id}: ${title}`,
+    `Draft task #${brief_id}: ${title}`,
     "",
-    `Run: \`/confirm-brief ${brief_id}\``,
-    `Discard: \`/discard-brief ${brief_id}\``,
+    `Run: \`/run-draft ${brief_id}\``,
+    `Cancel: \`/cancel-draft ${brief_id}\``,
   ].join("\n");
 }
 
@@ -212,18 +213,18 @@ export function format_brief_started_reply(
   brief_id: number,
   task_id: number,
 ): string {
-  return `Task #${task_id} created from brief #${brief_id}. Thinking ▌`;
+  return `Task #${task_id} created from draft #${brief_id}. Thinking ▌`;
 }
 
 export function format_brief_discarded_reply(brief_id: number): string {
-  return `Draft task brief #${brief_id} discarded.`;
+  return `Draft task #${brief_id} discarded.`;
 }
 
 export function format_runbook_created_reply(
   task_id: number,
   runbook: string,
 ): string {
-  return `Runbook /${runbook} created Task #${task_id}. Thinking ▌`;
+  return `Command /${runbook} created Task #${task_id}. Thinking ▌`;
 }
 
 export function format_runbook_brief_reply(
@@ -231,9 +232,9 @@ export function format_runbook_brief_reply(
   runbook: string,
 ): string {
   return [
-    `Runbook /${runbook} created Draft task brief #${brief_id}.`,
+    `Command /${runbook} created Draft task #${brief_id}.`,
     "",
-    `Run: \`/confirm-brief ${brief_id}\``,
-    `Discard: \`/discard-brief ${brief_id}\``,
+    `Run: \`/run-draft ${brief_id}\``,
+    `Cancel: \`/cancel-draft ${brief_id}\``,
   ].join("\n");
 }

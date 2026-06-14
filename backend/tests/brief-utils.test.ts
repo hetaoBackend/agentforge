@@ -8,26 +8,19 @@ import {
   parse_brief_command,
 } from "../src/channels/brief_utils.ts";
 
-test("parse_brief_command recognizes create confirm and discard commands", () => {
-  expect(parse_brief_command("/brief fix the login redirect")).toEqual({
-    action: "create",
-    goal: "fix the login redirect",
-  });
+test("parse_brief_command recognizes draft confirm and discard commands", () => {
+  expect(parse_brief_command("/brief fix the login redirect")).toBeNull();
   expect(parse_brief_command("/confirm-brief #42")).toEqual({
     action: "confirm",
     brief_id: 42,
   });
-  expect(parse_brief_command("/run-brief 7")).toEqual({
+  expect(parse_brief_command("/run-draft 7")).toEqual({
     action: "confirm",
     brief_id: 7,
   });
-  expect(parse_brief_command("/discard-brief 9")).toEqual({
+  expect(parse_brief_command("/cancel-draft 9")).toEqual({
     action: "discard",
     brief_id: 9,
-  });
-  expect(parse_brief_command("/brief")).toEqual({
-    action: "help",
-    reason: "missing_goal",
   });
   expect(parse_brief_command("/confirm-brief nope")).toEqual({
     action: "help",
@@ -62,13 +55,14 @@ test("build_brief_payload creates a concise draft from text", () => {
   });
 });
 
-test("brief replies explain the text fallback flow", () => {
+test("draft task replies do not expose brief as the core concept", () => {
+  expect(format_brief_created_reply(3, "Fix auth")).toContain("Draft task #3");
+  expect(format_brief_created_reply(3, "Fix auth")).toContain("/run-draft 3");
   expect(format_brief_created_reply(3, "Fix auth")).toContain(
-    "/confirm-brief 3",
+    "/cancel-draft 3",
   );
-  expect(format_brief_created_reply(3, "Fix auth")).toContain(
-    "/discard-brief 3",
-  );
+  expect(format_brief_created_reply(3, "Fix auth")).not.toContain("brief");
   expect(format_brief_started_reply(3, 9)).toContain("Task #9");
+  expect(format_brief_started_reply(3, 9)).not.toContain("brief");
   expect(format_brief_discarded_reply(3)).toContain("discarded");
 });

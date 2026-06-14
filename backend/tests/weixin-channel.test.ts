@@ -34,6 +34,32 @@ class StubDB implements WeixinTaskDB {
   updated: Array<[number, Row]> = [];
   runs: unknown = [];
   events: unknown = [];
+  runbooks: Row[] = [
+    {
+      name: "看-pr",
+      aliases: [],
+      description: "看 PR",
+      source_type: "template",
+      source_id: null,
+      command_schema: { args: ["url"] },
+      prompt_template: "Review this pull request:\n{{raw_args}}",
+      default_agent: null,
+      confirmation_policy: "auto",
+      enabled: true,
+    },
+    {
+      name: "检查发布",
+      aliases: [],
+      description: "检查发布",
+      source_type: "template",
+      source_id: null,
+      command_schema: { args: [] },
+      prompt_template: "检查发布风险",
+      default_agent: null,
+      confirmation_policy: "required",
+      enabled: true,
+    },
+  ];
 
   get_task(task_id: number): Row | null {
     return this.tasks.get(task_id) ?? null;
@@ -62,6 +88,12 @@ class StubDB implements WeixinTaskDB {
   get_run_output_events(_run_id: number, _limit?: number): unknown {
     return this.events;
   }
+
+  get_im_runbooks(enabled_only: boolean = false): Row[] {
+    return enabled_only
+      ? this.runbooks.filter((runbook) => runbook["enabled"] !== false)
+      : this.runbooks;
+  }
 }
 
 class StubScheduler implements WeixinScheduler {
@@ -86,7 +118,7 @@ class StubScheduler implements WeixinScheduler {
       return { brief_id: msg.payload["brief_id"], status: "discarded" };
     }
     if (msg.type === InboundMessageType.RUN_RUNBOOK) {
-      if (msg.payload["name"] === "release-check") {
+      if (msg.payload["name"] === "检查发布") {
         return {
           brief_id: this.nextBriefId++,
           runbook: msg.payload["name"],
@@ -642,7 +674,7 @@ describe("Weixin inbound messages", () => {
     expect(replies[1]).not.toContain("▶️");
   });
 
-  test("brief command creates a draft without submitting a task", async () => {
+  test("brief command is not the draft entrypoint", async () => {
     const proc = fakeBridgeProcess();
     const { channel, db, scheduler } = makeChannel();
     channel._running = true;
@@ -659,25 +691,12 @@ describe("Weixin inbound messages", () => {
       });
     });
 
-    expect(scheduler.submitted).toHaveLength(0);
-    expect(scheduler.inbound).toHaveLength(1);
-    expect(scheduler.inbound[0]!.type).toBe(InboundMessageType.CREATE_BRIEF);
-    expect(scheduler.inbound[0]!.payload["goal"]).toBe(
-      "fix the login redirect",
+    expect(scheduler.submitted).toHaveLength(1);
+    expect(scheduler.submitted[0]!.prompt).toBe(
+      "/brief fix the login redirect",
     );
-    expect(scheduler.inbound[0]!.payload["working_dir"]).toBe("/tmp/repo");
-    expect(scheduler.inbound[0]!.payload["source_ref"]).toBe("msg-brief");
-    expect(scheduler.inbound[0]!.payload["source_metadata"]).toEqual({
-      account_id: "acct",
-      peer_id: "peer",
-      context_token: "ctx",
-      message_id: "msg-brief",
-    });
-    expect(channel._get_peer_current_task("acct:peer")).toBeNull();
-
-    const reply = writtenCommands(proc).at(-1)!;
-    expect(reply["text"]).toContain("Draft task brief #1");
-    expect(reply["text"]).toContain("/confirm-brief 1");
+    expect(scheduler.inbound).toHaveLength(0);
+    expect(channel._get_peer_current_task("acct:peer")).toBe(1);
   });
 
   test("confirm and discard brief commands use text fallback", async () => {
@@ -687,7 +706,7 @@ describe("Weixin inbound messages", () => {
     channel._bridge_proc = proc;
 
     await channel._handle_message_event({
-      text: "/confirm-brief 4",
+      text: "/run-draft 4",
       account_id: "acct",
       peer_id: "peer",
       context_token: "ctx",
@@ -707,7 +726,7 @@ describe("Weixin inbound messages", () => {
     expect(writtenCommands(proc).at(-1)!["text"]).toContain("Task #1");
 
     await channel._handle_message_event({
-      text: "/discard-brief #4",
+      text: "/cancel-draft #4",
       account_id: "acct",
       peer_id: "peer",
       context_token: "ctx",
@@ -727,7 +746,7 @@ describe("Weixin inbound messages", () => {
 
     await withResolvedDir("/tmp/repo", async () => {
       await channel._handle_message_event({
-        text: "/review-pr https://github.com/acme/app/pull/42",
+        text: "/看-pr https://github.com/acme/app/pull/42",
         account_id: "acct",
         peer_id: "peer",
         context_token: "ctx",
@@ -736,7 +755,7 @@ describe("Weixin inbound messages", () => {
     });
 
     expect(scheduler.inbound[0]!.type).toBe(InboundMessageType.RUN_RUNBOOK);
-    expect(scheduler.inbound[0]!.payload["name"]).toBe("review-pr");
+    expect(scheduler.inbound[0]!.payload["name"]).toBe("看-pr");
     expect(scheduler.inbound[0]!.payload["raw_args"]).toBe(
       "https://github.com/acme/app/pull/42",
     );
@@ -749,13 +768,11 @@ describe("Weixin inbound messages", () => {
     });
     expect(channel._get_peer_current_task("acct:peer")).toBe(1);
     expect(bus.get_task_source(1)).toBe("weixin");
-    expect(writtenCommands(proc).at(-1)!["text"]).toContain(
-      "Runbook /review-pr",
-    );
+    expect(writtenCommands(proc).at(-1)!["text"]).toContain("Command /看-pr");
     expect(writtenCommands(proc).at(-1)!["text"]).toContain("Task #1");
 
     await channel._handle_message_event({
-      text: "/release-check",
+      text: "/检查发布",
       account_id: "acct",
       peer_id: "peer",
       context_token: "ctx",
@@ -763,11 +780,9 @@ describe("Weixin inbound messages", () => {
     });
 
     expect(scheduler.inbound[1]!.type).toBe(InboundMessageType.RUN_RUNBOOK);
-    expect(scheduler.inbound[1]!.payload["name"]).toBe("release-check");
-    expect(writtenCommands(proc).at(-1)!["text"]).toContain(
-      "Draft task brief #1",
-    );
-    expect(writtenCommands(proc).at(-1)!["text"]).toContain("/confirm-brief 1");
+    expect(scheduler.inbound[1]!.payload["name"]).toBe("检查发布");
+    expect(writtenCommands(proc).at(-1)!["text"]).toContain("Draft task #1");
+    expect(writtenCommands(proc).at(-1)!["text"]).toContain("/run-draft 1");
   });
 
   test("skill suggestion commands use text fallback", async () => {

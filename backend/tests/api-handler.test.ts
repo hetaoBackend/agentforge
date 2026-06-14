@@ -285,13 +285,11 @@ describe("api handler", () => {
     expect(brief["created_task_id"]).toBe(Number(confirmed["task_id"]));
   });
 
-  test("IM runbook API lists builtins and supports user runbook CRUD", async () => {
+  test("IM runbook API starts empty and supports user command CRUD", async () => {
     const initial = await json(
       new Request("http://127.0.0.1:9712/api/im-runbooks"),
     );
-    expect(initial["runbooks"].map((runbook: any) => runbook.name)).toContain(
-      "review-pr",
-    );
+    expect(initial["runbooks"]).toEqual([]);
 
     const createdRes = await handleApiRequest(
       ctx,
@@ -299,11 +297,11 @@ describe("api handler", () => {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          name: "triage-issue",
+          name: "看报错",
           aliases: ["issue-triage"],
-          description: "Triage an issue",
-          command_schema: { args: ["url"] },
-          prompt_template: "Triage this issue: {{raw_args}}",
+          description: "分析报错",
+          command_schema: { args: ["内容"] },
+          prompt_template: "分析这段报错：{{raw_args}}",
           default_agent: "codex",
           confirmation_policy: "required",
           enabled: true,
@@ -312,7 +310,7 @@ describe("api handler", () => {
     );
     expect(createdRes.status).toBe(201);
     const created = (await createdRes.json()) as Record<string, any>;
-    expect(created["name"]).toBe("triage-issue");
+    expect(created["name"]).toBe("看报错");
     expect(created["aliases"]).toEqual(["issue-triage"]);
 
     const patchedRes = await handleApiRequest(
@@ -321,14 +319,14 @@ describe("api handler", () => {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          description: "Triage a GitHub issue",
+          description: "分析线上报错",
           enabled: false,
         }),
       }),
     );
     expect(patchedRes.status).toBe(200);
     const patched = (await patchedRes.json()) as Record<string, any>;
-    expect(patched["description"]).toBe("Triage a GitHub issue");
+    expect(patched["description"]).toBe("分析线上报错");
     expect(patched["enabled"]).toBe(false);
 
     const deleted = await handleApiRequest(
@@ -340,6 +338,45 @@ describe("api handler", () => {
     expect(deleted.status).toBe(200);
     expect(await deleted.json()).toEqual({ status: "deleted" });
     expect(db.get_im_runbook(Number(created["id"]))).toBeNull();
+  });
+
+  test("IM runbook API creates a custom command from a previous task", async () => {
+    const taskId = db.add_task(
+      makeTask({
+        title: "整理客户反馈",
+        prompt: "请把下面的客户反馈整理成产品需求、风险和下一步行动。",
+        result: "done",
+        status: "completed",
+        working_dir: "~/agentforge",
+        agent: "codex",
+      }),
+    );
+
+    const createdRes = await handleApiRequest(
+      ctx,
+      new Request("http://127.0.0.1:9712/api/im-runbooks/from-task", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          task_id: taskId,
+          name: "整理反馈",
+          description: "把客户反馈整理成行动项",
+          confirmation_policy: "auto",
+        }),
+      }),
+    );
+
+    expect(createdRes.status).toBe(201);
+    const created = (await createdRes.json()) as Record<string, any>;
+    expect(created["name"]).toBe("整理反馈");
+    expect(created["source_type"]).toBe("task");
+    expect(created["source_id"]).toBe(String(taskId));
+    expect(created["prompt_template"]).toContain(
+      "请把下面的客户反馈整理成产品需求、风险和下一步行动。",
+    );
+    expect(created["prompt_template"]).toContain("{{raw_args}}");
+    expect(created["default_agent"]).toBe("codex");
+    expect(created["confirmation_policy"]).toBe("auto");
   });
 
   test("IM runbook API previews a user runbook as a task brief", async () => {
@@ -386,10 +423,42 @@ describe("api handler", () => {
     expect(db.get_all_tasks()).toHaveLength(0);
   });
 
-  test("IM runbook API runs an auto-confirmed builtin as a task", async () => {
-    const runRes = await handleApiRequest(
+  test("IM runbook API only runs user-created commands", async () => {
+    const missing = await handleApiRequest(
       ctx,
       new Request("http://127.0.0.1:9712/api/im-runbooks/review-pr/run", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          raw_args: "https://github.com/acme/app/pull/42",
+          source_channel: "api",
+          source_ref: "api:test",
+          working_dir: ".",
+          agent: "codex",
+        }),
+      }),
+    );
+    expect(missing.status).toBe(400);
+    expect(await missing.json()).toEqual({
+      error: "Unknown command: review-pr",
+    });
+
+    await json(
+      new Request("http://127.0.0.1:9712/api/im-runbooks", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: "看-pr",
+          description: "Review a pull request",
+          prompt_template: "Review this pull request:\n{{raw_args}}",
+          confirmation_policy: "auto",
+        }),
+      }),
+    );
+
+    const runRes = await handleApiRequest(
+      ctx,
+      new Request("http://127.0.0.1:9712/api/im-runbooks/%E7%9C%8B-pr/run", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -404,7 +473,7 @@ describe("api handler", () => {
     expect(runRes.status).toBe(201);
     const run = (await runRes.json()) as Record<string, any>;
     expect(run).toEqual({
-      runbook: "review-pr",
+      runbook: "看-pr",
       status: "created",
       task_id: 1,
     });

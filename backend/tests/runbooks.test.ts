@@ -3,31 +3,49 @@ import { describe, expect, test } from "bun:test";
 import {
   BUILTIN_RUNBOOKS,
   RunbookConfirmationPolicy,
+  RunbookSourceType,
   expand_runbook,
   parse_runbook_command,
+  type RunbookDefinition,
 } from "../src/runbooks.ts";
 
 describe("runbooks", () => {
-  test("parse_runbook_command recognizes builtins and arguments", () => {
+  const analyzeErrorCommand: RunbookDefinition = {
+    name: "看报错",
+    aliases: ["analyze-error"],
+    description: "分析一段报错并给出下一步",
+    source_type: RunbookSourceType.TEMPLATE,
+    source_id: null,
+    command_schema: { args: ["内容"] },
+    prompt_template: "请分析这段报错，并给出最小下一步：\n{{raw_args}}",
+    default_agent: null,
+    confirmation_policy: RunbookConfirmationPolicy.AUTO,
+    enabled: true,
+  };
+
+  test("parse_runbook_command only recognizes supplied custom commands", () => {
     expect(
       parse_runbook_command("/review-pr https://github.com/acme/app/pull/42"),
+    ).toBeNull();
+    expect(
+      parse_runbook_command("/看报错 TypeError: boom", [analyzeErrorCommand]),
     ).toEqual({
-      name: "review-pr",
-      args: ["https://github.com/acme/app/pull/42"],
-      raw_args: "https://github.com/acme/app/pull/42",
+      name: "看报错",
+      args: ["TypeError:", "boom"],
+      raw_args: "TypeError: boom",
     });
     expect(
-      parse_runbook_command(
-        "/fix-ci   https://github.com/acme/app/actions/runs/123",
-      ),
+      parse_runbook_command("/analyze-error TypeError: boom", [
+        analyzeErrorCommand,
+      ]),
     ).toEqual({
-      name: "fix-ci",
-      args: ["https://github.com/acme/app/actions/runs/123"],
-      raw_args: "https://github.com/acme/app/actions/runs/123",
+      name: "看报错",
+      args: ["TypeError:", "boom"],
+      raw_args: "TypeError: boom",
     });
     expect(parse_runbook_command("/status 1")).toBeNull();
     expect(
-      parse_runbook_command("review-pr https://github.com/acme/app/pull/42"),
+      parse_runbook_command("看报错 TypeError: boom", [analyzeErrorCommand]),
     ).toBeNull();
   });
 
@@ -50,49 +68,63 @@ describe("runbooks", () => {
     ).toBe(RunbookConfirmationPolicy.REQUIRED);
   });
 
-  test("expand_runbook validates arguments and creates deterministic prompts", () => {
+  test("expand_runbook validates custom commands and creates deterministic prompts", () => {
     const review = expand_runbook({
-      name: "review-pr",
-      raw_args: "https://github.com/acme/app/pull/42",
-      source_channel: "slack",
-      source_ref: "C1:1.0",
+      name: "看报错",
+      raw_args: "TypeError: boom",
+      source_channel: "telegram",
+      source_ref: "10:20",
       working_dir: "~/repo",
       agent: "codex",
-      source_metadata: { channel_id: "C1" },
+      source_metadata: { chat_id: 10 },
+      runbooks: [analyzeErrorCommand],
     });
 
     expect(review.ok).toBe(true);
     expect(review.expansion!.confirmation_policy).toBe("auto");
-    expect(review.expansion!.task.title).toBe("[Runbook] Review PR");
-    expect(review.expansion!.task.prompt).toContain(
-      "Review this pull request:",
+    expect(review.expansion!.task.title).toBe(
+      "[Command] 分析一段报错并给出下一步",
     );
     expect(review.expansion!.task.prompt).toContain(
-      "https://github.com/acme/app/pull/42",
+      "请分析这段报错，并给出最小下一步：\nTypeError: boom",
     );
     expect(review.expansion!.task.working_dir).toBe("~/repo");
-    expect(review.expansion!.task.tags).toBe("runbook,review-pr,slack");
+    expect(review.expansion!.task.tags).toBe("command,看报错,telegram");
 
     const release = expand_runbook({
-      name: "release-check",
-      raw_args: "",
+      name: "看报错",
+      raw_args: "ReferenceError",
       source_channel: "telegram",
       source_ref: "10:20",
       working_dir: "~/repo",
       agent: "claude",
       source_metadata: { chat_id: 10 },
+      runbooks: [
+        {
+          ...analyzeErrorCommand,
+          confirmation_policy: RunbookConfirmationPolicy.REQUIRED,
+        },
+      ],
     });
 
     expect(release.ok).toBe(true);
     expect(release.expansion!.confirmation_policy).toBe("required");
-    expect(release.expansion!.brief.title).toBe("Release readiness check");
+    expect(release.expansion!.brief.title).toBe("分析一段报错并给出下一步");
     expect(release.expansion!.brief.needs_confirmation).toBe(true);
-    expect(release.expansion!.brief.acceptance_criteria).toContain(
-      "Run or identify the relevant release checks.",
-    );
+    expect(release.expansion!.brief.goal).toContain("ReferenceError");
   });
 
   test("expand_runbook returns usage errors for invalid arguments", () => {
+    expect(
+      expand_runbook({
+        name: "看报错",
+        raw_args: "",
+        source_channel: "slack",
+        source_ref: "C1:1.0",
+        runbooks: [analyzeErrorCommand],
+      }).error,
+    ).toContain("Usage: /看报错 <内容>");
+
     expect(
       expand_runbook({
         name: "review-pr",
@@ -100,15 +132,6 @@ describe("runbooks", () => {
         source_channel: "slack",
         source_ref: "C1:1.0",
       }).error,
-    ).toContain("Usage: /review-pr <url>");
-
-    expect(
-      expand_runbook({
-        name: "unknown",
-        raw_args: "",
-        source_channel: "slack",
-        source_ref: "C1:1.0",
-      }).error,
-    ).toContain("Unknown runbook");
+    ).toContain("Unknown command");
   });
 });

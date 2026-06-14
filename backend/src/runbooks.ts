@@ -122,7 +122,7 @@ function validateGeneric(
 }
 
 function genericTitle(runbook: RunbookDefinition): string {
-  return `[Runbook] ${runbook.description || titleizeName(runbook.name)}`;
+  return `[Command] ${runbook.description || titleizeName(runbook.name)}`;
 }
 
 function genericGoal(runbook: RunbookDefinition, rawArgs: string): string {
@@ -275,11 +275,10 @@ export function find_runbook(
   runbooks: RunbookDefinition[] = [],
 ): RunbookDefinition | null {
   const normalized = nameOrAlias.toLowerCase();
-  const candidates: RunbookDefinition[] = [...BUILTIN_RUNBOOKS, ...runbooks];
   return (
-    candidates.find(
+    runbooks.find(
       (runbook) =>
-        runbook.name === normalized ||
+        runbook.name.toLowerCase() === normalized ||
         runbook.aliases.some((alias) => alias.toLowerCase() === normalized),
     ) ?? null
   );
@@ -290,9 +289,10 @@ export function parse_runbook_command(
   runbooks: RunbookDefinition[] = [],
 ): ParsedRunbookCommand | null {
   const trimmed = text.trim();
-  const match = /^\/([a-z-]+)(?:\s+([\s\S]*))?$/i.exec(trimmed);
+  const match = /^\/(\S+)(?:\s+([\s\S]*))?$/u.exec(trimmed);
   if (!match) return null;
-  const known = find_runbook(match[1] ?? "", runbooks);
+  const commandName = (match[1] ?? "").split("@")[0] ?? "";
+  const known = find_runbook(commandName, runbooks);
   if (!known) return null;
   const raw_args = (match[2] ?? "").trim();
   return {
@@ -304,7 +304,7 @@ export function parse_runbook_command(
 
 export function expand_runbook(args: ExpandArgs): RunbookResult {
   const runbook = find_runbook(args.name, args.runbooks ?? []);
-  if (!runbook) return { ok: false, error: `Unknown runbook: ${args.name}` };
+  if (!runbook) return { ok: false, error: `Unknown command: ${args.name}` };
 
   const validationError = isBuiltinSpec(runbook)
     ? runbook.validate(args.raw_args)
@@ -322,7 +322,7 @@ export function expand_runbook(args: ExpandArgs): RunbookResult {
     ? runbook.acceptance(args.raw_args)
     : genericAcceptance();
   const prompt = [
-    `Runbook: /${runbook.name}`,
+    `Custom command: /${runbook.name}`,
     "",
     "Goal:",
     goal,
@@ -335,11 +335,11 @@ export function expand_runbook(args: ExpandArgs): RunbookResult {
     prompt,
     working_dir: args.working_dir ?? ".",
     schedule_type: ScheduleType.IMMEDIATE,
-    tags: `runbook,${runbook.name},${args.source_channel}`,
+    tags: `command,${runbook.name},${args.source_channel}`,
     ...(agent ? { agent } : {}),
   });
   const brief = makeTaskBrief({
-    title: title.replace(/^\[Runbook\]\s*/, ""),
+    title: title.replace(/^\[(?:Runbook|Command)\]\s*/, ""),
     goal,
     context_summary: `Created from /${runbook.name} ${args.raw_args}`.trim(),
     acceptance_criteria: acceptance,

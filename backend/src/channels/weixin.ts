@@ -732,7 +732,7 @@ export class WeixinChannel extends Channel {
     if (!this.scheduler.handle_inbound_message) {
       this._reply_to_event(
         event,
-        "❌ Task brief flow is not available in this scheduler.",
+        "❌ Draft task flow is not available in this scheduler.",
       );
       return;
     }
@@ -780,7 +780,7 @@ export class WeixinChannel extends Channel {
         );
         const task_id = Number(result["task_id"]);
         if (!Number.isInteger(task_id) || task_id <= 0) {
-          this._reply_to_event(event, "❌ Brief confirmation failed.");
+          this._reply_to_event(event, "❌ Draft task confirmation failed.");
           return;
         }
 
@@ -833,7 +833,7 @@ export class WeixinChannel extends Channel {
     if (!this.scheduler.handle_inbound_message) {
       this._reply_to_event(
         event,
-        "❌ Runbook flow is not available in this scheduler.",
+        "❌ Custom command flow is not available in this scheduler.",
       );
       return;
     }
@@ -884,7 +884,7 @@ export class WeixinChannel extends Channel {
         );
         return;
       }
-      this._reply_to_event(event, "❌ Runbook failed.");
+      this._reply_to_event(event, "❌ Custom command failed.");
     } catch (exc) {
       this._reply_to_event(
         event,

@@ -73,6 +73,7 @@ export const RunbookSourceType = {
   BUILTIN: "builtin",
   TEMPLATE: "template",
   SKILL: "skill",
+  TASK: "task",
 } as const;
 export type RunbookSourceType =
   (typeof RunbookSourceType)[keyof typeof RunbookSourceType];
