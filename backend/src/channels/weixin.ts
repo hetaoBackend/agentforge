@@ -905,10 +905,7 @@ export class WeixinChannel extends Channel {
     },
   ): Promise<void> {
     if (command.action === "help") {
-      this._reply_to_event(
-        event,
-        format_skill_suggestion_help(command.reason),
-      );
+      this._reply_to_event(event, format_skill_suggestion_help(command.reason));
       return;
     }
     if (!this.scheduler.handle_inbound_message) {
@@ -935,10 +932,7 @@ export class WeixinChannel extends Channel {
           metadata,
         ),
       );
-      this._reply_to_event(
-        event,
-        format_skill_suggestion_action_reply(result),
-      );
+      this._reply_to_event(event, format_skill_suggestion_action_reply(result));
     } catch (exc) {
       this._reply_to_event(
         event,

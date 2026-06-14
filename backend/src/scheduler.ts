@@ -506,14 +506,20 @@ export class TaskScheduler extends BusAwareSchedulerMixin {
 
   private _ready_skill_draft(pattern_id: number): Row {
     const draft = this.db.get_skill_draft(pattern_id);
-    if (!draft || draft["status"] !== "ready" || !String(draft["body"] ?? "").trim()) {
+    if (
+      !draft ||
+      draft["status"] !== "ready" ||
+      !String(draft["body"] ?? "").trim()
+    ) {
       throw new Error("skill draft is not ready");
     }
     return draft;
   }
 
   _handle_skill_suggestion_action(msg: InboundMessage): Row {
-    const action = String(msg.payload["action"] ?? "").trim().toLowerCase();
+    const action = String(msg.payload["action"] ?? "")
+      .trim()
+      .toLowerCase();
     const pattern_id = _int(msg.payload["pattern_id"]);
     if (pattern_id === null) {
       throw new Error("pattern_id is required");
@@ -548,11 +554,7 @@ export class TaskScheduler extends BusAwareSchedulerMixin {
       if (!suggestion) {
         throw new Error("pattern not found");
       }
-      this.db.mark_im_skill_suggestion_draft_shown(
-        pattern_id,
-        channel,
-        target,
-      );
+      this.db.mark_im_skill_suggestion_draft_shown(pattern_id, channel, target);
       return {
         pattern_id,
         status: "ready",

@@ -107,7 +107,8 @@ export function collect_im_skill_suggestions(
       recurrence_count: Number(pattern["recurrence_count"] ?? 0),
       status: String(pattern["status"] ?? ""),
       draft_status:
-        pattern["draft_status"] === null || pattern["draft_status"] === undefined
+        pattern["draft_status"] === null ||
+        pattern["draft_status"] === undefined
           ? null
           : String(pattern["draft_status"]),
       draft_name:

@@ -122,9 +122,7 @@ describe("scheduler IM skill suggestion actions", () => {
     expect(String(result["text"])).toContain("Draft preview:");
     expect(String(result["text"])).toContain("# Fix CI");
     expect(
-      db.get_im_skill_suggestion(patternId, "slack", "C1")![
-        "draft_shown_at"
-      ],
+      db.get_im_skill_suggestion(patternId, "slack", "C1")!["draft_shown_at"],
     ).toBeTruthy();
   });
 

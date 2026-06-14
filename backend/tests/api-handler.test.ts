@@ -1368,7 +1368,9 @@ describe("api handler", () => {
     expect(preview.suggestions[0].pattern_id).toBe(patternId);
     expect(preview.texts[0]).toContain("/draft-skill");
 
-    const reply = mock(async (_channel: string, _thread: string | null, _text: string) => {});
+    const reply = mock(
+      async (_channel: string, _thread: string | null, _text: string) => {},
+    );
     ctx.slack_channel = { _reply: reply } as any;
     const sent = await json(
       new Request("http://127.0.0.1:9712/api/im-skill-suggestions/send", {

@@ -1486,8 +1486,9 @@ async function handlePost(
             ...body,
             pattern_id: patternId,
             source_channel:
-              asString(body["source_channel"] ?? body["channel"] ?? "api")
-                .trim() || "api",
+              asString(
+                body["source_channel"] ?? body["channel"] ?? "api",
+              ).trim() || "api",
             target: asString(body["target"] ?? ""),
           },
         }),
