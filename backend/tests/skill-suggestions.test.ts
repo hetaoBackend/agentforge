@@ -98,4 +98,32 @@ describe("IM skill suggestions", () => {
     expect(text).toContain("~/.claude/skills");
     expect(text).toContain("~/.agents/skills");
   });
+
+  test("suggestion state suppresses repeated sends and records shown drafts", () => {
+    expect(db.should_send_im_skill_suggestion(7, "slack", "C1")).toBe(true);
+
+    db.upsert_im_skill_suggestion({
+      pattern_id: 7,
+      channel: "slack",
+      target: "C1",
+      status: "suggested",
+      metadata: { message_ts: "1.0" },
+    });
+
+    const row = db.get_im_skill_suggestion(7, "slack", "C1")!;
+    expect(row["status"]).toBe("suggested");
+    expect(row["metadata"]).toEqual({ message_ts: "1.0" });
+    expect(db.should_send_im_skill_suggestion(7, "slack", "C1")).toBe(false);
+
+    db.mark_im_skill_suggestion_draft_shown(7, "slack", "C1");
+
+    const shown = db.get_im_skill_suggestion(7, "slack", "C1")!;
+    expect(shown["draft_shown_at"]).toBeTruthy();
+
+    db.mark_im_skill_suggestion_status(7, "slack", "C1", "dismissed");
+
+    const dismissed = db.get_im_skill_suggestion(7, "slack", "C1")!;
+    expect(dismissed["status"]).toBe("dismissed");
+    expect(dismissed["dismissed_at"]).toBeTruthy();
+  });
 });
