@@ -31,8 +31,10 @@ import path from "node:path";
 
 import {
   Channel,
+  InboundMessageType,
   MessageBus,
   OutboundMessageType,
+  type InboundMessage,
   type OutboundMessage,
   type TaskDBLike,
 } from "../bus.ts";
@@ -47,6 +49,15 @@ import {
   resolve_agent,
   type SettingsDB,
 } from "./agent_utils.ts";
+import {
+  build_brief_payload,
+  format_brief_created_reply,
+  format_brief_discarded_reply,
+  format_brief_help,
+  format_brief_started_reply,
+  parse_brief_command,
+  type BriefCommand,
+} from "./brief_utils.ts";
 import { handle_dir_command, resolve_working_dir } from "./dir_utils.ts";
 
 export const WEIXIN_UPLOADABLE_IMAGE_SUFFIXES = new Set([
@@ -216,6 +227,7 @@ export interface WeixinTaskDB extends TaskDBLike, SettingsDB {
  */
 export interface WeixinScheduler {
   submit_task(task: Task): number;
+  handle_inbound_message?(msg: InboundMessage): Record<string, unknown>;
 }
 
 /** Status snapshot consumed by _build_weixin_channel_status in taskboard. */
@@ -609,6 +621,18 @@ export class WeixinChannel extends Channel {
       return;
     }
 
+    const brief_command = parse_brief_command(text);
+    if (brief_command !== null) {
+      await this._handle_brief_command(brief_command, event, {
+        account_id,
+        peer_id,
+        context_token,
+        message_id,
+        peer_key,
+      });
+      return;
+    }
+
     const task_id = force_new_session
       ? null
       : this._get_peer_current_task(peer_key);
@@ -653,6 +677,125 @@ export class WeixinChannel extends Channel {
     this._remember_task_source(new_task_id);
     this._set_peer_current_task(peer_key, new_task_id);
     this._reply_to_event(event, "收到，正在处理。");
+  }
+
+  async _handle_brief_command(
+    command: BriefCommand,
+    event: Record<string, unknown>,
+    source: {
+      account_id: string;
+      peer_id: string;
+      context_token: string;
+      message_id: string;
+      peer_key: string;
+    },
+  ): Promise<void> {
+    if (command.action === "help") {
+      this._reply_to_event(event, format_brief_help(command.reason));
+      return;
+    }
+    if (!this.scheduler.handle_inbound_message) {
+      this._reply_to_event(
+        event,
+        "❌ Task brief flow is not available in this scheduler.",
+      );
+      return;
+    }
+
+    const metadata = this._brief_source_metadata(source);
+    const source_ref = source.message_id || source.peer_key;
+    try {
+      if (command.action === "create") {
+        const payload = build_brief_payload({
+          channel: "weixin",
+          goal: command.goal,
+          source_ref,
+          source_metadata: metadata,
+          working_dir: await resolve_working_dir(
+            command.goal,
+            "weixin",
+            this.db,
+          ),
+          agent: resolve_agent("weixin", this.db),
+        });
+        const result = this.scheduler.handle_inbound_message(
+          this._make_inbound(
+            InboundMessageType.CREATE_BRIEF,
+            payload,
+            source.peer_id,
+            metadata,
+          ),
+        );
+        const brief_id = Number(result["brief_id"]);
+        this._reply_to_event(
+          event,
+          format_brief_created_reply(brief_id, String(payload["title"])),
+        );
+        return;
+      }
+
+      if (command.action === "confirm") {
+        const result = this.scheduler.handle_inbound_message(
+          this._make_inbound(
+            InboundMessageType.CONFIRM_BRIEF,
+            { brief_id: command.brief_id },
+            source.peer_id,
+            metadata,
+          ),
+        );
+        const task_id = Number(result["task_id"]);
+        if (!Number.isInteger(task_id) || task_id <= 0) {
+          this._reply_to_event(event, "❌ Brief confirmation failed.");
+          return;
+        }
+
+        this._task_origin.set(task_id, {
+          account_id: source.account_id,
+          peer_id: source.peer_id,
+          context_token: source.context_token,
+          message_id: source.message_id,
+        });
+        this._remember_task_source(task_id);
+        this._set_peer_current_task(source.peer_key, task_id);
+        this._reply_to_event(
+          event,
+          format_brief_started_reply(command.brief_id, task_id),
+        );
+        return;
+      }
+
+      const result = this.scheduler.handle_inbound_message(
+        this._make_inbound(
+          InboundMessageType.DISCARD_BRIEF,
+          { brief_id: command.brief_id },
+          source.peer_id,
+          metadata,
+        ),
+      );
+      this._reply_to_event(
+        event,
+        format_brief_discarded_reply(Number(result["brief_id"])),
+      );
+    } catch (exc) {
+      this._reply_to_event(
+        event,
+        `❌ ${exc instanceof Error ? exc.message : String(exc)}`,
+      );
+    }
+  }
+
+  _brief_source_metadata(source: {
+    account_id: string;
+    peer_id: string;
+    context_token: string;
+    message_id: string;
+  }): Record<string, unknown> {
+    return {
+      account_id: source.account_id,
+      peer_id: source.peer_id,
+      context_token: source.context_token,
+      message_id: source.message_id,
+    };
   }
 
   _peer_key(account_id: string, peer_id: string): string {

@@ -9,9 +9,11 @@ import os from "node:os";
 import path from "node:path";
 
 import {
+  InboundMessageType,
   makeOutboundMessage,
   MessageBus,
   OutboundMessageType,
+  type InboundMessage,
 } from "../src/bus.ts";
 import { _hooks as dirHooks } from "../src/channels/dir_utils.ts";
 import {
@@ -64,10 +66,26 @@ class StubDB implements WeixinTaskDB {
 
 class StubScheduler implements WeixinScheduler {
   submitted: Task[] = [];
+  inbound: InboundMessage[] = [];
+  nextBriefId = 1;
 
   submit_task(task: Task): number {
     this.submitted.push(task);
     return this.submitted.length;
+  }
+
+  handle_inbound_message(msg: InboundMessage): Row {
+    this.inbound.push(msg);
+    if (msg.type === InboundMessageType.CREATE_BRIEF) {
+      return { brief_id: this.nextBriefId++, status: "draft" };
+    }
+    if (msg.type === InboundMessageType.CONFIRM_BRIEF) {
+      return { task_id: this.submitted.length + 1, status: "created" };
+    }
+    if (msg.type === InboundMessageType.DISCARD_BRIEF) {
+      return { brief_id: msg.payload["brief_id"], status: "discarded" };
+    }
+    return { status: "ignored" };
   }
 }
 
@@ -589,6 +607,83 @@ describe("Weixin inbound messages", () => {
     expect(replies[0]).not.toContain("Task #");
     expect(replies[1]).not.toContain("Task #");
     expect(replies[1]).not.toContain("▶️");
+  });
+
+  test("brief command creates a draft without submitting a task", async () => {
+    const proc = fakeBridgeProcess();
+    const { channel, db, scheduler } = makeChannel();
+    channel._running = true;
+    channel._bridge_proc = proc;
+    db.settings["default_agent"] = "codex";
+
+    await withResolvedDir("/tmp/repo", async () => {
+      await channel._handle_message_event({
+        text: "/brief fix the login redirect",
+        account_id: "acct",
+        peer_id: "peer",
+        context_token: "ctx",
+        message_id: "msg-brief",
+      });
+    });
+
+    expect(scheduler.submitted).toHaveLength(0);
+    expect(scheduler.inbound).toHaveLength(1);
+    expect(scheduler.inbound[0]!.type).toBe(InboundMessageType.CREATE_BRIEF);
+    expect(scheduler.inbound[0]!.payload["goal"]).toBe(
+      "fix the login redirect",
+    );
+    expect(scheduler.inbound[0]!.payload["working_dir"]).toBe("/tmp/repo");
+    expect(scheduler.inbound[0]!.payload["source_ref"]).toBe("msg-brief");
+    expect(scheduler.inbound[0]!.payload["source_metadata"]).toEqual({
+      account_id: "acct",
+      peer_id: "peer",
+      context_token: "ctx",
+      message_id: "msg-brief",
+    });
+    expect(channel._get_peer_current_task("acct:peer")).toBeNull();
+
+    const reply = writtenCommands(proc).at(-1)!;
+    expect(reply["text"]).toContain("Draft task brief #1");
+    expect(reply["text"]).toContain("/confirm-brief 1");
+  });
+
+  test("confirm and discard brief commands use text fallback", async () => {
+    const proc = fakeBridgeProcess();
+    const { channel, bus, scheduler } = makeChannel();
+    channel._running = true;
+    channel._bridge_proc = proc;
+
+    await channel._handle_message_event({
+      text: "/confirm-brief 4",
+      account_id: "acct",
+      peer_id: "peer",
+      context_token: "ctx",
+      message_id: "msg-confirm",
+    });
+
+    expect(scheduler.inbound[0]!.type).toBe(InboundMessageType.CONFIRM_BRIEF);
+    expect(scheduler.inbound[0]!.payload["brief_id"]).toBe(4);
+    expect(channel._task_origin.get(1)).toEqual({
+      account_id: "acct",
+      peer_id: "peer",
+      context_token: "ctx",
+      message_id: "msg-confirm",
+    });
+    expect(channel._get_peer_current_task("acct:peer")).toBe(1);
+    expect(bus.get_task_source(1)).toBe("weixin");
+    expect(writtenCommands(proc).at(-1)!["text"]).toContain("Task #1");
+
+    await channel._handle_message_event({
+      text: "/discard-brief #4",
+      account_id: "acct",
+      peer_id: "peer",
+      context_token: "ctx",
+      message_id: "msg-discard",
+    });
+
+    expect(scheduler.inbound[1]!.type).toBe(InboundMessageType.DISCARD_BRIEF);
+    expect(scheduler.inbound[1]!.payload["brief_id"]).toBe(4);
+    expect(writtenCommands(proc).at(-1)!["text"]).toContain("discarded");
   });
 
   test("room-session resume survives channel restart", async () => {
