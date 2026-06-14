@@ -1,6 +1,5 @@
-html,
-body,
-#root {
+/* src/index.css */
+html, body, #root {
   width: 100%;
   min-width: 0;
   min-height: 100%;
@@ -8,8 +7,17 @@ body,
 }
 
 html {
+  --buncss-light: initial;
+  --buncss-dark: ;
+  color-scheme: light dark;
   background: #0f1012;
-  color-scheme: dark light;
+}
+
+@media (prefers-color-scheme: dark) {
+  html {
+    --buncss-light: ;
+    --buncss-dark: initial;
+  }
 }
 
 body {
@@ -22,10 +30,7 @@ body {
   box-sizing: border-box;
 }
 
-button,
-input,
-textarea,
-select {
+button, input, textarea, select {
   font: inherit;
 }
 
@@ -43,9 +48,9 @@ img {
   }
 
   .app-toolbar {
-    width: 100%;
-    justify-content: flex-start;
     overflow-x: auto;
+    justify-content: flex-start;
+    width: 100%;
     padding-bottom: 2px;
   }
 
