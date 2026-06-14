@@ -410,15 +410,16 @@ export class TaskScheduler extends BusAwareSchedulerMixin {
       source_ref,
       source_metadata: _plain_object(payload["source_metadata"]),
       working_dir:
-        payload["working_dir"] === null ||
-        payload["working_dir"] === undefined
+        payload["working_dir"] === null || payload["working_dir"] === undefined
           ? null
           : String(payload["working_dir"]),
       agent:
         payload["agent"] === null || payload["agent"] === undefined
           ? null
           : String(payload["agent"]),
-      runbooks: this.db.get_im_runbooks(true).map((row) => runbook_from_row(row)),
+      runbooks: this.db
+        .get_im_runbooks(true)
+        .map((row) => runbook_from_row(row)),
     });
     if (!result.ok || !result.expansion) {
       throw new Error(result.error ?? "invalid runbook");

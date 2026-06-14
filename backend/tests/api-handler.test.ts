@@ -270,17 +270,14 @@ describe("api handler", () => {
 
     const patchedRes = await handleApiRequest(
       ctx,
-      new Request(
-        `http://127.0.0.1:9712/api/im-runbooks/${created["id"]}`,
-        {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            description: "Triage a GitHub issue",
-            enabled: false,
-          }),
-        },
-      ),
+      new Request(`http://127.0.0.1:9712/api/im-runbooks/${created["id"]}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          description: "Triage a GitHub issue",
+          enabled: false,
+        }),
+      }),
     );
     expect(patchedRes.status).toBe(200);
     const patched = (await patchedRes.json()) as Record<string, any>;
@@ -289,10 +286,9 @@ describe("api handler", () => {
 
     const deleted = await handleApiRequest(
       ctx,
-      new Request(
-        `http://127.0.0.1:9712/api/im-runbooks/${created["id"]}`,
-        { method: "DELETE" },
-      ),
+      new Request(`http://127.0.0.1:9712/api/im-runbooks/${created["id"]}`, {
+        method: "DELETE",
+      }),
     );
     expect(deleted.status).toBe(200);
     expect(await deleted.json()).toEqual({ status: "deleted" });
@@ -316,16 +312,19 @@ describe("api handler", () => {
 
     const previewRes = await handleApiRequest(
       ctx,
-      new Request("http://127.0.0.1:9712/api/im-runbooks/triage-issue/preview", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          raw_args: "https://github.com/acme/app/issues/12",
-          source_channel: "api",
-          source_ref: "api:test",
-          working_dir: ".",
-        }),
-      }),
+      new Request(
+        "http://127.0.0.1:9712/api/im-runbooks/triage-issue/preview",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            raw_args: "https://github.com/acme/app/issues/12",
+            source_channel: "api",
+            source_ref: "api:test",
+            working_dir: ".",
+          }),
+        },
+      ),
     );
     expect(previewRes.status).toBe(201);
     const preview = (await previewRes.json()) as Record<string, any>;

@@ -761,10 +761,7 @@ export class TaskDB {
     "enabled",
   ]);
 
-  update_im_runbook(
-    runbook_id: number,
-    kwargs: Record<string, unknown>,
-  ): void {
+  update_im_runbook(runbook_id: number, kwargs: Record<string, unknown>): void {
     const invalid = Object.keys(kwargs).filter(
       (k) => !TaskDB.ALLOWED_IM_RUNBOOK_COLUMNS.has(k),
     );

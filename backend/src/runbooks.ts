@@ -106,9 +106,16 @@ function isBuiltinSpec(runbook: RunbookDefinition): runbook is BuiltinSpec {
   );
 }
 
-function validateGeneric(runbook: RunbookDefinition, rawArgs: string): string | null {
+function validateGeneric(
+  runbook: RunbookDefinition,
+  rawArgs: string,
+): string | null {
   const schemaArgs = runbook.command_schema["args"];
-  if (Array.isArray(schemaArgs) && schemaArgs.length > 0 && !firstArg(rawArgs)) {
+  if (
+    Array.isArray(schemaArgs) &&
+    schemaArgs.length > 0 &&
+    !firstArg(rawArgs)
+  ) {
     return `Usage: /${runbook.name} ${schemaArgs.map((arg) => `<${String(arg)}>`).join(" ")}`;
   }
   return null;
@@ -134,7 +141,8 @@ export const BUILTIN_RUNBOOKS: BuiltinSpec[] = [
   {
     name: "review-pr",
     aliases: [],
-    description: "Review a pull request and summarize risks, bugs, and missing tests.",
+    description:
+      "Review a pull request and summarize risks, bugs, and missing tests.",
     source_type: RunbookSourceType.BUILTIN,
     source_id: null,
     command_schema: { args: ["url"] },
@@ -155,7 +163,8 @@ export const BUILTIN_RUNBOOKS: BuiltinSpec[] = [
   {
     name: "fix-ci",
     aliases: [],
-    description: "Inspect a failing CI run and propose or apply the minimal fix.",
+    description:
+      "Inspect a failing CI run and propose or apply the minimal fix.",
     source_type: RunbookSourceType.BUILTIN,
     source_id: null,
     command_schema: { args: ["url"] },
@@ -188,7 +197,8 @@ export const BUILTIN_RUNBOOKS: BuiltinSpec[] = [
     usage: "/summarize-thread",
     validate: noValidation,
     title: () => "Summarize IM thread",
-    goal: () => "Summarize the current IM thread into a clear task brief or notes.",
+    goal: () =>
+      "Summarize the current IM thread into a clear task brief or notes.",
     acceptance: () => [
       "Extract the concrete asks, decisions, and open questions.",
       "Separate facts from assumptions.",
@@ -272,7 +282,7 @@ export function find_runbook(
         runbook.name === normalized ||
         runbook.aliases.some((alias) => alias.toLowerCase() === normalized),
     ) ?? null
-  ) ?? null;
+  );
 }
 
 export function parse_runbook_command(

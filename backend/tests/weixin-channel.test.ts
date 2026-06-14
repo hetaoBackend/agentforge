@@ -748,9 +748,7 @@ describe("Weixin inbound messages", () => {
     expect(writtenCommands(proc).at(-1)!["text"]).toContain(
       "Draft task brief #1",
     );
-    expect(writtenCommands(proc).at(-1)!["text"]).toContain(
-      "/confirm-brief 1",
-    );
+    expect(writtenCommands(proc).at(-1)!["text"]).toContain("/confirm-brief 1");
   });
 
   test("room-session resume survives channel restart", async () => {

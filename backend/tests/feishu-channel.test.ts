@@ -1380,7 +1380,9 @@ describe("Feishu inbound handling", () => {
     await withResolvedDir("/tmp/repo", async () => {
       await channel._handle_inbound(
         makeEvent({
-          content: textPayload("/review-pr https://github.com/acme/app/pull/42"),
+          content: textPayload(
+            "/review-pr https://github.com/acme/app/pull/42",
+          ),
           messageId: "om_runbook",
         }),
       );

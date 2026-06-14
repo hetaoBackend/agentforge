@@ -3,11 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import { CronExpressionParser } from "cron-parser";
 
-import {
-  InboundMessageType,
-  MessageBus,
-  makeInboundMessage,
-} from "./bus.ts";
+import { InboundMessageType, MessageBus, makeInboundMessage } from "./bus.ts";
 import type { TaskDB } from "./db.ts";
 import type { TaskScheduler } from "./scheduler.ts";
 import {
@@ -343,7 +339,8 @@ function validateIMRunbookPayload(
     return {
       response: [
         {
-          error: "name must start with a letter and contain only lowercase letters, numbers, and hyphens",
+          error:
+            "name must start with a letter and contain only lowercase letters, numbers, and hyphens",
           field: "name",
         },
         400,
@@ -364,7 +361,9 @@ function validateIMRunbookPayload(
   }
 
   const sourceType = asString(
-    body["source_type"] ?? existing?.["source_type"] ?? RunbookSourceType.TEMPLATE,
+    body["source_type"] ??
+      existing?.["source_type"] ??
+      RunbookSourceType.TEMPLATE,
   );
   if (!Object.values(RunbookSourceType).includes(sourceType as any)) {
     return {
@@ -458,7 +457,9 @@ function allIMRunbooks(ctx: ApiContext): Row[] {
     ...BUILTIN_RUNBOOKS.map((runbook) =>
       runbookResponse(runbook, { source_type: RunbookSourceType.BUILTIN }),
     ),
-    ...ctx.db.get_im_runbooks().map((row) => runbookResponse(runbook_from_row(row), row)),
+    ...ctx.db
+      .get_im_runbooks()
+      .map((row) => runbookResponse(runbook_from_row(row), row)),
   ];
 }
 

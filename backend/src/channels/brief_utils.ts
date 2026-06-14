@@ -82,10 +82,21 @@ export function build_brief_payload(args: {
   };
 }
 
-function runbook_definitions_from_db(db: RunbookDB | null): RunbookDefinition[] {
-  if (!db?.get_im_runbooks) return [];
+function has_runbook_db(value: unknown): value is RunbookDB {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "get_im_runbooks" in value &&
+    typeof (value as RunbookDB).get_im_runbooks === "function"
+  );
+}
+
+function runbook_definitions_from_db(db: unknown): RunbookDefinition[] {
+  if (!has_runbook_db(db)) return [];
   try {
-    return db.get_im_runbooks(true).map((row) => runbook_from_row(row));
+    const get_im_runbooks = db.get_im_runbooks;
+    if (!get_im_runbooks) return [];
+    return get_im_runbooks.call(db, true).map((row) => runbook_from_row(row));
   } catch {
     return [];
   }
@@ -93,7 +104,7 @@ function runbook_definitions_from_db(db: RunbookDB | null): RunbookDefinition[] 
 
 export function parse_runbook_fallback(
   text: string,
-  db: RunbookDB | null = null,
+  db: unknown = null,
 ): ParsedRunbookCommand | null {
   return parse_runbook_command(text, runbook_definitions_from_db(db));
 }
