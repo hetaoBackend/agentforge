@@ -24,6 +24,7 @@ import { _hooks } from "../src/channels/dir_utils.ts";
 import {
   TELEGRAM_AVAILABLE,
   TelegramChannel,
+  type OutputListener,
   type TelegramApi,
   type TgContext,
   type TgMessage,
@@ -68,10 +69,21 @@ class StubDB {
 
 class StubScheduler {
   submitted: Task[] = [];
+  listeners: OutputListener[] = [];
+  removed: OutputListener[] = [];
 
   submit_task(task: Task): number {
     this.submitted.push(task);
     return this.submitted.length;
+  }
+
+  add_output_listener(cb: OutputListener): void {
+    this.listeners.push(cb);
+  }
+
+  remove_output_listener(cb: OutputListener): void {
+    this.removed.push(cb);
+    this.listeners = this.listeners.filter((listener) => listener !== cb);
   }
 }
 
@@ -419,7 +431,7 @@ test("test_send_failure_default_chat_hides_task_label", async () => {
   const text = api.lastText();
   expect(text).not.toContain("Task #");
   expect(text).not.toContain("Broke");
-  expect(text).toContain("truncated"); // error > 800 → smart truncation
+  expect(text).toBe(`❌\n${"x".repeat(1500)}`);
   expect(text).not.toContain("/status");
 });
 
@@ -507,7 +519,8 @@ test("test_current_session_resume_reaction_failure_logged", async () => {
 
   expect(db.updated[db.updated.length - 1]![0]).toBe(5);
   expect(log.text()).toContain("Failed to set resume reaction");
-  expect(api.callsFor("sendMessage").length).toBe(0);
+  expect(api.callsFor("sendMessage").length).toBe(1);
+  expect(api.lastText()).toContain("Thinking");
 });
 
 // ── _create_task react coroutine ─────────────────────────────────
@@ -528,7 +541,8 @@ test("test_create_task_react_coroutine_runs", async () => {
   }
 
   expect(api.callsFor("setMessageReaction").length).toBe(1);
-  expect(api.callsFor("sendMessage").length).toBe(0);
+  expect(api.callsFor("sendMessage").length).toBe(1);
+  expect(api.lastText()).toContain("Thinking");
 });
 
 test("test_create_task_react_coroutine_logs_failure", async () => {
@@ -592,5 +606,6 @@ test("test_cmd_resume_reaction_failure_logged", async () => {
   expect(db.updated[db.updated.length - 1]![0]).toBe(1);
   expect(db.updated[db.updated.length - 1]![1]["prompt"]).toBe("keep going");
   expect(log.text()).toContain("Failed to set resume reaction");
-  expect(api.callsFor("sendMessage").length).toBe(0);
+  expect(api.callsFor("sendMessage").length).toBe(1);
+  expect(api.lastText()).toContain("Thinking");
 });
