@@ -8,6 +8,7 @@ import { TaskDB } from "../src/db.ts";
 import { TaskScheduler } from "../src/scheduler.ts";
 import { handleApiRequest, type ApiContext } from "../src/api.ts";
 import { FeishuChannel } from "../src/channels/feishu.ts";
+import { makeTask } from "../src/types.ts";
 
 describe("api handler", () => {
   let tmpDir: string;
@@ -366,6 +367,81 @@ describe("api handler", () => {
     );
   });
 
+  test("IM digest API previews recent activity", async () => {
+    db.add_task(
+      makeTask({
+        title: "Ship auth fix",
+        prompt: "fix auth",
+        status: "completed",
+      }),
+    );
+
+    const previewRes = await handleApiRequest(
+      ctx,
+      new Request("http://127.0.0.1:9712/api/im-digests/preview", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ include_empty: false }),
+      }),
+    );
+
+    expect(previewRes.status).toBe(200);
+    const preview = (await previewRes.json()) as Record<string, any>;
+    expect(preview["status"]).toBe("ready");
+    expect(preview["text"]).toContain("AgentForge Standup");
+    expect(preview["text"]).toContain("Ship auth fix");
+    expect(preview["digest"]["sections"][0]["key"]).toBe("completed");
+  });
+
+  test("IM digest API sends to explicit Slack recipients", async () => {
+    db.add_task(
+      makeTask({
+        title: "Ship auth fix",
+        prompt: "fix auth",
+        status: "completed",
+      }),
+    );
+    const reply = mock(async () => undefined);
+    ctx.slack_channel = { _reply: reply } as any;
+
+    const sendRes = await handleApiRequest(
+      ctx,
+      new Request("http://127.0.0.1:9712/api/im-digests/send", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          recipients: [{ channel: "slack", target: "C1" }],
+        }),
+      }),
+    );
+
+    expect(sendRes.status).toBe(200);
+    const sent = (await sendRes.json()) as Record<string, any>;
+    expect(sent["status"]).toBe("sent");
+    expect(sent["sent"]).toBe(1);
+    expect(reply).toHaveBeenCalledWith(
+      "C1",
+      null,
+      expect.stringContaining("Ship auth fix"),
+    );
+  });
+
+  test("IM digest API returns conflict when send has no recipients", async () => {
+    const sendRes = await handleApiRequest(
+      ctx,
+      new Request("http://127.0.0.1:9712/api/im-digests/send", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ include_empty: true }),
+      }),
+    );
+
+    expect(sendRes.status).toBe(409);
+    expect(await sendRes.json()).toEqual({
+      error: "no digest recipients configured",
+    });
+  });
+
   test("POST /api/feishu/settings restarts the Feishu channel", async () => {
     const old = {
       stopped: false,
@@ -623,6 +699,13 @@ describe("api handler", () => {
     db.set_setting("skill_library_enabled", "1");
     db.set_setting("skill_sweep_agent", "claude");
     db.set_setting("skill_sweep_cron", "5 4 * * *");
+    db.set_setting("im_digest_enabled", "1");
+    db.set_setting("im_digest_cron", "0 8 * * 1-5");
+    db.set_setting(
+      "im_digest_channels",
+      JSON.stringify([{ channel: "slack", target: "C1" }]),
+    );
+    db.set_setting("im_attention_digest_minutes", "15");
     db.set_setting("telegram_enabled", "true");
     db.set_setting("telegram_bot_token", "tg-secret");
     db.set_setting("telegram_allowed_users", "42");
@@ -654,6 +737,10 @@ describe("api handler", () => {
       skill_library_enabled: true,
       skill_sweep_agent: "claude",
       skill_sweep_cron: "5 4 * * *",
+      im_digest_enabled: true,
+      im_digest_cron: "0 8 * * 1-5",
+      im_digest_channels: [{ channel: "slack", target: "C1" }],
+      im_attention_digest_minutes: 15,
     });
 
     const status = await json(
