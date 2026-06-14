@@ -80,6 +80,25 @@ class StubScheduler {
         task_id: this.submitted.length + 1,
       };
     }
+    if (msg.type === InboundMessageType.SKILL_SUGGESTION_ACTION) {
+      const action = String(msg.payload["action"]);
+      if (action === "show") {
+        return {
+          pattern_id: msg.payload["pattern_id"],
+          status: "ready",
+          text: "Skill suggestion: fix-ci-investigation\n\nDraft preview:\n# Fix CI",
+        };
+      }
+      return {
+        pattern_id: msg.payload["pattern_id"],
+        status:
+          action === "draft"
+            ? "drafting"
+            : action === "approve"
+              ? "approved"
+              : "dismissed",
+      };
+    }
     return { status: "ignored" };
   }
 }
@@ -354,6 +373,34 @@ test("test_runbook_commands_use_text_fallback", async () => {
   expect(scheduler.inbound[1]!.payload["name"]).toBe("release-check");
   expect(last_text(web)).toContain("Draft task brief #1");
   expect(last_text(web)).toContain("/confirm-brief 1");
+});
+
+test("test_skill_suggestion_commands_use_text_fallback", async () => {
+  const scheduler = new StubScheduler();
+  const { channel, web } = _make_channel(undefined, scheduler);
+
+  await channel._handle_user_message("/draft-skill 4", "C1", null, "6.0");
+
+  expect(scheduler.inbound[0]!.type).toBe(
+    InboundMessageType.SKILL_SUGGESTION_ACTION,
+  );
+  expect(scheduler.inbound[0]!.payload["action"]).toBe("draft");
+  expect(scheduler.inbound[0]!.payload["pattern_id"]).toBe(4);
+  expect(scheduler.inbound[0]!.payload["source_channel"]).toBe("slack");
+  expect(scheduler.inbound[0]!.payload["target"]).toBe("C1");
+  expect(last_text(web)).toContain("Skill draft");
+
+  await channel._handle_user_message("/show-skill #4", "C1", null, "7.0");
+  expect(scheduler.inbound[1]!.payload["action"]).toBe("show");
+  expect(last_text(web)).toContain("Draft preview");
+
+  await channel._handle_user_message("/approve-skill 4", "C1", null, "8.0");
+  expect(scheduler.inbound[2]!.payload["action"]).toBe("approve");
+  expect(last_text(web)).toContain("approved");
+
+  await channel._handle_user_message("/dismiss-skill 4", "C1", null, "9.0");
+  expect(scheduler.inbound[3]!.payload["action"]).toBe("dismiss");
+  expect(last_text(web)).toContain("dismissed");
 });
 
 // ── commands ─────────────────────────────────────────────────────

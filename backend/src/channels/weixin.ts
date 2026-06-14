@@ -58,10 +58,14 @@ import {
   format_brief_started_reply,
   format_runbook_brief_reply,
   format_runbook_created_reply,
+  format_skill_suggestion_action_reply,
+  format_skill_suggestion_help,
   parse_brief_command,
   parse_runbook_fallback,
+  parse_skill_suggestion_command,
   type BriefCommand,
   type ParsedRunbookCommand,
+  type SkillSuggestionCommand,
 } from "./brief_utils.ts";
 import { handle_dir_command, resolve_working_dir } from "./dir_utils.ts";
 
@@ -648,6 +652,21 @@ export class WeixinChannel extends Channel {
       });
       return;
     }
+    const skill_suggestion_command = parse_skill_suggestion_command(text);
+    if (skill_suggestion_command !== null) {
+      await this._handle_skill_suggestion_command(
+        skill_suggestion_command,
+        event,
+        {
+          account_id,
+          peer_id,
+          context_token,
+          message_id,
+          peer_key,
+        },
+      );
+      return;
+    }
 
     const task_id = force_new_session
       ? null
@@ -866,6 +885,60 @@ export class WeixinChannel extends Channel {
         return;
       }
       this._reply_to_event(event, "❌ Runbook failed.");
+    } catch (exc) {
+      this._reply_to_event(
+        event,
+        `❌ ${exc instanceof Error ? exc.message : String(exc)}`,
+      );
+    }
+  }
+
+  async _handle_skill_suggestion_command(
+    command: SkillSuggestionCommand,
+    event: Record<string, unknown>,
+    source: {
+      account_id: string;
+      peer_id: string;
+      context_token: string;
+      message_id: string;
+      peer_key: string;
+    },
+  ): Promise<void> {
+    if (command.action === "help") {
+      this._reply_to_event(
+        event,
+        format_skill_suggestion_help(command.reason),
+      );
+      return;
+    }
+    if (!this.scheduler.handle_inbound_message) {
+      this._reply_to_event(
+        event,
+        "❌ Skill suggestion flow is not available in this scheduler.",
+      );
+      return;
+    }
+
+    const metadata = this._brief_source_metadata(source);
+    try {
+      const result = this.scheduler.handle_inbound_message(
+        this._make_inbound(
+          InboundMessageType.SKILL_SUGGESTION_ACTION,
+          {
+            action: command.action,
+            pattern_id: command.pattern_id,
+            source_channel: "weixin",
+            target: source.peer_id,
+            source_metadata: metadata,
+          },
+          source.peer_id,
+          metadata,
+        ),
+      );
+      this._reply_to_event(
+        event,
+        format_skill_suggestion_action_reply(result),
+      );
     } catch (exc) {
       this._reply_to_event(
         event,

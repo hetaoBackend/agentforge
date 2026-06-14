@@ -112,6 +112,25 @@ class StubScheduler implements FeishuScheduler {
         task_id: this.submitted.length + 1,
       };
     }
+    if (msg.type === InboundMessageType.SKILL_SUGGESTION_ACTION) {
+      const action = String(msg.payload["action"]);
+      if (action === "show") {
+        return {
+          pattern_id: msg.payload["pattern_id"],
+          status: "ready",
+          text: "Skill suggestion: fix-ci-investigation\n\nDraft preview:\n# Fix CI",
+        };
+      }
+      return {
+        pattern_id: msg.payload["pattern_id"],
+        status:
+          action === "draft"
+            ? "drafting"
+            : action === "approve"
+              ? "approved"
+              : "dismissed",
+      };
+    }
     return { status: "ignored" };
   }
 
@@ -1416,6 +1435,64 @@ describe("Feishu inbound handling", () => {
     const sent = (channel._send_message as any).mock.calls.at(-1);
     expect(sent[1]).toContain("Draft task brief #1");
     expect(sent[1]).toContain("/confirm-brief 1");
+  });
+
+  test("skill suggestion commands use text fallback", async () => {
+    const { channel, scheduler } = makeChannel();
+    channel._send_message = mock(async () => "om_reply") as any;
+    channel._add_reaction = mock(() => undefined) as any;
+
+    await channel._handle_inbound(
+      makeEvent({
+        content: textPayload("/draft-skill 4"),
+        messageId: "om_draft_skill",
+        chatId: "oc_product",
+      }),
+    );
+
+    expect(scheduler.inbound[0]!.type).toBe(
+      InboundMessageType.SKILL_SUGGESTION_ACTION,
+    );
+    expect(scheduler.inbound[0]!.payload["action"]).toBe("draft");
+    expect(scheduler.inbound[0]!.payload["pattern_id"]).toBe(4);
+    expect(scheduler.inbound[0]!.payload["source_channel"]).toBe("feishu");
+    expect(scheduler.inbound[0]!.payload["target"]).toBe("ou_sender");
+    expect((channel._send_message as any).mock.calls.at(-1)[1]).toContain(
+      "Skill draft",
+    );
+
+    await channel._handle_inbound(
+      makeEvent({
+        content: textPayload("/show-skill #4"),
+        messageId: "om_show_skill",
+      }),
+    );
+    expect(scheduler.inbound[1]!.payload["action"]).toBe("show");
+    expect((channel._send_message as any).mock.calls.at(-1)[1]).toContain(
+      "Draft preview",
+    );
+
+    await channel._handle_inbound(
+      makeEvent({
+        content: textPayload("/approve-skill 4"),
+        messageId: "om_approve_skill",
+      }),
+    );
+    expect(scheduler.inbound[2]!.payload["action"]).toBe("approve");
+    expect((channel._send_message as any).mock.calls.at(-1)[1]).toContain(
+      "approved",
+    );
+
+    await channel._handle_inbound(
+      makeEvent({
+        content: textPayload("/dismiss-skill 4"),
+        messageId: "om_dismiss_skill",
+      }),
+    );
+    expect(scheduler.inbound[3]!.payload["action"]).toBe("dismiss");
+    expect((channel._send_message as any).mock.calls.at(-1)[1]).toContain(
+      "dismissed",
+    );
   });
 
   test("post message with only an image creates default image-analysis prompt", async () => {

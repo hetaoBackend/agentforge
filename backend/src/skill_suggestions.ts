@@ -167,6 +167,7 @@ export function render_im_skill_suggestion_text(
     "",
     "Reply:",
     `\`/draft-skill ${suggestion.pattern_id}\` to generate a SKILL.md draft`,
+    `\`/show-skill ${suggestion.pattern_id}\` to review the draft in IM`,
     `\`/approve-skill ${suggestion.pattern_id}\` to install after draft review`,
     `\`/dismiss-skill ${suggestion.pattern_id}\` to stop suggesting this pattern`,
   );

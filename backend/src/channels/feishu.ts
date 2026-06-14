@@ -40,10 +40,14 @@ import {
   format_brief_started_reply,
   format_runbook_brief_reply,
   format_runbook_created_reply,
+  format_skill_suggestion_action_reply,
+  format_skill_suggestion_help,
   parse_brief_command,
   parse_runbook_fallback,
+  parse_skill_suggestion_command,
   type BriefCommand,
   type ParsedRunbookCommand,
+  type SkillSuggestionCommand,
 } from "./brief_utils.ts";
 import { handle_dir_command, resolve_working_dir } from "./dir_utils.ts";
 
@@ -1608,6 +1612,16 @@ export class FeishuChannel extends Channel {
       );
       return;
     }
+    const skill_suggestion_cmd = parse_skill_suggestion_command(content);
+    if (skill_suggestion_cmd !== null) {
+      await this._handle_skill_suggestion_command(
+        skill_suggestion_cmd,
+        reply_to,
+        message,
+        sender_id,
+      );
+      return;
+    }
     if (content.startsWith("/dir ") || content.startsWith("/cd ")) {
       const reply = handle_dir_command(content, "feishu", this.db);
       if (reply) await this._send_message(reply_to, reply);
@@ -1973,6 +1987,55 @@ export class FeishuChannel extends Channel {
         return;
       }
       await this._send_message(reply_to, "❌ Runbook failed.");
+    } catch (e) {
+      await this._send_message(
+        reply_to,
+        `❌ ${e instanceof Error ? e.message : String(e)}`,
+      );
+    }
+  }
+
+  async _handle_skill_suggestion_command(
+    command: SkillSuggestionCommand,
+    reply_to: string,
+    message: Row,
+    sender_id: string,
+  ): Promise<void> {
+    if (command.action === "help") {
+      await this._send_message(
+        reply_to,
+        format_skill_suggestion_help(command.reason),
+      );
+      return;
+    }
+    if (!this.scheduler.handle_inbound_message) {
+      await this._send_message(
+        reply_to,
+        "❌ Skill suggestion flow is not available in this scheduler.",
+      );
+      return;
+    }
+
+    const metadata = this._brief_source_metadata(message, sender_id);
+    try {
+      const result = this.scheduler.handle_inbound_message(
+        this._make_inbound(
+          InboundMessageType.SKILL_SUGGESTION_ACTION,
+          {
+            action: command.action,
+            pattern_id: command.pattern_id,
+            source_channel: "feishu",
+            target: reply_to,
+            source_metadata: metadata,
+          },
+          reply_to,
+          metadata,
+        ),
+      );
+      await this._send_message(
+        reply_to,
+        format_skill_suggestion_action_reply(result),
+      );
     } catch (e) {
       await this._send_message(
         reply_to,

@@ -44,10 +44,14 @@ import {
   format_brief_started_reply,
   format_runbook_brief_reply,
   format_runbook_created_reply,
+  format_skill_suggestion_action_reply,
+  format_skill_suggestion_help,
   parse_brief_command,
   parse_runbook_fallback,
+  parse_skill_suggestion_command,
   type ParsedRunbookCommand,
   type BriefCommand,
+  type SkillSuggestionCommand,
 } from "./brief_utils.ts";
 import { handle_dir_command, resolve_working_dir } from "./dir_utils.ts";
 import type { Task } from "../types.ts";
@@ -547,11 +551,18 @@ export class SlackChannel extends Channel {
       const args = ws === -1 ? "" : text.slice(ws + 1).trim();
       const brief_cmd = parse_brief_command(text);
       const runbook_cmd = parse_runbook_fallback(text, this.db);
+      const skill_suggestion_cmd = parse_skill_suggestion_command(text);
 
       if (brief_cmd !== null) {
         await this._handle_brief_command(brief_cmd, channel_id, msg_ts);
       } else if (runbook_cmd !== null) {
         await this._handle_runbook_command(runbook_cmd, channel_id, msg_ts);
+      } else if (skill_suggestion_cmd !== null) {
+        await this._handle_skill_suggestion_command(
+          skill_suggestion_cmd,
+          channel_id,
+          msg_ts,
+        );
       } else if (cmd === "/status") {
         await this._cmd_status(args, channel_id, msg_ts);
       } else if (cmd === "/cancel") {
@@ -812,6 +823,57 @@ export class SlackChannel extends Channel {
         return;
       }
       await this._reply(channel_id, msg_ts, ":x: Runbook failed.");
+    } catch (e) {
+      await this._reply(
+        channel_id,
+        msg_ts,
+        `:x: ${e instanceof Error ? e.message : String(e)}`,
+      );
+    }
+  }
+
+  async _handle_skill_suggestion_command(
+    command: SkillSuggestionCommand,
+    channel_id: string,
+    msg_ts: string,
+  ): Promise<void> {
+    if (command.action === "help") {
+      await this._reply(
+        channel_id,
+        msg_ts,
+        format_skill_suggestion_help(command.reason),
+      );
+      return;
+    }
+    if (!this.scheduler.handle_inbound_message) {
+      await this._reply(
+        channel_id,
+        msg_ts,
+        ":x: Skill suggestion flow is not available in this scheduler.",
+      );
+      return;
+    }
+
+    try {
+      const result = this.scheduler.handle_inbound_message(
+        this._make_inbound(
+          InboundMessageType.SKILL_SUGGESTION_ACTION,
+          {
+            action: command.action,
+            pattern_id: command.pattern_id,
+            source_channel: "slack",
+            target: channel_id,
+            source_metadata: { channel_id, message_ts: msg_ts },
+          },
+          channel_id,
+          { channel_id, message_ts: msg_ts },
+        ),
+      );
+      await this._reply(
+        channel_id,
+        msg_ts,
+        format_skill_suggestion_action_reply(result),
+      );
     } catch (e) {
       await this._reply(
         channel_id,

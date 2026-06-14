@@ -108,6 +108,25 @@ class StubScheduler {
         task_id: this.submitted.length + 1,
       };
     }
+    if (msg.type === InboundMessageType.SKILL_SUGGESTION_ACTION) {
+      const action = String(msg.payload["action"]);
+      if (action === "show") {
+        return {
+          pattern_id: msg.payload["pattern_id"],
+          status: "ready",
+          text: "Skill suggestion: fix-ci-investigation\n\nDraft preview:\n# Fix CI",
+        };
+      }
+      return {
+        pattern_id: msg.payload["pattern_id"],
+        status:
+          action === "draft"
+            ? "drafting"
+            : action === "approve"
+              ? "approved"
+              : "dismissed",
+      };
+    }
     return { status: "ignored" };
   }
 
@@ -583,6 +602,50 @@ test("test_runbook_commands_use_text_fallback", async () => {
   expect(scheduler.inbound[1]!.payload["name"]).toBe("release-check");
   expect(api.lastText()).toContain("Draft task brief #1");
   expect(api.lastText()).toContain("/confirm-brief 1");
+});
+
+test("test_skill_suggestion_commands_use_text_fallback", async () => {
+  const { channel, api, scheduler } = _make_channel();
+
+  await channel._handle_text_message(
+    _fake_update({
+      text: "/draft-skill 4",
+      chat_id: 10,
+      message_id: 337,
+      user_id: 7,
+    }),
+    _ctx(),
+  );
+
+  expect(scheduler.inbound[0]!.type).toBe(
+    InboundMessageType.SKILL_SUGGESTION_ACTION,
+  );
+  expect(scheduler.inbound[0]!.payload["action"]).toBe("draft");
+  expect(scheduler.inbound[0]!.payload["pattern_id"]).toBe(4);
+  expect(scheduler.inbound[0]!.payload["source_channel"]).toBe("telegram");
+  expect(scheduler.inbound[0]!.payload["target"]).toBe("10");
+  expect(api.lastText()).toContain("Skill draft");
+
+  await channel._handle_text_message(
+    _fake_update({ text: "/show-skill #4", chat_id: 10, message_id: 338 }),
+    _ctx(),
+  );
+  expect(scheduler.inbound[1]!.payload["action"]).toBe("show");
+  expect(api.lastText()).toContain("Draft preview");
+
+  await channel._handle_text_message(
+    _fake_update({ text: "/approve-skill 4", chat_id: 10, message_id: 339 }),
+    _ctx(),
+  );
+  expect(scheduler.inbound[2]!.payload["action"]).toBe("approve");
+  expect(api.lastText()).toContain("approved");
+
+  await channel._handle_text_message(
+    _fake_update({ text: "/dismiss-skill 4", chat_id: 10, message_id: 340 }),
+    _ctx(),
+  );
+  expect(scheduler.inbound[3]!.payload["action"]).toBe("dismiss");
+  expect(api.lastText()).toContain("dismissed");
 });
 
 test("test_handle_text_message_resumes_current_chat_session", async () => {

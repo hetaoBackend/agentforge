@@ -99,6 +99,25 @@ class StubScheduler implements WeixinScheduler {
         task_id: this.submitted.length + 1,
       };
     }
+    if (msg.type === InboundMessageType.SKILL_SUGGESTION_ACTION) {
+      const action = String(msg.payload["action"]);
+      if (action === "show") {
+        return {
+          pattern_id: msg.payload["pattern_id"],
+          status: "ready",
+          text: "Skill suggestion: fix-ci-investigation\n\nDraft preview:\n# Fix CI",
+        };
+      }
+      return {
+        pattern_id: msg.payload["pattern_id"],
+        status:
+          action === "draft"
+            ? "drafting"
+            : action === "approve"
+              ? "approved"
+              : "dismissed",
+      };
+    }
     return { status: "ignored" };
   }
 }
@@ -749,6 +768,60 @@ describe("Weixin inbound messages", () => {
       "Draft task brief #1",
     );
     expect(writtenCommands(proc).at(-1)!["text"]).toContain("/confirm-brief 1");
+  });
+
+  test("skill suggestion commands use text fallback", async () => {
+    const proc = fakeBridgeProcess();
+    const { channel, scheduler } = makeChannel();
+    channel._running = true;
+    channel._bridge_proc = proc;
+
+    await channel._handle_message_event({
+      text: "/draft-skill 4",
+      account_id: "acct",
+      peer_id: "peer",
+      context_token: "ctx",
+      message_id: "msg-draft-skill",
+    });
+
+    expect(scheduler.inbound[0]!.type).toBe(
+      InboundMessageType.SKILL_SUGGESTION_ACTION,
+    );
+    expect(scheduler.inbound[0]!.payload["action"]).toBe("draft");
+    expect(scheduler.inbound[0]!.payload["pattern_id"]).toBe(4);
+    expect(scheduler.inbound[0]!.payload["source_channel"]).toBe("weixin");
+    expect(scheduler.inbound[0]!.payload["target"]).toBe("peer");
+    expect(writtenCommands(proc).at(-1)!["text"]).toContain("Skill draft");
+
+    await channel._handle_message_event({
+      text: "/show-skill #4",
+      account_id: "acct",
+      peer_id: "peer",
+      context_token: "ctx",
+      message_id: "msg-show-skill",
+    });
+    expect(scheduler.inbound[1]!.payload["action"]).toBe("show");
+    expect(writtenCommands(proc).at(-1)!["text"]).toContain("Draft preview");
+
+    await channel._handle_message_event({
+      text: "/approve-skill 4",
+      account_id: "acct",
+      peer_id: "peer",
+      context_token: "ctx",
+      message_id: "msg-approve-skill",
+    });
+    expect(scheduler.inbound[2]!.payload["action"]).toBe("approve");
+    expect(writtenCommands(proc).at(-1)!["text"]).toContain("approved");
+
+    await channel._handle_message_event({
+      text: "/dismiss-skill 4",
+      account_id: "acct",
+      peer_id: "peer",
+      context_token: "ctx",
+      message_id: "msg-dismiss-skill",
+    });
+    expect(scheduler.inbound[3]!.payload["action"]).toBe("dismiss");
+    expect(writtenCommands(proc).at(-1)!["text"]).toContain("dismissed");
   });
 
   test("room-session resume survives channel restart", async () => {

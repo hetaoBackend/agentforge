@@ -19,6 +19,14 @@ export type BriefCommand =
   | { action: "help"; reason: "missing_goal" | "invalid_brief_id" };
 type BriefHelpReason = Extract<BriefCommand, { action: "help" }>["reason"];
 
+export type SkillSuggestionCommand =
+  | { action: "draft" | "show" | "approve" | "dismiss"; pattern_id: number }
+  | { action: "help"; reason: "invalid_pattern_id" };
+type SkillSuggestionHelpReason = Extract<
+  SkillSuggestionCommand,
+  { action: "help" }
+>["reason"];
+
 function parseBriefId(value: string): number | null {
   const raw = value.trim().replace(/^#+/, "");
   if (!/^\d+$/.test(raw)) return null;
@@ -51,6 +59,32 @@ export function parse_brief_command(text: string): BriefCommand | null {
       : { action: "discard", brief_id };
   }
   return null;
+}
+
+export function parse_skill_suggestion_command(
+  text: string,
+): SkillSuggestionCommand | null {
+  const trimmed = text.trim();
+  const match = /^\/([a-z-]+)(?:\s+([\s\S]*))?$/i.exec(trimmed);
+  if (!match) return null;
+  const cmd = match[1]!.toLowerCase();
+  const args = (match[2] ?? "").trim();
+  const commandToAction: Record<
+    string,
+    "draft" | "show" | "approve" | "dismiss"
+  > = {
+    "draft-skill": "draft",
+    "show-skill": "show",
+    "review-skill": "show",
+    "approve-skill": "approve",
+    "dismiss-skill": "dismiss",
+  };
+  const action = commandToAction[cmd];
+  if (!action) return null;
+  const pattern_id = parseBriefId(args);
+  return pattern_id === null
+    ? { action: "help", reason: "invalid_pattern_id" }
+    : { action, pattern_id };
 }
 
 function titleFromGoal(goal: string): string {
@@ -133,6 +167,33 @@ export function format_brief_help(reason: BriefHelpReason): string {
     return "Usage: `/brief <what should AgentForge do?>`";
   }
   return "Usage: `/confirm-brief <brief_id>` or `/discard-brief <brief_id>`";
+}
+
+export function format_skill_suggestion_help(
+  _reason: SkillSuggestionHelpReason,
+): string {
+  return "Usage: `/draft-skill <pattern_id>`, `/show-skill <pattern_id>`, `/approve-skill <pattern_id>`, or `/dismiss-skill <pattern_id>`";
+}
+
+export function format_skill_suggestion_action_reply(
+  result: Record<string, unknown>,
+): string {
+  const pattern_id = Number(result["pattern_id"]);
+  const id = Number.isInteger(pattern_id) && pattern_id > 0 ? pattern_id : "?";
+  const status = String(result["status"] ?? "");
+  if (status === "drafting") {
+    return `Skill draft for pattern #${id} started. Review it with \`/show-skill ${id}\` when ready.`;
+  }
+  if (status === "ready") {
+    return String(result["text"] ?? `Skill draft for pattern #${id} is ready.`);
+  }
+  if (status === "approved") {
+    return `Skill suggestion #${id} approved and installed.`;
+  }
+  if (status === "dismissed") {
+    return `Skill suggestion #${id} dismissed.`;
+  }
+  return `Skill suggestion #${id} updated.`;
 }
 
 export function format_brief_created_reply(

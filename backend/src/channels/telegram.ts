@@ -66,10 +66,14 @@ import {
   format_brief_started_reply,
   format_runbook_brief_reply,
   format_runbook_created_reply,
+  format_skill_suggestion_action_reply,
+  format_skill_suggestion_help,
   parse_brief_command,
   parse_runbook_fallback,
+  parse_skill_suggestion_command,
   type BriefCommand,
   type ParsedRunbookCommand,
+  type SkillSuggestionCommand,
 } from "./brief_utils.ts";
 import { handle_dir_command, resolve_working_dir } from "./dir_utils.ts";
 
@@ -894,6 +898,14 @@ export class TelegramChannel extends Channel {
       await this._handle_runbook_command(runbook_command, update);
       return;
     }
+    const skill_suggestion_command = parse_skill_suggestion_command(text);
+    if (skill_suggestion_command !== null) {
+      await this._handle_skill_suggestion_command(
+        skill_suggestion_command,
+        update,
+      );
+      return;
+    }
 
     // ── 检测转发消息 ───────────────────────────────────────
     text = this._format_forwarded_text(text, update);
@@ -1117,6 +1129,55 @@ export class TelegramChannel extends Channel {
         return;
       }
       await this._reply_text(update, "❌ Runbook failed.");
+    } catch (e) {
+      await this._reply_text(
+        update,
+        `❌ ${e instanceof Error ? e.message : String(e)}`,
+      );
+    }
+  }
+
+  async _handle_skill_suggestion_command(
+    command: SkillSuggestionCommand,
+    update: TgUpdate,
+  ): Promise<void> {
+    if (command.action === "help") {
+      await this._reply_text(
+        update,
+        format_skill_suggestion_help(command.reason),
+      );
+      return;
+    }
+    if (!this.scheduler.handle_inbound_message) {
+      await this._reply_text(
+        update,
+        "❌ Skill suggestion flow is not available in this scheduler.",
+      );
+      return;
+    }
+
+    const msg = update.message!;
+    const chat_id = msg.chat.id;
+    const metadata = this._brief_source_metadata(update);
+    try {
+      const result = this.scheduler.handle_inbound_message(
+        this._make_inbound(
+          InboundMessageType.SKILL_SUGGESTION_ACTION,
+          {
+            action: command.action,
+            pattern_id: command.pattern_id,
+            source_channel: "telegram",
+            target: String(chat_id),
+            source_metadata: metadata,
+          },
+          String(chat_id),
+          metadata,
+        ),
+      );
+      await this._reply_text(
+        update,
+        format_skill_suggestion_action_reply(result),
+      );
     } catch (e) {
       await this._reply_text(
         update,
