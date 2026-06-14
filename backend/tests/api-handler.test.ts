@@ -120,6 +120,124 @@ describe("api handler", () => {
     expect(output).toEqual({ output: "raw output", is_running: false });
   });
 
+  test("task brief API creates lists updates reads and discards drafts", async () => {
+    const createdRes = await handleApiRequest(
+      ctx,
+      new Request("http://127.0.0.1:9712/api/task-briefs", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title: "Fix auth",
+          goal: "Fix login redirect",
+          context_summary: "Forwarded QA report",
+          acceptance_criteria: ["Identify cause", "Patch minimal code"],
+          working_dir: ".",
+          working_dir_confidence: "high",
+          agent: "codex",
+          source_channel: "telegram",
+          source_ref: "chat-1:msg-2",
+          source_metadata: { chat_id: "chat-1" },
+        }),
+      }),
+    );
+    expect(createdRes.status).toBe(201);
+    const created = (await createdRes.json()) as Record<string, any>;
+    const id = Number(created["id"]);
+    expect(created["status"]).toBe("draft");
+
+    const listed = await json(
+      new Request("http://127.0.0.1:9712/api/task-briefs"),
+    );
+    expect(listed["briefs"]).toHaveLength(1);
+    expect(listed["briefs"][0]["source_metadata"]).toEqual({
+      chat_id: "chat-1",
+    });
+
+    const loaded = await json(
+      new Request(`http://127.0.0.1:9712/api/task-briefs/${id}`),
+    );
+    expect(loaded["title"]).toBe("Fix auth");
+    expect(loaded["acceptance_criteria"]).toEqual([
+      "Identify cause",
+      "Patch minimal code",
+    ]);
+
+    const patched = await handleApiRequest(
+      ctx,
+      new Request(`http://127.0.0.1:9712/api/task-briefs/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title: "Fix auth v2",
+          acceptance_criteria: ["Patch", "Test"],
+        }),
+      }),
+    );
+    expect(patched.status).toBe(200);
+    const patchedBody = (await patched.json()) as Record<string, any>;
+    expect(patchedBody["title"]).toBe("Fix auth v2");
+    expect(patchedBody["acceptance_criteria"]).toEqual(["Patch", "Test"]);
+
+    const discarded = await handleApiRequest(
+      ctx,
+      new Request(`http://127.0.0.1:9712/api/task-briefs/${id}/discard`, {
+        method: "POST",
+      }),
+    );
+    expect(discarded.status).toBe(200);
+    const discardedBody = (await discarded.json()) as Record<string, any>;
+    expect(discardedBody["status"]).toBe("discarded");
+  });
+
+  test("confirming a task brief creates a normal task", async () => {
+    const created = await json(
+      new Request("http://127.0.0.1:9712/api/task-briefs", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title: "Fix auth",
+          goal: "Fix login redirect",
+          context_summary: "Forwarded QA report",
+          acceptance_criteria: ["Identify cause", "Patch minimal code"],
+          working_dir: ".",
+          working_dir_confidence: "high",
+          agent: "codex",
+          source_channel: "telegram",
+          source_ref: "chat-1:msg-2",
+          source_metadata: { chat_id: "chat-1" },
+        }),
+      }),
+    );
+
+    const confirmedRes = await handleApiRequest(
+      ctx,
+      new Request(
+        `http://127.0.0.1:9712/api/task-briefs/${created["id"]}/confirm`,
+        { method: "POST" },
+      ),
+    );
+    expect(confirmedRes.status).toBe(201);
+    const confirmed = (await confirmedRes.json()) as Record<string, any>;
+    expect(confirmed["status"]).toBe("created");
+
+    const task = db.get_task(Number(confirmed["task_id"]))!;
+    expect(task["title"]).toContain("Fix auth");
+    expect(task["working_dir"]).toBe(".");
+    expect(task["agent"]).toBe("codex");
+    expect(task["tags"]).toContain("im-inbox");
+    expect(task["tags"]).toContain("telegram");
+    expect(task["prompt"]).toContain("Goal:");
+    expect(task["prompt"]).toContain("Fix login redirect");
+    expect(task["prompt"]).toContain("Context:");
+    expect(task["prompt"]).toContain("Forwarded QA report");
+    expect(task["prompt"]).toContain("Acceptance criteria:");
+    expect(task["prompt"]).toContain("1. Identify cause");
+
+    const brief = db.get_task_brief(Number(created["id"]))!;
+    expect(brief["status"]).toBe("converted");
+    expect(brief["created_task_id"]).toBe(Number(confirmed["task_id"]));
+  });
+
   test("POST /api/feishu/settings restarts the Feishu channel", async () => {
     const old = {
       stopped: false,

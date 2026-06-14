@@ -12,8 +12,10 @@ import path from "node:path";
 import { CronExpressionParser } from "cron-parser";
 import {
   BusAwareSchedulerMixin,
+  InboundMessageType,
   OutboundMessageType,
   type MessageBus,
+  type InboundMessage,
 } from "./bus.ts";
 import type { TaskDB } from "./db.ts";
 import {
@@ -50,7 +52,9 @@ import {
   LIVE_OUTPUT_EVENT_TYPES,
   ScheduleType,
   SECRET_KEY_FRAGMENTS,
+  TaskBriefStatus,
   TaskStatus,
+  makeTaskBrief,
   makeHeartbeat,
   type Task,
 } from "./types.ts";
@@ -127,6 +131,35 @@ const _int = (v: unknown): number | null => {
   const n = typeof v === "number" ? Math.trunc(v) : parseInt(String(v), 10);
   return Number.isNaN(n) ? null : n;
 };
+
+function _string_list(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.map((item) => String(item).trim()).filter(Boolean);
+}
+
+function _plain_object(value: unknown): Row {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Row)
+    : {};
+}
+
+function _task_brief_prompt(brief: Row): string {
+  const lines = ["Goal:", String(brief["goal"]).trim()];
+  const context = String(brief["context_summary"] ?? "").trim();
+  if (context) {
+    lines.push("", "Context:", context);
+  }
+  const criteria = Array.isArray(brief["acceptance_criteria"])
+    ? brief["acceptance_criteria"].map(String).filter(Boolean)
+    : [];
+  if (criteria.length) {
+    lines.push("", "Acceptance criteria:");
+    criteria.forEach((criterion, index) => {
+      lines.push(`${index + 1}. ${criterion}`);
+    });
+  }
+  return lines.join("\n");
+}
 
 // ── injectable os seam (≙ monkeypatching taskboard.os.getpgid/killpg) ───────
 
@@ -227,6 +260,123 @@ export class TaskScheduler extends BusAwareSchedulerMixin {
     this.executor = new AgentExecutor();
     this.on_task_update = on_task_update;
     this.bus = bus; // MessageBus integration (optional)
+  }
+
+  handle_inbound_message(msg: InboundMessage): Row {
+    if (msg.type === InboundMessageType.CREATE_BRIEF) {
+      return this._handle_create_brief(msg);
+    }
+    if (msg.type === InboundMessageType.CONFIRM_BRIEF) {
+      return this._handle_confirm_brief(msg);
+    }
+    if (msg.type === InboundMessageType.DISCARD_BRIEF) {
+      return this._handle_discard_brief(msg);
+    }
+    return { status: "ignored" };
+  }
+
+  _handle_create_brief(msg: InboundMessage): Row {
+    const payload = msg.payload;
+    const title = String(payload["title"] ?? "").trim();
+    const goal = String(payload["goal"] ?? "").trim();
+    const source_channel = String(
+      payload["source_channel"] ?? msg.source ?? "",
+    ).trim();
+    const source_ref = String(
+      payload["source_ref"] ??
+        msg.metadata["source_ref"] ??
+        msg.metadata["message_id"] ??
+        msg.reply_to ??
+        "",
+    ).trim();
+    if (!title || !goal || !source_channel || !source_ref) {
+      throw new Error(
+        "title, goal, source_channel, and source_ref are required",
+      );
+    }
+    const id = this.db.add_task_brief(
+      makeTaskBrief({
+        title,
+        goal,
+        context_summary: String(payload["context_summary"] ?? ""),
+        acceptance_criteria: _string_list(payload["acceptance_criteria"]),
+        working_dir:
+          payload["working_dir"] === null ||
+          payload["working_dir"] === undefined
+            ? null
+            : String(payload["working_dir"]),
+        working_dir_confidence: String(
+          payload["working_dir_confidence"] ?? "unknown",
+        ),
+        agent:
+          payload["agent"] === null || payload["agent"] === undefined
+            ? null
+            : String(payload["agent"]),
+        risk_level: String(payload["risk_level"] ?? "normal"),
+        needs_confirmation:
+          payload["needs_confirmation"] === undefined
+            ? true
+            : Boolean(payload["needs_confirmation"]),
+        source_channel,
+        source_ref,
+        source_metadata: _plain_object(payload["source_metadata"]),
+        expires_at:
+          payload["expires_at"] === null || payload["expires_at"] === undefined
+            ? null
+            : String(payload["expires_at"]),
+      }),
+    );
+    return { brief_id: id, status: TaskBriefStatus.DRAFT };
+  }
+
+  _handle_confirm_brief(msg: InboundMessage): Row {
+    const brief_id = _int(msg.payload["brief_id"]);
+    if (brief_id === null) {
+      throw new Error("brief_id is required");
+    }
+    const brief = this.db.get_task_brief(brief_id);
+    if (!brief) {
+      throw new Error("task brief not found");
+    }
+    if (brief["status"] !== TaskBriefStatus.DRAFT) {
+      throw new Error(
+        `Cannot confirm task brief with status '${brief["status"]}'.`,
+      );
+    }
+    const source_channel = String(brief["source_channel"] ?? "").trim();
+    const task = {
+      title: String(brief["title"] ?? "Untitled"),
+      prompt: _task_brief_prompt(brief),
+      working_dir: String(brief["working_dir"] || "."),
+      schedule_type: ScheduleType.IMMEDIATE,
+      tags: ["im-inbox", source_channel].filter(Boolean).join(","),
+      agent: String(
+        brief["agent"] ||
+          this.db.get_setting("default_agent", DEFAULT_AGENT) ||
+          DEFAULT_AGENT,
+      ),
+    };
+    const task_id = this.submit_task(makeTaskFromPartial(task));
+    this.db.confirm_task_brief(brief_id, task_id);
+    return { task_id, status: "created" };
+  }
+
+  _handle_discard_brief(msg: InboundMessage): Row {
+    const brief_id = _int(msg.payload["brief_id"]);
+    if (brief_id === null) {
+      throw new Error("brief_id is required");
+    }
+    const brief = this.db.get_task_brief(brief_id);
+    if (!brief) {
+      throw new Error("task brief not found");
+    }
+    if (brief["status"] !== TaskBriefStatus.DRAFT) {
+      throw new Error(
+        `Cannot discard task brief with status '${brief["status"]}'.`,
+      );
+    }
+    this.db.discard_task_brief(brief_id);
+    return { brief_id, status: TaskBriefStatus.DISCARDED };
   }
 
   start(): void {

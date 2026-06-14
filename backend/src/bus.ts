@@ -31,6 +31,9 @@ export const InboundMessageType = {
   RESPOND_TASK: "respond_task", // answer a question a task is waiting on
   CANCEL_TASK: "cancel_task", // cancel a task
   STATUS_QUERY: "status_query", // query task status
+  CREATE_BRIEF: "create_brief", // create a draft task brief
+  CONFIRM_BRIEF: "confirm_brief", // convert a draft brief into a task
+  DISCARD_BRIEF: "discard_brief", // discard a draft brief
 } as const;
 export type InboundMessageType =
   (typeof InboundMessageType)[keyof typeof InboundMessageType];
@@ -65,6 +68,9 @@ function utcNowIso(): string {
  *   RESPOND_TASK -> {"task_id", "answer"}
  *   CANCEL_TASK  -> {"task_id"}
  *   STATUS_QUERY -> {"task_id"}
+ *   CREATE_BRIEF -> {"title", "goal", "source_channel", "source_ref", ...}
+ *   CONFIRM_BRIEF -> {"brief_id"}
+ *   DISCARD_BRIEF -> {"brief_id"}
  * reply_to: optional reply target (e.g. Feishu chat_id / open_id).
  * metadata: channel-specific context (e.g. Feishu message_id).
  */

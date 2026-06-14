@@ -144,6 +144,60 @@ export function makeTask(partial: Partial<Task> = {}): Task {
   };
 }
 
+export const TaskBriefStatus = {
+  DRAFT: "draft",
+  CONVERTED: "converted",
+  DISCARDED: "discarded",
+  EXPIRED: "expired",
+} as const;
+export type TaskBriefStatus =
+  (typeof TaskBriefStatus)[keyof typeof TaskBriefStatus];
+
+export interface TaskBrief {
+  id: number | null;
+  status: TaskBriefStatus;
+  title: string;
+  goal: string;
+  context_summary: string;
+  acceptance_criteria: string[];
+  working_dir: string | null;
+  working_dir_confidence: string;
+  agent: string | null;
+  risk_level: string;
+  needs_confirmation: boolean;
+  source_channel: string;
+  source_ref: string;
+  source_metadata: Record<string, unknown>;
+  created_task_id: number | null;
+  created_at: string | null;
+  updated_at: string | null;
+  expires_at: string | null;
+}
+
+export function makeTaskBrief(partial: Partial<TaskBrief> = {}): TaskBrief {
+  return {
+    id: null,
+    status: TaskBriefStatus.DRAFT,
+    title: "",
+    goal: "",
+    context_summary: "",
+    acceptance_criteria: [],
+    working_dir: null,
+    working_dir_confidence: "unknown",
+    agent: null,
+    risk_level: "normal",
+    needs_confirmation: true,
+    source_channel: "",
+    source_ref: "",
+    source_metadata: {},
+    created_task_id: null,
+    created_at: null,
+    updated_at: null,
+    expires_at: null,
+    ...partial,
+  };
+}
+
 export interface Heartbeat {
   id: number | null;
   name: string;

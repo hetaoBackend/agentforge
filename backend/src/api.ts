@@ -11,10 +11,13 @@ import {
   DEFAULT_TIMEOUT_SECONDS,
   HeartbeatScheduleType,
   ScheduleType,
+  TaskBriefStatus,
   makeHeartbeat,
   makeTask,
+  makeTaskBrief,
   type Heartbeat,
   type Task,
+  type TaskBrief,
 } from "./types.ts";
 import { dateToLocalIso } from "./util.ts";
 import { FeishuChannel } from "./channels/feishu.ts";
@@ -50,7 +53,7 @@ function isAllowedOrigin(origin: string): boolean {
 
 function corsHeaders(origin: string): Headers {
   const headers = new Headers({
-    "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
+    "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
     "Access-Control-Allow-Headers": "Content-Type, X-CSRF-Token",
   });
   if (isAllowedOrigin(origin)) {
@@ -131,6 +134,29 @@ function parseJsonList(value: unknown): any[] {
   return [];
 }
 
+function asStringList(value: unknown): string[] {
+  return parseJsonList(value)
+    .map((item) => String(item).trim())
+    .filter(Boolean);
+}
+
+function parseJsonObject(value: unknown): Row {
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    return value as Row;
+  }
+  if (typeof value === "string") {
+    try {
+      const parsed = JSON.parse(value);
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        return parsed as Row;
+      }
+    } catch {
+      return {};
+    }
+  }
+  return {};
+}
+
 function cronValid(expr: string): boolean {
   try {
     CronExpressionParser.parse(expr);
@@ -186,6 +212,141 @@ function attachDependencyMetadata(db: TaskDB, task: Row): Row {
     dependencies: db.get_dependencies(tid),
     dependents: db.get_dependents(tid).map((d) => d["task_id"]),
   };
+}
+
+function validateTaskBriefPayload(
+  body: Row,
+  existing: Row | null = null,
+): { brief?: TaskBrief; response?: ResponseData } {
+  const title = asString(body["title"] ?? existing?.["title"]).trim();
+  if (!title) {
+    return {
+      response: [{ error: "title cannot be empty", field: "title" }, 400],
+    };
+  }
+  const goal = asString(body["goal"] ?? existing?.["goal"]).trim();
+  if (!goal) {
+    return {
+      response: [{ error: "goal cannot be empty", field: "goal" }, 400],
+    };
+  }
+  const sourceChannel = asString(
+    body["source_channel"] ?? existing?.["source_channel"],
+  ).trim();
+  if (!sourceChannel) {
+    return {
+      response: [
+        { error: "source_channel cannot be empty", field: "source_channel" },
+        400,
+      ],
+    };
+  }
+  const sourceRef = asString(body["source_ref"] ?? existing?.["source_ref"])
+    .trim()
+    .slice(0, 1000);
+  if (!sourceRef) {
+    return {
+      response: [
+        { error: "source_ref cannot be empty", field: "source_ref" },
+        400,
+      ],
+    };
+  }
+
+  const acceptanceCriteria =
+    "acceptance_criteria" in body
+      ? asStringList(body["acceptance_criteria"])
+      : Array.isArray(existing?.["acceptance_criteria"])
+        ? existing["acceptance_criteria"].map(String)
+        : [];
+  const sourceMetadata =
+    "source_metadata" in body
+      ? parseJsonObject(body["source_metadata"])
+      : parseJsonObject(existing?.["source_metadata"] ?? {});
+
+  const workingDirRaw =
+    body["working_dir"] ?? existing?.["working_dir"] ?? null;
+  const workingDir =
+    workingDirRaw === null || workingDirRaw === undefined
+      ? null
+      : asString(workingDirRaw).trim() || null;
+
+  return {
+    brief: makeTaskBrief({
+      id: existing?.["id"] ?? null,
+      status: asString(
+        body["status"] ?? existing?.["status"] ?? TaskBriefStatus.DRAFT,
+      ) as TaskBrief["status"],
+      title,
+      goal,
+      context_summary: asString(
+        body["context_summary"] ?? existing?.["context_summary"] ?? "",
+      ),
+      acceptance_criteria: acceptanceCriteria,
+      working_dir: workingDir,
+      working_dir_confidence: asString(
+        body["working_dir_confidence"] ??
+          existing?.["working_dir_confidence"] ??
+          "unknown",
+      ),
+      agent:
+        body["agent"] === null
+          ? null
+          : asString(body["agent"] ?? existing?.["agent"] ?? "") || null,
+      risk_level: asString(
+        body["risk_level"] ?? existing?.["risk_level"] ?? "normal",
+      ),
+      needs_confirmation: asBool(
+        body["needs_confirmation"] ?? existing?.["needs_confirmation"] ?? true,
+      ),
+      source_channel: sourceChannel,
+      source_ref: sourceRef,
+      source_metadata: sourceMetadata,
+      created_task_id: existing?.["created_task_id"] ?? null,
+      created_at: existing?.["created_at"] ?? null,
+      updated_at: existing?.["updated_at"] ?? null,
+      expires_at:
+        body["expires_at"] === null
+          ? null
+          : asString(body["expires_at"] ?? existing?.["expires_at"] ?? "") ||
+            null,
+    }),
+  };
+}
+
+function taskPromptFromBrief(brief: Row): string {
+  const lines = ["Goal:", String(brief["goal"]).trim()];
+  const context = String(brief["context_summary"] ?? "").trim();
+  if (context) {
+    lines.push("", "Context:", context);
+  }
+  const criteria = Array.isArray(brief["acceptance_criteria"])
+    ? brief["acceptance_criteria"].map(String).filter(Boolean)
+    : [];
+  if (criteria.length) {
+    lines.push("", "Acceptance criteria:");
+    criteria.forEach((criterion, index) => {
+      lines.push(`${index + 1}. ${criterion}`);
+    });
+  }
+  return lines.join("\n");
+}
+
+function taskFromBrief(ctx: ApiContext, brief: Row): Task {
+  const sourceChannel = String(brief["source_channel"] ?? "").trim();
+  const tags = ["im-inbox", sourceChannel].filter(Boolean).join(",");
+  return makeTask({
+    title: String(brief["title"] ?? "Untitled"),
+    prompt: taskPromptFromBrief(brief),
+    working_dir: String(brief["working_dir"] || "."),
+    schedule_type: ScheduleType.IMMEDIATE,
+    tags,
+    agent: String(
+      brief["agent"] ||
+        ctx.db.get_setting("default_agent", DEFAULT_AGENT) ||
+        DEFAULT_AGENT,
+    ),
+  });
 }
 
 function taskOutputPayload(ctx: ApiContext, taskId: number): Row {
@@ -585,6 +746,22 @@ async function handleGet(
       : jsonResponse({ error: "not found" }, 404, origin);
   }
 
+  if (path === "/api/task-briefs") {
+    const status = url.searchParams.get("status");
+    return jsonResponse(
+      { briefs: ctx.db.get_task_briefs(status || null) },
+      200,
+      origin,
+    );
+  }
+  if (path.startsWith("/api/task-briefs/")) {
+    const bid = idAt(path);
+    const brief = bid === null ? null : ctx.db.get_task_brief(bid);
+    return brief
+      ? jsonResponse(brief, 200, origin)
+      : jsonResponse({ error: "not found" }, 404, origin);
+  }
+
   if (path === "/api/tasks") {
     return jsonResponse(
       ctx.db.get_all_tasks().map((t) => attachDependencyMetadata(ctx.db, t)),
@@ -790,6 +967,68 @@ async function handlePost(
       );
     }
     return jsonResponse({ status: "resumed" }, 200, origin);
+  }
+
+  if (path === "/api/task-briefs") {
+    const validated = validateTaskBriefPayload(body);
+    if (validated.response) {
+      return jsonResponse(
+        validated.response[0],
+        validated.response[1] ?? 200,
+        origin,
+      );
+    }
+    const id = ctx.db.add_task_brief(validated.brief!);
+    return jsonResponse(ctx.db.get_task_brief(id), 201, origin);
+  }
+  if (path.startsWith("/api/task-briefs/") && path.endsWith("/confirm")) {
+    const bid = idAt(path);
+    const brief = bid === null ? null : ctx.db.get_task_brief(bid);
+    if (!brief || bid === null)
+      return jsonResponse({ error: "not found" }, 404, origin);
+    if (brief["status"] !== TaskBriefStatus.DRAFT) {
+      return jsonResponse(
+        {
+          error: `Cannot confirm task brief with status '${brief["status"]}'.`,
+        },
+        409,
+        origin,
+      );
+    }
+    const task = taskFromBrief(ctx, brief);
+    const dirError = ensureWorkingDir(
+      task.working_dir,
+      `working_dir does not exist or is not a directory: ${task.working_dir}`,
+    );
+    if (dirError) return jsonResponse(dirError, 400, origin);
+    const taskId = ctx.scheduler.submit_task(task);
+    ctx.db.confirm_task_brief(bid, taskId);
+    return jsonResponse(
+      {
+        status: "created",
+        task_id: taskId,
+        brief: ctx.db.get_task_brief(bid),
+      },
+      201,
+      origin,
+    );
+  }
+  if (path.startsWith("/api/task-briefs/") && path.endsWith("/discard")) {
+    const bid = idAt(path);
+    const brief = bid === null ? null : ctx.db.get_task_brief(bid);
+    if (!brief || bid === null)
+      return jsonResponse({ error: "not found" }, 404, origin);
+    if (brief["status"] !== TaskBriefStatus.DRAFT) {
+      return jsonResponse(
+        {
+          error: `Cannot discard task brief with status '${brief["status"]}'.`,
+        },
+        409,
+        origin,
+      );
+    }
+    ctx.db.discard_task_brief(bid);
+    return jsonResponse(ctx.db.get_task_brief(bid), 200, origin);
   }
 
   if (path === "/api/skills/sweep") {
@@ -1118,6 +1357,46 @@ async function handlePut(
       ctx.db.set_setting(key, String(value));
     return jsonResponse({ status: "updated" }, 200, origin);
   }
+  if (path.startsWith("/api/task-briefs/") && path.split("/").length === 4) {
+    const bid = idAt(path);
+    const existing = bid === null ? null : ctx.db.get_task_brief(bid);
+    if (!existing || bid === null)
+      return jsonResponse({ error: "not found" }, 404, origin);
+    if (existing["status"] !== TaskBriefStatus.DRAFT) {
+      return jsonResponse(
+        {
+          error: `Cannot edit task brief with status '${existing["status"]}'.`,
+        },
+        409,
+        origin,
+      );
+    }
+    const validated = validateTaskBriefPayload(body, existing);
+    if (validated.response) {
+      return jsonResponse(
+        validated.response[0],
+        validated.response[1] ?? 200,
+        origin,
+      );
+    }
+    const brief = validated.brief!;
+    ctx.db.update_task_brief(bid, {
+      title: brief.title,
+      goal: brief.goal,
+      context_summary: brief.context_summary,
+      acceptance_criteria: brief.acceptance_criteria,
+      working_dir: brief.working_dir,
+      working_dir_confidence: brief.working_dir_confidence,
+      agent: brief.agent,
+      risk_level: brief.risk_level,
+      needs_confirmation: brief.needs_confirmation,
+      source_channel: brief.source_channel,
+      source_ref: brief.source_ref,
+      source_metadata: brief.source_metadata,
+      expires_at: brief.expires_at,
+    });
+    return jsonResponse(ctx.db.get_task_brief(bid), 200, origin);
+  }
   if (path.startsWith("/api/skills/")) {
     const sid = idAt(path);
     if (sid === null)
@@ -1363,7 +1642,14 @@ export async function handleApiRequest(
   if (!url.pathname.startsWith("/api/")) {
     return jsonResponse({ error: "not found" }, 404, origin);
   }
-  if (["POST", "PUT", "DELETE"].includes(req.method) && !checkCsrf(req)) {
+  if (req.method === "PATCH" && !url.pathname.startsWith("/api/task-briefs/")) {
+    void req.body?.cancel();
+    return jsonResponse({ error: "method not allowed" }, 405, origin);
+  }
+  if (
+    ["POST", "PUT", "PATCH", "DELETE"].includes(req.method) &&
+    !checkCsrf(req)
+  ) {
     void req.body?.cancel();
     return jsonResponse(
       { error: "CSRF token missing or invalid" },
@@ -1375,7 +1661,8 @@ export async function handleApiRequest(
   try {
     if (req.method === "GET") return await handleGet(ctx, req, url, origin);
     if (req.method === "POST") return await handlePost(ctx, req, url, origin);
-    if (req.method === "PUT") return await handlePut(ctx, req, url, origin);
+    if (req.method === "PUT" || req.method === "PATCH")
+      return await handlePut(ctx, req, url, origin);
     if (req.method === "DELETE") return await handleDelete(ctx, url, origin);
     return jsonResponse({ error: "method not allowed" }, 405, origin);
   } catch (e) {

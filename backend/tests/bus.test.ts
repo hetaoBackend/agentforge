@@ -76,6 +76,32 @@ test("test_message_bus_round_trips_inbound_and_outbound_messages", async () => {
   expect(await bus.get_outbound()).toBe(outbound);
 });
 
+test("test_message_bus_round_trips_task_brief_inbound_messages", async () => {
+  const bus = new MessageBus();
+  const channel = new RecordingChannel(bus, new StubDB());
+
+  const create = channel._make_inbound(InboundMessageType.CREATE_BRIEF, {
+    title: "Fix auth",
+    goal: "Fix login redirect",
+    source_channel: "telegram",
+    source_ref: "chat-1:msg-2",
+  });
+  const confirm = channel._make_inbound(InboundMessageType.CONFIRM_BRIEF, {
+    brief_id: 1,
+  });
+  const discard = channel._make_inbound(InboundMessageType.DISCARD_BRIEF, {
+    brief_id: 2,
+  });
+
+  bus.publish_inbound(create);
+  bus.publish_inbound(confirm);
+  bus.publish_inbound(discard);
+
+  expect((await bus.get_inbound())!.type).toBe("create_brief");
+  expect((await bus.get_inbound())!.type).toBe("confirm_brief");
+  expect((await bus.get_inbound())!.type).toBe("discard_brief");
+});
+
 test("test_message_bus_returns_none_when_queue_is_empty", async () => {
   const bus = new MessageBus();
 
