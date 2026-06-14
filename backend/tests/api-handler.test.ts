@@ -238,6 +238,135 @@ describe("api handler", () => {
     expect(brief["created_task_id"]).toBe(Number(confirmed["task_id"]));
   });
 
+  test("IM runbook API lists builtins and supports user runbook CRUD", async () => {
+    const initial = await json(
+      new Request("http://127.0.0.1:9712/api/im-runbooks"),
+    );
+    expect(initial["runbooks"].map((runbook: any) => runbook.name)).toContain(
+      "review-pr",
+    );
+
+    const createdRes = await handleApiRequest(
+      ctx,
+      new Request("http://127.0.0.1:9712/api/im-runbooks", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: "triage-issue",
+          aliases: ["issue-triage"],
+          description: "Triage an issue",
+          command_schema: { args: ["url"] },
+          prompt_template: "Triage this issue: {{raw_args}}",
+          default_agent: "codex",
+          confirmation_policy: "required",
+          enabled: true,
+        }),
+      }),
+    );
+    expect(createdRes.status).toBe(201);
+    const created = (await createdRes.json()) as Record<string, any>;
+    expect(created["name"]).toBe("triage-issue");
+    expect(created["aliases"]).toEqual(["issue-triage"]);
+
+    const patchedRes = await handleApiRequest(
+      ctx,
+      new Request(
+        `http://127.0.0.1:9712/api/im-runbooks/${created["id"]}`,
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            description: "Triage a GitHub issue",
+            enabled: false,
+          }),
+        },
+      ),
+    );
+    expect(patchedRes.status).toBe(200);
+    const patched = (await patchedRes.json()) as Record<string, any>;
+    expect(patched["description"]).toBe("Triage a GitHub issue");
+    expect(patched["enabled"]).toBe(false);
+
+    const deleted = await handleApiRequest(
+      ctx,
+      new Request(
+        `http://127.0.0.1:9712/api/im-runbooks/${created["id"]}`,
+        { method: "DELETE" },
+      ),
+    );
+    expect(deleted.status).toBe(200);
+    expect(await deleted.json()).toEqual({ status: "deleted" });
+    expect(db.get_im_runbook(Number(created["id"]))).toBeNull();
+  });
+
+  test("IM runbook API previews a user runbook as a task brief", async () => {
+    const created = await json(
+      new Request("http://127.0.0.1:9712/api/im-runbooks", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: "triage-issue",
+          description: "Triage an issue",
+          prompt_template: "Triage this issue: {{raw_args}}",
+          confirmation_policy: "required",
+        }),
+      }),
+    );
+    expect(created["id"]).toBeTruthy();
+
+    const previewRes = await handleApiRequest(
+      ctx,
+      new Request("http://127.0.0.1:9712/api/im-runbooks/triage-issue/preview", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          raw_args: "https://github.com/acme/app/issues/12",
+          source_channel: "api",
+          source_ref: "api:test",
+          working_dir: ".",
+        }),
+      }),
+    );
+    expect(previewRes.status).toBe(201);
+    const preview = (await previewRes.json()) as Record<string, any>;
+    expect(preview).toEqual({
+      brief_id: 1,
+      runbook: "triage-issue",
+      status: "draft",
+    });
+    expect(db.get_task_brief(1)!["goal"]).toContain(
+      "https://github.com/acme/app/issues/12",
+    );
+    expect(db.get_all_tasks()).toHaveLength(0);
+  });
+
+  test("IM runbook API runs an auto-confirmed builtin as a task", async () => {
+    const runRes = await handleApiRequest(
+      ctx,
+      new Request("http://127.0.0.1:9712/api/im-runbooks/review-pr/run", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          raw_args: "https://github.com/acme/app/pull/42",
+          source_channel: "api",
+          source_ref: "api:test",
+          working_dir: ".",
+          agent: "codex",
+        }),
+      }),
+    );
+    expect(runRes.status).toBe(201);
+    const run = (await runRes.json()) as Record<string, any>;
+    expect(run).toEqual({
+      runbook: "review-pr",
+      status: "created",
+      task_id: 1,
+    });
+    expect(db.get_task(1)!["prompt"]).toContain(
+      "https://github.com/acme/app/pull/42",
+    );
+  });
+
   test("POST /api/feishu/settings restarts the Feishu channel", async () => {
     const old = {
       stopped: false,

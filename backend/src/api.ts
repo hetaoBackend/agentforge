@@ -3,19 +3,32 @@ import fs from "node:fs";
 import os from "node:os";
 import { CronExpressionParser } from "cron-parser";
 
-import { MessageBus } from "./bus.ts";
+import {
+  InboundMessageType,
+  MessageBus,
+  makeInboundMessage,
+} from "./bus.ts";
 import type { TaskDB } from "./db.ts";
 import type { TaskScheduler } from "./scheduler.ts";
+import {
+  BUILTIN_RUNBOOKS,
+  runbook_from_row,
+  type RunbookDefinition,
+} from "./runbooks.ts";
 import {
   DEFAULT_AGENT,
   DEFAULT_TIMEOUT_SECONDS,
   HeartbeatScheduleType,
+  RunbookConfirmationPolicy,
+  RunbookSourceType,
   ScheduleType,
   TaskBriefStatus,
   makeHeartbeat,
+  makeIMRunbook,
   makeTask,
   makeTaskBrief,
   type Heartbeat,
+  type IMRunbook,
   type Task,
   type TaskBrief,
 } from "./types.ts";
@@ -312,6 +325,141 @@ function validateTaskBriefPayload(
             null,
     }),
   };
+}
+
+function validateIMRunbookPayload(
+  body: Row,
+  existing: Row | null = null,
+): { runbook?: IMRunbook; response?: ResponseData } {
+  const name = asString(body["name"] ?? existing?.["name"])
+    .trim()
+    .toLowerCase();
+  if (!name) {
+    return {
+      response: [{ error: "name cannot be empty", field: "name" }, 400],
+    };
+  }
+  if (!/^[a-z][a-z0-9-]*$/.test(name)) {
+    return {
+      response: [
+        {
+          error: "name must start with a letter and contain only lowercase letters, numbers, and hyphens",
+          field: "name",
+        },
+        400,
+      ],
+    };
+  }
+
+  const promptTemplate = asString(
+    body["prompt_template"] ?? existing?.["prompt_template"],
+  );
+  if (!promptTemplate.trim()) {
+    return {
+      response: [
+        { error: "prompt_template cannot be empty", field: "prompt_template" },
+        400,
+      ],
+    };
+  }
+
+  const sourceType = asString(
+    body["source_type"] ?? existing?.["source_type"] ?? RunbookSourceType.TEMPLATE,
+  );
+  if (!Object.values(RunbookSourceType).includes(sourceType as any)) {
+    return {
+      response: [{ error: "invalid source_type", field: "source_type" }, 400],
+    };
+  }
+
+  const confirmationPolicy = asString(
+    body["confirmation_policy"] ??
+      existing?.["confirmation_policy"] ??
+      RunbookConfirmationPolicy.REQUIRED,
+  );
+  if (
+    !Object.values(RunbookConfirmationPolicy).includes(
+      confirmationPolicy as any,
+    )
+  ) {
+    return {
+      response: [
+        {
+          error: "invalid confirmation_policy",
+          field: "confirmation_policy",
+        },
+        400,
+      ],
+    };
+  }
+
+  return {
+    runbook: makeIMRunbook({
+      id: existing?.["id"] ?? null,
+      name,
+      aliases:
+        "aliases" in body
+          ? asStringList(body["aliases"]).map((alias) => alias.toLowerCase())
+          : Array.isArray(existing?.["aliases"])
+            ? existing["aliases"].map((alias: unknown) =>
+                String(alias).toLowerCase(),
+              )
+            : [],
+      description: asString(
+        body["description"] ?? existing?.["description"] ?? "",
+      ),
+      source_type: sourceType as IMRunbook["source_type"],
+      source_id:
+        body["source_id"] === null
+          ? null
+          : asString(body["source_id"] ?? existing?.["source_id"] ?? "") ||
+            null,
+      command_schema:
+        "command_schema" in body
+          ? parseJsonObject(body["command_schema"])
+          : parseJsonObject(existing?.["command_schema"] ?? {}),
+      prompt_template: promptTemplate,
+      default_agent:
+        body["default_agent"] === null
+          ? null
+          : asString(
+              body["default_agent"] ?? existing?.["default_agent"] ?? "",
+            ) || null,
+      confirmation_policy:
+        confirmationPolicy as IMRunbook["confirmation_policy"],
+      enabled: asBool(body["enabled"] ?? existing?.["enabled"] ?? true),
+      created_at: existing?.["created_at"] ?? null,
+      updated_at: existing?.["updated_at"] ?? null,
+    }),
+  };
+}
+
+function runbookResponse(runbook: RunbookDefinition, extras: Row = {}): Row {
+  return {
+    id: null,
+    name: runbook.name,
+    aliases: runbook.aliases,
+    description: runbook.description,
+    source_type: runbook.source_type,
+    source_id: runbook.source_id,
+    command_schema: runbook.command_schema,
+    prompt_template: runbook.prompt_template,
+    default_agent: runbook.default_agent,
+    confirmation_policy: runbook.confirmation_policy,
+    enabled: runbook.enabled,
+    created_at: null,
+    updated_at: null,
+    ...extras,
+  };
+}
+
+function allIMRunbooks(ctx: ApiContext): Row[] {
+  return [
+    ...BUILTIN_RUNBOOKS.map((runbook) =>
+      runbookResponse(runbook, { source_type: RunbookSourceType.BUILTIN }),
+    ),
+    ...ctx.db.get_im_runbooks().map((row) => runbookResponse(runbook_from_row(row), row)),
+  ];
 }
 
 function taskPromptFromBrief(brief: Row): string {
@@ -762,6 +910,10 @@ async function handleGet(
       : jsonResponse({ error: "not found" }, 404, origin);
   }
 
+  if (path === "/api/im-runbooks") {
+    return jsonResponse({ runbooks: allIMRunbooks(ctx) }, 200, origin);
+  }
+
   if (path === "/api/tasks") {
     return jsonResponse(
       ctx.db.get_all_tasks().map((t) => attachDependencyMetadata(ctx.db, t)),
@@ -1029,6 +1181,57 @@ async function handlePost(
     }
     ctx.db.discard_task_brief(bid);
     return jsonResponse(ctx.db.get_task_brief(bid), 200, origin);
+  }
+
+  if (path === "/api/im-runbooks") {
+    const validated = validateIMRunbookPayload(body);
+    if (validated.response) {
+      return jsonResponse(
+        validated.response[0],
+        validated.response[1] ?? 200,
+        origin,
+      );
+    }
+    const id = ctx.db.add_im_runbook(validated.runbook!);
+    return jsonResponse(ctx.db.get_im_runbook(id), 201, origin);
+  }
+  {
+    const parts = path.split("/");
+    if (
+      parts.length === 5 &&
+      parts[2] === "im-runbooks" &&
+      (parts[4] === "preview" || parts[4] === "run")
+    ) {
+      const name = decodeURIComponent(parts[3] ?? "");
+      const sourceRef = asString(body["source_ref"] ?? `api:${name}`).trim();
+      try {
+        const result = ctx.scheduler.handle_inbound_message(
+          makeInboundMessage({
+            type:
+              parts[4] === "preview"
+                ? InboundMessageType.PREVIEW_RUNBOOK
+                : InboundMessageType.RUN_RUNBOOK,
+            source: "api",
+            payload: {
+              ...body,
+              name,
+              raw_args: asString(body["raw_args"] ?? ""),
+              source_channel:
+                asString(body["source_channel"] ?? "api").trim() || "api",
+              source_ref: sourceRef || `api:${name}`,
+            },
+            metadata: { source_ref: sourceRef || `api:${name}` },
+          }),
+        );
+        return jsonResponse(result, 201, origin);
+      } catch (e) {
+        return jsonResponse(
+          { error: e instanceof Error ? e.message : String(e) },
+          400,
+          origin,
+        );
+      }
+    }
   }
 
   if (path === "/api/skills/sweep") {
@@ -1397,6 +1600,35 @@ async function handlePut(
     });
     return jsonResponse(ctx.db.get_task_brief(bid), 200, origin);
   }
+  if (path.startsWith("/api/im-runbooks/") && path.split("/").length === 4) {
+    const rid = idAt(path);
+    if (rid === null)
+      return jsonResponse({ error: "invalid runbook id" }, 400, origin);
+    const existing = ctx.db.get_im_runbook(rid);
+    if (!existing) return jsonResponse({ error: "not found" }, 404, origin);
+    const validated = validateIMRunbookPayload(body, existing);
+    if (validated.response) {
+      return jsonResponse(
+        validated.response[0],
+        validated.response[1] ?? 200,
+        origin,
+      );
+    }
+    const runbook = validated.runbook!;
+    ctx.db.update_im_runbook(rid, {
+      name: runbook.name,
+      aliases: runbook.aliases,
+      description: runbook.description,
+      source_type: runbook.source_type,
+      source_id: runbook.source_id,
+      command_schema: runbook.command_schema,
+      prompt_template: runbook.prompt_template,
+      default_agent: runbook.default_agent,
+      confirmation_policy: runbook.confirmation_policy,
+      enabled: runbook.enabled,
+    });
+    return jsonResponse(ctx.db.get_im_runbook(rid), 200, origin);
+  }
   if (path.startsWith("/api/skills/")) {
     const sid = idAt(path);
     if (sid === null)
@@ -1604,6 +1836,13 @@ async function handleDelete(
     if (hid !== null) ctx.db.delete_heartbeat(hid);
     return jsonResponse({ status: "deleted" }, 200, origin);
   }
+  if (path.startsWith("/api/im-runbooks/")) {
+    const rid = idAt(path);
+    if (rid === null)
+      return jsonResponse({ error: "invalid runbook id" }, 400, origin);
+    ctx.db.delete_im_runbook(rid);
+    return jsonResponse({ status: "deleted" }, 200, origin);
+  }
   if (path.startsWith("/api/skills/")) {
     const sid = idAt(path);
     if (sid === null)
@@ -1642,7 +1881,11 @@ export async function handleApiRequest(
   if (!url.pathname.startsWith("/api/")) {
     return jsonResponse({ error: "not found" }, 404, origin);
   }
-  if (req.method === "PATCH" && !url.pathname.startsWith("/api/task-briefs/")) {
+  if (
+    req.method === "PATCH" &&
+    !url.pathname.startsWith("/api/task-briefs/") &&
+    !url.pathname.startsWith("/api/im-runbooks/")
+  ) {
     void req.body?.cancel();
     return jsonResponse({ error: "method not allowed" }, 405, origin);
   }

@@ -52,6 +52,7 @@ interface ExpandArgs {
   source_metadata?: Record<string, unknown>;
   working_dir?: string | null;
   agent?: string | null;
+  runbooks?: RunbookDefinition[];
 }
 
 type BuiltinSpec = RunbookDefinition & {
@@ -72,6 +73,61 @@ function requireArg(usage: string): (rawArgs: string) => string | null {
 
 function noValidation(_rawArgs: string): string | null {
   return null;
+}
+
+function titleizeName(name: string): string {
+  return name
+    .split("-")
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+function renderTemplate(template: string, rawArgs: string): string {
+  const args = rawArgs.trim() ? rawArgs.trim().split(/\s+/) : [];
+  return template.replace(/\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g, (_match, key) => {
+    if (key === "raw_args" || key === "args") return rawArgs.trim();
+    const argMatch = /^arg(\d+)$/.exec(String(key));
+    if (argMatch) {
+      const index = Number.parseInt(argMatch[1]!, 10) - 1;
+      return args[index] ?? "";
+    }
+    return "";
+  });
+}
+
+function isBuiltinSpec(runbook: RunbookDefinition): runbook is BuiltinSpec {
+  return (
+    "usage" in runbook &&
+    "validate" in runbook &&
+    "title" in runbook &&
+    "goal" in runbook &&
+    "acceptance" in runbook
+  );
+}
+
+function validateGeneric(runbook: RunbookDefinition, rawArgs: string): string | null {
+  const schemaArgs = runbook.command_schema["args"];
+  if (Array.isArray(schemaArgs) && schemaArgs.length > 0 && !firstArg(rawArgs)) {
+    return `Usage: /${runbook.name} ${schemaArgs.map((arg) => `<${String(arg)}>`).join(" ")}`;
+  }
+  return null;
+}
+
+function genericTitle(runbook: RunbookDefinition): string {
+  return `[Runbook] ${runbook.description || titleizeName(runbook.name)}`;
+}
+
+function genericGoal(runbook: RunbookDefinition, rawArgs: string): string {
+  const rendered = renderTemplate(runbook.prompt_template, rawArgs).trim();
+  return rendered || `Run /${runbook.name} ${rawArgs}`.trim();
+}
+
+function genericAcceptance(): string[] {
+  return [
+    "Complete the runbook goal.",
+    "Report what changed and how it was verified.",
+  ];
 }
 
 export const BUILTIN_RUNBOOKS: BuiltinSpec[] = [
@@ -204,22 +260,29 @@ export const BUILTIN_RUNBOOKS: BuiltinSpec[] = [
   },
 ];
 
-export function find_runbook(nameOrAlias: string): BuiltinSpec | null {
+export function find_runbook(
+  nameOrAlias: string,
+  runbooks: RunbookDefinition[] = [],
+): RunbookDefinition | null {
   const normalized = nameOrAlias.toLowerCase();
+  const candidates: RunbookDefinition[] = [...BUILTIN_RUNBOOKS, ...runbooks];
   return (
-    BUILTIN_RUNBOOKS.find(
+    candidates.find(
       (runbook) =>
         runbook.name === normalized ||
         runbook.aliases.some((alias) => alias.toLowerCase() === normalized),
     ) ?? null
-  );
+  ) ?? null;
 }
 
-export function parse_runbook_command(text: string): ParsedRunbookCommand | null {
+export function parse_runbook_command(
+  text: string,
+  runbooks: RunbookDefinition[] = [],
+): ParsedRunbookCommand | null {
   const trimmed = text.trim();
   const match = /^\/([a-z-]+)(?:\s+([\s\S]*))?$/i.exec(trimmed);
   if (!match) return null;
-  const known = find_runbook(match[1] ?? "");
+  const known = find_runbook(match[1] ?? "", runbooks);
   if (!known) return null;
   const raw_args = (match[2] ?? "").trim();
   return {
@@ -230,16 +293,24 @@ export function parse_runbook_command(text: string): ParsedRunbookCommand | null
 }
 
 export function expand_runbook(args: ExpandArgs): RunbookResult {
-  const runbook = find_runbook(args.name);
+  const runbook = find_runbook(args.name, args.runbooks ?? []);
   if (!runbook) return { ok: false, error: `Unknown runbook: ${args.name}` };
 
-  const validationError = runbook.validate(args.raw_args);
+  const validationError = isBuiltinSpec(runbook)
+    ? runbook.validate(args.raw_args)
+    : validateGeneric(runbook, args.raw_args);
   if (validationError) return { ok: false, error: validationError };
 
   const agent = args.agent ?? runbook.default_agent ?? null;
-  const title = runbook.title(args.raw_args);
-  const goal = runbook.goal(args.raw_args);
-  const acceptance = runbook.acceptance(args.raw_args);
+  const title = isBuiltinSpec(runbook)
+    ? runbook.title(args.raw_args)
+    : genericTitle(runbook);
+  const goal = isBuiltinSpec(runbook)
+    ? runbook.goal(args.raw_args)
+    : genericGoal(runbook, args.raw_args);
+  const acceptance = isBuiltinSpec(runbook)
+    ? runbook.acceptance(args.raw_args)
+    : genericAcceptance();
   const prompt = [
     `Runbook: /${runbook.name}`,
     "",
@@ -284,5 +355,34 @@ export function expand_runbook(args: ExpandArgs): RunbookResult {
       task,
       brief,
     },
+  };
+}
+
+export function runbook_from_row(row: Record<string, any>): RunbookDefinition {
+  return {
+    name: String(row["name"] ?? ""),
+    aliases: Array.isArray(row["aliases"]) ? row["aliases"].map(String) : [],
+    description: String(row["description"] ?? ""),
+    source_type: row["source_type"] ?? RunbookSourceType.TEMPLATE,
+    source_id:
+      row["source_id"] === null || row["source_id"] === undefined
+        ? null
+        : String(row["source_id"]),
+    command_schema:
+      row["command_schema"] &&
+      typeof row["command_schema"] === "object" &&
+      !Array.isArray(row["command_schema"])
+        ? row["command_schema"]
+        : {},
+    prompt_template: String(row["prompt_template"] ?? ""),
+    default_agent:
+      row["default_agent"] === null || row["default_agent"] === undefined
+        ? null
+        : String(row["default_agent"]),
+    confirmation_policy:
+      row["confirmation_policy"] === RunbookConfirmationPolicy.AUTO
+        ? RunbookConfirmationPolicy.AUTO
+        : RunbookConfirmationPolicy.REQUIRED,
+    enabled: Boolean(row["enabled"] ?? true),
   };
 }

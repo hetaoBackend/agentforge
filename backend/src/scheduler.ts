@@ -33,6 +33,7 @@ import { logger } from "./log.ts";
 import {
   RunbookConfirmationPolicy,
   expand_runbook,
+  runbook_from_row,
   type RunbookExpansion,
 } from "./runbooks.ts";
 import {
@@ -417,6 +418,7 @@ export class TaskScheduler extends BusAwareSchedulerMixin {
         payload["agent"] === null || payload["agent"] === undefined
           ? null
           : String(payload["agent"]),
+      runbooks: this.db.get_im_runbooks(true).map((row) => runbook_from_row(row)),
     });
     if (!result.ok || !result.expansion) {
       throw new Error(result.error ?? "invalid runbook");
