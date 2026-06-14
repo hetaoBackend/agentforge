@@ -44,8 +44,10 @@ import path from "node:path";
 
 import {
   Channel,
+  InboundMessageType,
   MessageBus,
   OutboundMessageType,
+  type InboundMessage,
   type OutboundMessage,
   type TaskDBLike,
 } from "../bus.ts";
@@ -55,6 +57,24 @@ import {
   resolve_agent,
   type SettingsDB,
 } from "./agent_utils.ts";
+import {
+  build_brief_payload,
+  build_runbook_payload,
+  format_brief_created_reply,
+  format_brief_discarded_reply,
+  format_brief_help,
+  format_brief_started_reply,
+  format_runbook_brief_reply,
+  format_runbook_created_reply,
+  format_skill_suggestion_action_reply,
+  format_skill_suggestion_help,
+  parse_brief_command,
+  parse_runbook_fallback,
+  parse_skill_suggestion_command,
+  type BriefCommand,
+  type ParsedRunbookCommand,
+  type SkillSuggestionCommand,
+} from "./brief_utils.ts";
 import { handle_dir_command, resolve_working_dir } from "./dir_utils.ts";
 
 // ≙ Python's try/except ImportError guard around the telegram SDK import.
@@ -77,6 +97,12 @@ export const HELP_TEXT =
   "　　　　e.g. /dir ~/workspace/myproject\n" +
   "/agent <name> — switch coding agent (claude / codex)\n" +
   "/help — show this message\n\n" +
+  "Custom commands:\n" +
+  "Create a custom command in AgentForge, or generate one from a past task, then use it here:\n" +
+  "/看报错 TypeError: Cannot read properties of undefined\n" +
+  "Custom commands can use Chinese names or aliases.\n" +
+  "If a command needs confirmation, I'll create a Draft task.\n" +
+  "Run it with /run-draft <id>, or cancel it with /cancel-draft <id>.\n\n" +
   "Tips:\n" +
   "• You can also mention a path in your message and it will be used automatically.\n" +
   "　e.g. 在 ~/myapp 里帮我修复登录 bug";
@@ -129,10 +155,11 @@ export interface TelegramDB extends TaskDBLike, SettingsDB {
 
 /**
  * Minimal structural view of TaskScheduler (do NOT import scheduler.ts —
- * the channel only ever calls submit_task).
+ * keep the channel coupled only to the scheduler methods it uses).
  */
 export interface TelegramScheduler {
   submit_task(task: Task): number;
+  handle_inbound_message?(msg: InboundMessage): Record<string, unknown>;
 }
 
 // ── injectable HTTP seam ──────────────────────────────────────────
@@ -653,6 +680,25 @@ export class TelegramChannel extends Channel {
       return;
     }
 
+    const brief_command = parse_brief_command(text);
+    if (brief_command !== null) {
+      await this._handle_brief_command(brief_command, update);
+      return;
+    }
+    const runbook_command = parse_runbook_fallback(text, this.db);
+    if (runbook_command !== null) {
+      await this._handle_runbook_command(runbook_command, update);
+      return;
+    }
+    const skill_suggestion_command = parse_skill_suggestion_command(text);
+    if (skill_suggestion_command !== null) {
+      await this._handle_skill_suggestion_command(
+        skill_suggestion_command,
+        update,
+      );
+      return;
+    }
+
     // ── 检测转发消息 ───────────────────────────────────────
     text = this._format_forwarded_text(text, update);
 
@@ -695,6 +741,241 @@ export class TelegramChannel extends Channel {
 
     // ── default: create a new task ────────────────────────────
     await this._create_task(text, chat_id, update);
+  }
+
+  async _handle_brief_command(
+    command: BriefCommand,
+    update: TgUpdate,
+  ): Promise<void> {
+    if (command.action === "help") {
+      await this._reply_text(update, format_brief_help(command.reason));
+      return;
+    }
+    if (!this.scheduler.handle_inbound_message) {
+      await this._reply_text(
+        update,
+        "❌ Draft task flow is not available in this scheduler.",
+      );
+      return;
+    }
+
+    const msg = update.message!;
+    const chat_id = msg.chat.id;
+    const message_id = msg.message_id;
+    const metadata = this._brief_source_metadata(update);
+    try {
+      if (command.action === "create") {
+        const payload = build_brief_payload({
+          channel: "telegram",
+          goal: command.goal,
+          source_ref: `${chat_id}:${message_id}`,
+          source_metadata: metadata,
+          working_dir: await resolve_working_dir(
+            command.goal,
+            "telegram",
+            this.db,
+          ),
+          agent: resolve_agent("telegram", this.db),
+        });
+        const result = this.scheduler.handle_inbound_message(
+          this._make_inbound(
+            InboundMessageType.CREATE_BRIEF,
+            payload,
+            String(chat_id),
+            metadata,
+          ),
+        );
+        const brief_id = Number(result["brief_id"]);
+        await this._reply_text(
+          update,
+          format_brief_created_reply(brief_id, String(payload["title"])),
+        );
+        return;
+      }
+
+      if (command.action === "confirm") {
+        const result = this.scheduler.handle_inbound_message(
+          this._make_inbound(
+            InboundMessageType.CONFIRM_BRIEF,
+            { brief_id: command.brief_id },
+            String(chat_id),
+            metadata,
+          ),
+        );
+        const task_id = Number(result["task_id"]);
+        if (!Number.isInteger(task_id) || task_id <= 0) {
+          await this._reply_text(update, "❌ Draft task confirmation failed.");
+          return;
+        }
+
+        this._task_origin.set(task_id, [chat_id, message_id, message_id]);
+        this._remember_task_source(task_id);
+        this._set_chat_current_task(chat_id, task_id);
+        try {
+          await this._api!("setMessageReaction", {
+            chat_id,
+            message_id,
+            reaction: [{ type: "emoji", emoji: "👀" }],
+          });
+        } catch (e) {
+          console.log(`[Telegram] Failed to set brief reaction: ${e}`);
+        }
+        await this._reply_text(
+          update,
+          format_brief_started_reply(command.brief_id, task_id),
+        );
+        return;
+      }
+
+      const result = this.scheduler.handle_inbound_message(
+        this._make_inbound(
+          InboundMessageType.DISCARD_BRIEF,
+          { brief_id: command.brief_id },
+          String(chat_id),
+          metadata,
+        ),
+      );
+      await this._reply_text(
+        update,
+        format_brief_discarded_reply(Number(result["brief_id"])),
+      );
+    } catch (e) {
+      await this._reply_text(
+        update,
+        `❌ ${e instanceof Error ? e.message : String(e)}`,
+      );
+    }
+  }
+
+  async _handle_runbook_command(
+    command: ParsedRunbookCommand,
+    update: TgUpdate,
+  ): Promise<void> {
+    if (!this.scheduler.handle_inbound_message) {
+      await this._reply_text(
+        update,
+        "❌ Custom command flow is not available in this scheduler.",
+      );
+      return;
+    }
+
+    const msg = update.message!;
+    const chat_id = msg.chat.id;
+    const message_id = msg.message_id;
+    const metadata = this._brief_source_metadata(update);
+    try {
+      const payload = build_runbook_payload({
+        channel: "telegram",
+        command,
+        source_ref: `${chat_id}:${message_id}`,
+        source_metadata: metadata,
+        working_dir: await resolve_working_dir(
+          command.raw_args || command.name,
+          "telegram",
+          this.db,
+        ),
+        agent: resolve_agent("telegram", this.db),
+      });
+      const result = this.scheduler.handle_inbound_message(
+        this._make_inbound(
+          InboundMessageType.RUN_RUNBOOK,
+          payload,
+          String(chat_id),
+          metadata,
+        ),
+      );
+      if (result["status"] === "created") {
+        const task_id = Number(result["task_id"]);
+        this._task_origin.set(task_id, [chat_id, message_id, message_id]);
+        this._remember_task_source(task_id);
+        this._set_chat_current_task(chat_id, task_id);
+        try {
+          await this._api!("setMessageReaction", {
+            chat_id,
+            message_id,
+            reaction: [{ type: "emoji", emoji: "👀" }],
+          });
+        } catch (e) {
+          console.log(`[Telegram] Failed to set runbook reaction: ${e}`);
+        }
+        await this._reply_text(
+          update,
+          format_runbook_created_reply(task_id, command.name),
+        );
+        return;
+      }
+      if (result["status"] === "draft") {
+        await this._reply_text(
+          update,
+          format_runbook_brief_reply(Number(result["brief_id"]), command.name),
+        );
+        return;
+      }
+      await this._reply_text(update, "❌ Custom command failed.");
+    } catch (e) {
+      await this._reply_text(
+        update,
+        `❌ ${e instanceof Error ? e.message : String(e)}`,
+      );
+    }
+  }
+
+  async _handle_skill_suggestion_command(
+    command: SkillSuggestionCommand,
+    update: TgUpdate,
+  ): Promise<void> {
+    if (command.action === "help") {
+      await this._reply_text(
+        update,
+        format_skill_suggestion_help(command.reason),
+      );
+      return;
+    }
+    if (!this.scheduler.handle_inbound_message) {
+      await this._reply_text(
+        update,
+        "❌ Skill suggestion flow is not available in this scheduler.",
+      );
+      return;
+    }
+
+    const msg = update.message!;
+    const chat_id = msg.chat.id;
+    const metadata = this._brief_source_metadata(update);
+    try {
+      const result = this.scheduler.handle_inbound_message(
+        this._make_inbound(
+          InboundMessageType.SKILL_SUGGESTION_ACTION,
+          {
+            action: command.action,
+            pattern_id: command.pattern_id,
+            source_channel: "telegram",
+            target: String(chat_id),
+            source_metadata: metadata,
+          },
+          String(chat_id),
+          metadata,
+        ),
+      );
+      await this._reply_text(
+        update,
+        format_skill_suggestion_action_reply(result),
+      );
+    } catch (e) {
+      await this._reply_text(
+        update,
+        `❌ ${e instanceof Error ? e.message : String(e)}`,
+      );
+    }
+  }
+
+  _brief_source_metadata(update: TgUpdate): Record<string, unknown> {
+    const msg = update.message!;
+    return {
+      chat_id: msg.chat.id,
+      message_id: msg.message_id,
+      user_id: msg.from?.id ?? null,
+    };
   }
 
   /** Create a new task from any message text. */

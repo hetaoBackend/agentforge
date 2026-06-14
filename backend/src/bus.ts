@@ -31,6 +31,13 @@ export const InboundMessageType = {
   RESPOND_TASK: "respond_task", // answer a question a task is waiting on
   CANCEL_TASK: "cancel_task", // cancel a task
   STATUS_QUERY: "status_query", // query task status
+  CREATE_BRIEF: "create_brief", // create a draft task brief
+  CONFIRM_BRIEF: "confirm_brief", // convert a draft brief into a task
+  DISCARD_BRIEF: "discard_brief", // discard a draft brief
+  PREVIEW_RUNBOOK: "preview_runbook", // create a draft preview from an IM runbook
+  RUN_RUNBOOK: "run_runbook", // run an IM runbook or create a confirmation draft
+  TRIGGER_DIGEST: "trigger_digest", // preview or send an IM digest
+  SKILL_SUGGESTION_ACTION: "skill_suggestion_action", // draft/show/approve/dismiss a skill suggestion
 } as const;
 export type InboundMessageType =
   (typeof InboundMessageType)[keyof typeof InboundMessageType];
@@ -65,6 +72,13 @@ function utcNowIso(): string {
  *   RESPOND_TASK -> {"task_id", "answer"}
  *   CANCEL_TASK  -> {"task_id"}
  *   STATUS_QUERY -> {"task_id"}
+ *   CREATE_BRIEF -> {"title", "goal", "source_channel", "source_ref", ...}
+ *   CONFIRM_BRIEF -> {"brief_id"}
+ *   DISCARD_BRIEF -> {"brief_id"}
+ *   PREVIEW_RUNBOOK -> {"name", "raw_args", "source_channel", "source_ref", ...}
+ *   RUN_RUNBOOK -> {"name", "raw_args", "source_channel", "source_ref", ...}
+ *   TRIGGER_DIGEST -> {"include_empty", "limit", "since"}
+ *   SKILL_SUGGESTION_ACTION -> {"action", "pattern_id", "source_channel", "target"}
  * reply_to: optional reply target (e.g. Feishu chat_id / open_id).
  * metadata: channel-specific context (e.g. Feishu message_id).
  */

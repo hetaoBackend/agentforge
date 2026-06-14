@@ -11072,9 +11072,9 @@ var require_bit_buffer = __commonJS((exports, module) => {
     this.length = 0;
   }
   BitBuffer.prototype = {
-    get: function(index2) {
-      const bufIndex = Math.floor(index2 / 8);
-      return (this.buffer[bufIndex] >>> 7 - index2 % 8 & 1) === 1;
+    get: function(index3) {
+      const bufIndex = Math.floor(index3 / 8);
+      return (this.buffer[bufIndex] >>> 7 - index3 % 8 & 1) === 1;
     },
     put: function(num, length) {
       for (let i = 0;i < length; i++) {
@@ -11109,10 +11109,10 @@ var require_bit_matrix = __commonJS((exports, module) => {
     this.reservedBit = new Uint8Array(size * size);
   }
   BitMatrix.prototype.set = function(row, col, value, reserved) {
-    const index2 = row * this.size + col;
-    this.data[index2] = value;
+    const index3 = row * this.size + col;
+    this.data[index3] = value;
     if (reserved)
-      this.reservedBit[index2] = true;
+      this.reservedBit[index3] = true;
   };
   BitMatrix.prototype.get = function(row, col) {
     return this.data[row * this.size + col];
@@ -12627,18 +12627,18 @@ var require_qrcode = __commonJS((exports) => {
       maxDataSize = Math.max(maxDataSize, dataSize);
     }
     const data = new Uint8Array(totalCodewords);
-    let index2 = 0;
+    let index3 = 0;
     let i, r;
     for (i = 0;i < maxDataSize; i++) {
       for (r = 0;r < ecTotalBlocks; r++) {
         if (i < dcData[r].length) {
-          data[index2++] = dcData[r][i];
+          data[index3++] = dcData[r][i];
         }
       }
     }
     for (i = 0;i < ecCount; i++) {
       for (r = 0;r < ecTotalBlocks; r++) {
-        data[index2++] = ecData[r][i];
+        data[index3++] = ecData[r][i];
       }
     }
     return data;
@@ -13015,13 +13015,290 @@ var require_jsx_runtime = __commonJS((exports, module) => {
     module.exports = exports_react_jsx_runtime_production;
   }
 });
-
 // src/renderer/main.tsx
-var import_react2 = __toESM(require_react(), 1);
+var import_react5 = __toESM(require_react(), 1);
 var import_client = __toESM(require_client(), 1);
 
 // src/renderer/App.tsx
+var import_react4 = __toESM(require_react(), 1);
+// node_modules/lucide-react/dist/esm/createLucideIcon.mjs
+var import_react3 = __toESM(require_react(), 1);
+
+// node_modules/lucide-react/dist/esm/shared/src/utils/mergeClasses.mjs
+var mergeClasses = (...classes) => classes.filter((className, index2, array) => {
+  return Boolean(className) && className.trim() !== "" && array.indexOf(className) === index2;
+}).join(" ").trim();
+
+// node_modules/lucide-react/dist/esm/shared/src/utils/toKebabCase.mjs
+var toKebabCase = (string) => string.replace(/([a-z0-9])([A-Z])/g, "$1-$2").toLowerCase();
+
+// node_modules/lucide-react/dist/esm/shared/src/utils/toCamelCase.mjs
+var toCamelCase = (string) => string.replace(/^([A-Z])|[\s-_]+(\w)/g, (match, p1, p2) => p2 ? p2.toUpperCase() : p1.toLowerCase());
+
+// node_modules/lucide-react/dist/esm/shared/src/utils/toPascalCase.mjs
+var toPascalCase = (string) => {
+  const camelCase = toCamelCase(string);
+  return camelCase.charAt(0).toUpperCase() + camelCase.slice(1);
+};
+
+// node_modules/lucide-react/dist/esm/Icon.mjs
+var import_react2 = __toESM(require_react(), 1);
+
+// node_modules/lucide-react/dist/esm/defaultAttributes.mjs
+var defaultAttributes = {
+  xmlns: "http://www.w3.org/2000/svg",
+  width: 24,
+  height: 24,
+  viewBox: "0 0 24 24",
+  fill: "none",
+  stroke: "currentColor",
+  strokeWidth: 2,
+  strokeLinecap: "round",
+  strokeLinejoin: "round"
+};
+
+// node_modules/lucide-react/dist/esm/shared/src/utils/hasA11yProp.mjs
+var hasA11yProp = (props) => {
+  for (const prop in props) {
+    if (prop.startsWith("aria-") || prop === "role" || prop === "title") {
+      return true;
+    }
+  }
+  return false;
+};
+
+// node_modules/lucide-react/dist/esm/context.mjs
 var import_react = __toESM(require_react(), 1);
+"use client";
+var LucideContext = import_react.createContext({});
+var useLucideContext = () => import_react.useContext(LucideContext);
+
+// node_modules/lucide-react/dist/esm/Icon.mjs
+"use client";
+var Icon = import_react2.forwardRef(({ color, size, strokeWidth, absoluteStrokeWidth, className = "", children, iconNode, ...rest }, ref) => {
+  const {
+    size: contextSize = 24,
+    strokeWidth: contextStrokeWidth = 2,
+    absoluteStrokeWidth: contextAbsoluteStrokeWidth = false,
+    color: contextColor = "currentColor",
+    className: contextClass = ""
+  } = useLucideContext() ?? {};
+  const calculatedStrokeWidth = absoluteStrokeWidth ?? contextAbsoluteStrokeWidth ? Number(strokeWidth ?? contextStrokeWidth) * 24 / Number(size ?? contextSize) : strokeWidth ?? contextStrokeWidth;
+  return import_react2.createElement("svg", {
+    ref,
+    ...defaultAttributes,
+    width: size ?? contextSize ?? defaultAttributes.width,
+    height: size ?? contextSize ?? defaultAttributes.height,
+    stroke: color ?? contextColor,
+    strokeWidth: calculatedStrokeWidth,
+    className: mergeClasses("lucide", contextClass, className),
+    ...!children && !hasA11yProp(rest) && { "aria-hidden": "true" },
+    ...rest
+  }, [
+    ...iconNode.map(([tag, attrs]) => import_react2.createElement(tag, attrs)),
+    ...Array.isArray(children) ? children : [children]
+  ]);
+});
+
+// node_modules/lucide-react/dist/esm/createLucideIcon.mjs
+var createLucideIcon = (iconName, iconNode) => {
+  const Component2 = import_react3.forwardRef(({ className, ...props }, ref) => import_react3.createElement(Icon, {
+    ref,
+    iconNode,
+    className: mergeClasses(`lucide-${toKebabCase(toPascalCase(iconName))}`, `lucide-${iconName}`, className),
+    ...props
+  }));
+  Component2.displayName = toPascalCase(iconName);
+  return Component2;
+};
+
+// node_modules/lucide-react/dist/esm/icons/circle-check.mjs
+var __iconNode = [
+  ["circle", { cx: "12", cy: "12", r: "10", key: "1mglay" }],
+  ["path", { d: "m9 12 2 2 4-4", key: "dzmm74" }]
+];
+var CircleCheck = createLucideIcon("circle-check", __iconNode);
+// node_modules/lucide-react/dist/esm/icons/sparkles.mjs
+var __iconNode2 = [
+  [
+    "path",
+    {
+      d: "M11.017 2.814a1 1 0 0 1 1.966 0l1.051 5.558a2 2 0 0 0 1.594 1.594l5.558 1.051a1 1 0 0 1 0 1.966l-5.558 1.051a2 2 0 0 0-1.594 1.594l-1.051 5.558a1 1 0 0 1-1.966 0l-1.051-5.558a2 2 0 0 0-1.594-1.594l-5.558-1.051a1 1 0 0 1 0-1.966l5.558-1.051a2 2 0 0 0 1.594-1.594z",
+      key: "1s2grr"
+    }
+  ],
+  ["path", { d: "M20 2v4", key: "1rf3ol" }],
+  ["path", { d: "M22 4h-4", key: "gwowj6" }],
+  ["circle", { cx: "4", cy: "20", r: "2", key: "6kqj1y" }]
+];
+var Sparkles = createLucideIcon("sparkles", __iconNode2);
+// node_modules/lucide-react/dist/esm/icons/square-kanban.mjs
+var __iconNode3 = [
+  ["rect", { width: "18", height: "18", x: "3", y: "3", rx: "2", key: "afitv7" }],
+  ["path", { d: "M8 7v7", key: "1x2jlm" }],
+  ["path", { d: "M12 7v4", key: "xawao1" }],
+  ["path", { d: "M16 7v9", key: "1hp2iy" }]
+];
+var SquareKanban = createLucideIcon("square-kanban", __iconNode3);
+// node_modules/lucide-react/dist/esm/icons/git-fork.mjs
+var __iconNode4 = [
+  ["circle", { cx: "12", cy: "18", r: "3", key: "1mpf1b" }],
+  ["circle", { cx: "6", cy: "6", r: "3", key: "1lh9wr" }],
+  ["circle", { cx: "18", cy: "6", r: "3", key: "1h7g24" }],
+  ["path", { d: "M18 9v2c0 .6-.4 1-1 1H7c-.6 0-1-.4-1-1V9", key: "1uq4wg" }],
+  ["path", { d: "M12 12v3", key: "158kv8" }]
+];
+var GitFork = createLucideIcon("git-fork", __iconNode4);
+// node_modules/lucide-react/dist/esm/icons/heart-pulse.mjs
+var __iconNode5 = [
+  [
+    "path",
+    {
+      d: "M2 9.5a5.5 5.5 0 0 1 9.591-3.676.56.56 0 0 0 .818 0A5.49 5.49 0 0 1 22 9.5c0 2.29-1.5 4-3 5.5l-5.492 5.313a2 2 0 0 1-3 .019L5 15c-1.5-1.5-3-3.2-3-5.5",
+      key: "mvr1a0"
+    }
+  ],
+  ["path", { d: "M3.22 13H9.5l.5-1 2 4.5 2-7 1.5 3.5h5.27", key: "auskq0" }]
+];
+var HeartPulse = createLucideIcon("heart-pulse", __iconNode5);
+// node_modules/lucide-react/dist/esm/icons/inbox.mjs
+var __iconNode6 = [
+  ["polyline", { points: "22 12 16 12 14 15 10 15 8 12 2 12", key: "o97t9d" }],
+  [
+    "path",
+    {
+      d: "M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z",
+      key: "oot6mr"
+    }
+  ]
+];
+var Inbox = createLucideIcon("inbox", __iconNode6);
+// node_modules/lucide-react/dist/esm/icons/monitor-cog.mjs
+var __iconNode7 = [
+  ["path", { d: "M12 17v4", key: "1riwvh" }],
+  ["path", { d: "m14.305 7.53.923-.382", key: "1mlnsw" }],
+  ["path", { d: "m15.228 4.852-.923-.383", key: "82mpwg" }],
+  ["path", { d: "m16.852 3.228-.383-.924", key: "ln4sir" }],
+  ["path", { d: "m16.852 8.772-.383.923", key: "1dejw0" }],
+  ["path", { d: "m19.148 3.228.383-.924", key: "192kgf" }],
+  ["path", { d: "m19.53 9.696-.382-.924", key: "fiavlr" }],
+  ["path", { d: "m20.772 4.852.924-.383", key: "1j8mgp" }],
+  ["path", { d: "m20.772 7.148.924.383", key: "zix9be" }],
+  ["path", { d: "M22 13v2a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h7", key: "1tnzv8" }],
+  ["path", { d: "M8 21h8", key: "1ev6f3" }],
+  ["circle", { cx: "18", cy: "6", r: "3", key: "1h7g24" }]
+];
+var MonitorCog = createLucideIcon("monitor-cog", __iconNode7);
+// node_modules/lucide-react/dist/esm/icons/moon.mjs
+var __iconNode8 = [
+  [
+    "path",
+    {
+      d: "M20.985 12.486a9 9 0 1 1-9.473-9.472c.405-.022.617.46.402.803a6 6 0 0 0 8.268 8.268c.344-.215.825-.004.803.401",
+      key: "kfwtm"
+    }
+  ]
+];
+var Moon = createLucideIcon("moon", __iconNode8);
+// node_modules/lucide-react/dist/esm/icons/pause.mjs
+var __iconNode9 = [
+  ["rect", { x: "14", y: "3", width: "5", height: "18", rx: "1", key: "kaeet6" }],
+  ["rect", { x: "5", y: "3", width: "5", height: "18", rx: "1", key: "1wsw3u" }]
+];
+var Pause = createLucideIcon("pause", __iconNode9);
+// node_modules/lucide-react/dist/esm/icons/pencil.mjs
+var __iconNode10 = [
+  [
+    "path",
+    {
+      d: "M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z",
+      key: "1a8usu"
+    }
+  ],
+  ["path", { d: "m15 5 4 4", key: "1mk7zo" }]
+];
+var Pencil = createLucideIcon("pencil", __iconNode10);
+// node_modules/lucide-react/dist/esm/icons/play.mjs
+var __iconNode11 = [
+  [
+    "path",
+    {
+      d: "M5 5a2 2 0 0 1 3.008-1.728l11.997 6.998a2 2 0 0 1 .003 3.458l-12 7A2 2 0 0 1 5 19z",
+      key: "10ikf1"
+    }
+  ]
+];
+var Play = createLucideIcon("play", __iconNode11);
+// node_modules/lucide-react/dist/esm/icons/plus.mjs
+var __iconNode12 = [
+  ["path", { d: "M5 12h14", key: "1ays0h" }],
+  ["path", { d: "M12 5v14", key: "s699le" }]
+];
+var Plus = createLucideIcon("plus", __iconNode12);
+// node_modules/lucide-react/dist/esm/icons/radar.mjs
+var __iconNode13 = [
+  ["path", { d: "M19.07 4.93A10 10 0 0 0 6.99 3.34", key: "z3du51" }],
+  ["path", { d: "M4 6h.01", key: "oypzma" }],
+  ["path", { d: "M2.29 9.62A10 10 0 1 0 21.31 8.35", key: "qzzz0" }],
+  ["path", { d: "M16.24 7.76A6 6 0 1 0 8.23 16.67", key: "1yjesh" }],
+  ["path", { d: "M12 18h.01", key: "mhygvu" }],
+  ["path", { d: "M17.99 11.66A6 6 0 0 1 15.77 16.67", key: "1u2y91" }],
+  ["circle", { cx: "12", cy: "12", r: "2", key: "1c9p78" }],
+  ["path", { d: "m13.41 10.59 5.66-5.66", key: "mhq4k0" }]
+];
+var Radar = createLucideIcon("radar", __iconNode13);
+// node_modules/lucide-react/dist/esm/icons/rotate-ccw.mjs
+var __iconNode14 = [
+  ["path", { d: "M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8", key: "1357e3" }],
+  ["path", { d: "M3 3v5h5", key: "1xhq8a" }]
+];
+var RotateCcw = createLucideIcon("rotate-ccw", __iconNode14);
+// node_modules/lucide-react/dist/esm/icons/search.mjs
+var __iconNode15 = [
+  ["path", { d: "m21 21-4.34-4.34", key: "14j7rj" }],
+  ["circle", { cx: "11", cy: "11", r: "8", key: "4ej97u" }]
+];
+var Search = createLucideIcon("search", __iconNode15);
+// node_modules/lucide-react/dist/esm/icons/settings.mjs
+var __iconNode16 = [
+  [
+    "path",
+    {
+      d: "M9.671 4.136a2.34 2.34 0 0 1 4.659 0 2.34 2.34 0 0 0 3.319 1.915 2.34 2.34 0 0 1 2.33 4.033 2.34 2.34 0 0 0 0 3.831 2.34 2.34 0 0 1-2.33 4.033 2.34 2.34 0 0 0-3.319 1.915 2.34 2.34 0 0 1-4.659 0 2.34 2.34 0 0 0-3.32-1.915 2.34 2.34 0 0 1-2.33-4.033 2.34 2.34 0 0 0 0-3.831A2.34 2.34 0 0 1 6.35 6.051a2.34 2.34 0 0 0 3.319-1.915",
+      key: "1i5ecw"
+    }
+  ],
+  ["circle", { cx: "12", cy: "12", r: "3", key: "1v7zrd" }]
+];
+var Settings = createLucideIcon("settings", __iconNode16);
+// node_modules/lucide-react/dist/esm/icons/square.mjs
+var __iconNode17 = [
+  ["rect", { width: "18", height: "18", x: "3", y: "3", rx: "2", key: "afitv7" }]
+];
+var Square = createLucideIcon("square", __iconNode17);
+// node_modules/lucide-react/dist/esm/icons/sun.mjs
+var __iconNode18 = [
+  ["circle", { cx: "12", cy: "12", r: "4", key: "4exip2" }],
+  ["path", { d: "M12 2v2", key: "tus03m" }],
+  ["path", { d: "M12 20v2", key: "1lh1kg" }],
+  ["path", { d: "m4.93 4.93 1.41 1.41", key: "149t6j" }],
+  ["path", { d: "m17.66 17.66 1.41 1.41", key: "ptbguv" }],
+  ["path", { d: "M2 12h2", key: "1t8f8n" }],
+  ["path", { d: "M20 12h2", key: "1q8mjw" }],
+  ["path", { d: "m6.34 17.66-1.41 1.41", key: "1m8zz5" }],
+  ["path", { d: "m19.07 4.93-1.41 1.41", key: "1shlcs" }]
+];
+var Sun = createLucideIcon("sun", __iconNode18);
+// node_modules/lucide-react/dist/esm/icons/trash-2.mjs
+var __iconNode19 = [
+  ["path", { d: "M10 11v6", key: "nco0om" }],
+  ["path", { d: "M14 11v6", key: "outv1u" }],
+  ["path", { d: "M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6", key: "miytrc" }],
+  ["path", { d: "M3 6h18", key: "d0wm0j" }],
+  ["path", { d: "M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2", key: "e791ji" }]
+];
+var Trash2 = createLucideIcon("trash-2", __iconNode19);
+// src/renderer/App.tsx
 var import_qrcode = __toESM(require_browser(), 1);
 
 // src/renderer/dateTime.ts
@@ -13316,9 +13593,9 @@ function buildExecutionSteps(events) {
     }
     steps.push(step);
   }
-  return steps.map((step, index2) => ({
+  return steps.map((step, index3) => ({
     ...step,
-    number: index2 + 1
+    number: index3 + 1
   }));
 }
 function compareEventsChronologically(a, b) {
@@ -13473,75 +13750,129 @@ var jsx_runtime = __toESM(require_jsx_runtime(), 1);
 var API = "http://127.0.0.1:9712/api";
 var THEMES = {
   dark: {
-    bg: "#0a0a0f",
-    surface: "#12121a",
-    surfaceHover: "#1a1a26",
-    border: "#1e1e2e",
-    borderActive: "#2d2d44",
-    text: "#e2e2ef",
-    textMuted: "#6b6b8a",
-    textDim: "#44445e",
-    accent: "#7c6aff",
-    accentGlow: "rgba(124, 106, 255, 0.15)",
-    green: "#34d399",
-    greenBg: "rgba(52, 211, 153, 0.08)",
-    orange: "#fbbf24",
-    orangeBg: "rgba(251, 191, 36, 0.08)",
-    red: "#f87171",
-    redBg: "rgba(248, 113, 113, 0.08)",
-    blue: "#60a5fa",
-    blueBg: "rgba(96, 165, 250, 0.08)",
-    cyan: "#22d3ee",
-    cyanBg: "rgba(34, 211, 238, 0.08)"
+    bg: "#0d0e10",
+    surface: "#17181c",
+    surfaceHover: "#1c1d22",
+    panel: "#111216",
+    panelRaised: "#18191e",
+    field: "#101115",
+    border: "rgba(255, 255, 255, 0.085)",
+    borderActive: "rgba(94, 106, 210, 0.48)",
+    text: "#f4f4f5",
+    textMuted: "#a6a8b0",
+    textDim: "#70737c",
+    accent: "#5e6ad2",
+    accentGlow: "rgba(94, 106, 210, 0.18)",
+    green: "#4cb782",
+    greenBg: "rgba(76, 183, 130, 0.12)",
+    orange: "#d99a45",
+    orangeBg: "rgba(217, 154, 69, 0.13)",
+    red: "#e06c75",
+    redBg: "rgba(224, 108, 117, 0.13)",
+    blue: "#6aa6f8",
+    blueBg: "rgba(106, 166, 248, 0.12)",
+    cyan: "#64b5d9",
+    cyanBg: "rgba(100, 181, 217, 0.12)",
+    yellow: "#d8b84e",
+    headerBg: "rgba(13, 14, 16, 0.9)",
+    headerBorder: "rgba(255, 255, 255, 0.08)",
+    boardBg: "linear-gradient(180deg, #101114 0%, #0d0e10 48%, #0b0c0e 100%)",
+    columnBg: "rgba(18, 19, 23, 0.72)",
+    columnHeader: "#f4f4f5",
+    shadow: "0 22px 54px rgba(0, 0, 0, 0.34)",
+    shadowSoft: "0 10px 28px rgba(0, 0, 0, 0.2)",
+    brandStart: "#f2f3f5",
+    brandEnd: "#bfc4cf",
+    brandInk: "#ffffff"
   },
   light: {
-    bg: "#f5f5fa",
+    bg: "#f7f8fa",
     surface: "#ffffff",
-    surfaceHover: "#eeeef7",
-    border: "#dcdce8",
-    borderActive: "#b8b8d0",
-    text: "#1a1a2e",
-    textMuted: "#6b6b8a",
-    textDim: "#a0a0bc",
-    accent: "#5b4ecc",
-    accentGlow: "rgba(91, 78, 204, 0.12)",
-    green: "#059669",
-    greenBg: "rgba(5, 150, 105, 0.08)",
-    orange: "#d97706",
-    orangeBg: "rgba(217, 119, 6, 0.08)",
-    red: "#dc2626",
-    redBg: "rgba(220, 38, 38, 0.08)",
-    blue: "#2563eb",
-    blueBg: "rgba(37, 99, 235, 0.08)",
-    cyan: "#0891b2",
-    cyanBg: "rgba(8, 145, 178, 0.08)"
+    surfaceHover: "#fafbfc",
+    panel: "#f1f2f5",
+    panelRaised: "#ffffff",
+    field: "#f3f4f7",
+    border: "rgba(31, 35, 40, 0.12)",
+    borderActive: "rgba(94, 106, 210, 0.44)",
+    text: "#1f2328",
+    textMuted: "#636a75",
+    textDim: "#8a919d",
+    accent: "#5e6ad2",
+    accentGlow: "rgba(94, 106, 210, 0.13)",
+    green: "#2f9f6a",
+    greenBg: "rgba(47, 159, 106, 0.1)",
+    orange: "#b97722",
+    orangeBg: "rgba(185, 119, 34, 0.11)",
+    red: "#d14d57",
+    redBg: "rgba(209, 77, 87, 0.1)",
+    blue: "#3978d8",
+    blueBg: "rgba(57, 120, 216, 0.1)",
+    cyan: "#2f8fb7",
+    cyanBg: "rgba(47, 143, 183, 0.1)",
+    yellow: "#a98b19",
+    headerBg: "rgba(247, 248, 250, 0.9)",
+    headerBorder: "rgba(31, 35, 40, 0.1)",
+    boardBg: "linear-gradient(180deg, #fbfbfc 0%, #f7f8fa 48%, #eef0f4 100%)",
+    columnBg: "rgba(255, 255, 255, 0.78)",
+    columnHeader: "#1f2328",
+    shadow: "0 18px 42px rgba(31, 35, 40, 0.12)",
+    shadowSoft: "0 8px 22px rgba(31, 35, 40, 0.08)",
+    brandStart: "#ffffff",
+    brandEnd: "#d9dde7",
+    brandInk: "#ffffff"
   }
 };
 var theme = THEMES.dark;
+var APP_FONT_STACK = "'SF Pro Text', -apple-system, BlinkMacSystemFont, 'Helvetica Neue', sans-serif";
+var DISPLAY_FONT_STACK = "'SF Pro Display', -apple-system, BlinkMacSystemFont, 'Helvetica Neue', sans-serif";
+var MONO_FONT_STACK = "'SF Mono', 'JetBrains Mono', ui-monospace, Menlo, monospace";
+function clamp(value, min, max) {
+  return Math.max(min, Math.min(max, value));
+}
 function getStatusConfig() {
   return {
-    pending: { label: "Pending", color: theme.orange, bg: theme.orangeBg, icon: "◌" },
-    scheduled: { label: "Scheduled", color: theme.cyan, bg: theme.cyanBg, icon: "⏱" },
-    running: { label: "Running", color: theme.blue, bg: theme.blueBg, icon: "⟳" },
-    completed: { label: "Completed", color: theme.green, bg: theme.greenBg, icon: "✓" },
-    failed: { label: "Failed", color: theme.red, bg: theme.redBg, icon: "✕" },
+    pending: { label: "Pending", color: theme.orange, bg: theme.orangeBg },
+    scheduled: { label: "Scheduled", color: theme.cyan, bg: theme.cyanBg },
+    running: { label: "Running", color: theme.blue, bg: theme.blueBg },
+    completed: { label: "Completed", color: theme.green, bg: theme.greenBg },
+    failed: { label: "Failed", color: theme.red, bg: theme.redBg },
     cancelled: {
       label: "Cancelled",
       color: theme.textMuted,
-      bg: "rgba(107,107,138,0.08)",
-      icon: "◻"
+      bg: "rgba(107,107,138,0.08)"
     },
-    blocked: { label: "Blocked", color: theme.textMuted, bg: "rgba(107,107,138,0.1)", icon: "⊘" }
+    blocked: { label: "Blocked", color: theme.textMuted, bg: "rgba(107,107,138,0.1)" }
   };
 }
 var COLUMNS = [
-  { key: "queued", label: "Queue", statuses: ["pending", "scheduled", "blocked"], icon: "⧖" },
-  { key: "running", label: "Running", statuses: ["running"], icon: "▸" },
-  { key: "done", label: "Done", statuses: ["completed", "failed", "cancelled"], icon: "◆" }
+  {
+    key: "queued",
+    label: "Queue",
+    hint: "ready, delayed, or blocked",
+    statuses: ["pending", "scheduled", "blocked"],
+    icon: Inbox,
+    tone: "orange"
+  },
+  {
+    key: "running",
+    label: "Running",
+    hint: "live agent sessions",
+    statuses: ["running"],
+    icon: Play,
+    tone: "blue"
+  },
+  {
+    key: "done",
+    label: "Done",
+    hint: "completed, failed, cancelled",
+    statuses: ["completed", "failed", "cancelled"],
+    icon: CircleCheck,
+    tone: "green"
+  }
 ];
 var AGENTS = {
-  claude: { label: "Claude Code", icon: "⌘", color: "#7c6aff" },
-  codex: { label: "Codex CLI", icon: "◈", color: "#10a37f" }
+  claude: { label: "Claude Code", icon: "C", color: "#ff9f0a" },
+  codex: { label: "Codex CLI", icon: "X", color: "#00c7be" }
 };
 var DEFAULT_AGENT = "codex";
 var DEFAULT_TIMEOUT_SECONDS = 12000;
@@ -13747,14 +14078,14 @@ function FormattedOutput({ content, theme: theme2 }) {
   }
   return /* @__PURE__ */ jsx_runtime.jsx("div", {
     style: { fontFamily: "'JetBrains Mono', monospace", fontSize: "12px", lineHeight: "1.6" },
-    children: parsedContent.map((item, index2) => item.type === "image" ? /* @__PURE__ */ jsx_runtime.jsx("div", {
+    children: parsedContent.map((item, index3) => item.type === "image" ? /* @__PURE__ */ jsx_runtime.jsx("div", {
       style: { margin: "6px 0" },
       children: /* @__PURE__ */ jsx_runtime.jsx("img", {
         src: item.src,
         alt: "output image",
         style: { maxWidth: "100%", borderRadius: "4px", display: "block" }
       })
-    }, index2) : /* @__PURE__ */ jsx_runtime.jsx("div", {
+    }, index3) : /* @__PURE__ */ jsx_runtime.jsx("div", {
       style: {
         ...item.style,
         whiteSpace: "pre-wrap",
@@ -13763,11 +14094,11 @@ function FormattedOutput({ content, theme: theme2 }) {
         padding: "2px 0"
       },
       children: item.text
-    }, index2))
+    }, index3))
   });
 }
 function ExecutionTimeline({ events }) {
-  const [expanded, setExpanded] = import_react.useState(true);
+  const [expanded, setExpanded] = import_react4.useState(true);
   const steps = buildExecutionSteps(events);
   if (steps.length === 0) {
     return /* @__PURE__ */ jsx_runtime.jsx("div", {
@@ -13830,9 +14161,9 @@ function ExecutionTimeline({ events }) {
       }),
       expanded && /* @__PURE__ */ jsx_runtime.jsx("div", {
         style: { padding: "12px 12px 14px" },
-        children: steps.map((step, index2) => /* @__PURE__ */ jsx_runtime.jsx(ExecutionTimelineStep, {
+        children: steps.map((step, index3) => /* @__PURE__ */ jsx_runtime.jsx(ExecutionTimelineStep, {
           step,
-          isLast: index2 === steps.length - 1
+          isLast: index3 === steps.length - 1
         }, `${step.id}-${step.number}`))
       })
     ]
@@ -14090,6 +14421,26 @@ function getCsrfToken() {
 async function csrfHeaders(extra = {}) {
   const token = await getCsrfToken();
   return { "Content-Type": "application/json", "X-CSRF-Token": token, ...extra };
+}
+async function fetchWithTimeout(input, timeoutMs, init = {}) {
+  if (typeof AbortController === "undefined") {
+    let timeout2 = 0;
+    const timeoutPromise = new Promise((_, reject) => {
+      timeout2 = window.setTimeout(() => reject(new Error("Request timed out")), timeoutMs);
+    });
+    try {
+      return await Promise.race([fetch(input, init), timeoutPromise]);
+    } finally {
+      window.clearTimeout(timeout2);
+    }
+  }
+  const controller = new AbortController;
+  const timeout = window.setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(input, { ...init, signal: controller.signal });
+  } finally {
+    window.clearTimeout(timeout);
+  }
 }
 async function fetchTasks() {
   const res = await fetch(`${API}/tasks`);
@@ -14374,31 +14725,251 @@ async function runWeixinAction(action) {
   }
 }
 function Tooltip({ text, children }) {
-  const [visible, setVisible] = import_react.useState(false);
+  const [visible, setVisible] = import_react4.useState(false);
+  const [position, setPosition] = import_react4.useState(null);
+  const triggerRef = import_react4.useRef(null);
+  const tooltipRef = import_react4.useRef(null);
+  import_react4.useEffect(() => {
+    if (!visible)
+      return;
+    const updatePosition = () => {
+      const trigger = triggerRef.current;
+      const tooltip = tooltipRef.current;
+      if (!trigger || !tooltip)
+        return;
+      const triggerRect = trigger.getBoundingClientRect();
+      const tooltipRect = tooltip.getBoundingClientRect();
+      const gap = 8;
+      const margin = 8;
+      const topCandidate = triggerRect.top - tooltipRect.height - gap;
+      const placement = topCandidate < margin ? "bottom" : "top";
+      const top = placement === "top" ? topCandidate : triggerRect.bottom + gap;
+      const centeredLeft = triggerRect.left + triggerRect.width / 2 - tooltipRect.width / 2;
+      const maxLeft = window.innerWidth - tooltipRect.width - margin;
+      const left = clamp(centeredLeft, margin, Math.max(margin, maxLeft));
+      setPosition({
+        arrowLeft: clamp(triggerRect.left + triggerRect.width / 2 - left, 10, tooltipRect.width - 10),
+        left,
+        top,
+        placement
+      });
+    };
+    const frame = requestAnimationFrame(updatePosition);
+    window.addEventListener("resize", updatePosition);
+    window.addEventListener("scroll", updatePosition, true);
+    return () => {
+      cancelAnimationFrame(frame);
+      window.removeEventListener("resize", updatePosition);
+      window.removeEventListener("scroll", updatePosition, true);
+    };
+  }, [visible, text]);
   return /* @__PURE__ */ jsx_runtime.jsxs("div", {
+    ref: triggerRef,
     style: { position: "relative", display: "inline-flex" },
-    onMouseEnter: () => setVisible(true),
+    onMouseEnter: () => {
+      setPosition(null);
+      setVisible(true);
+    },
     onMouseLeave: () => setVisible(false),
+    onFocus: () => {
+      setPosition(null);
+      setVisible(true);
+    },
+    onBlur: () => setVisible(false),
     children: [
       children,
-      visible && /* @__PURE__ */ jsx_runtime.jsx("div", {
+      visible && /* @__PURE__ */ jsx_runtime.jsxs("div", {
+        ref: tooltipRef,
         style: {
-          position: "absolute",
-          bottom: "calc(100% + 6px)",
-          left: "50%",
-          transform: "translateX(-50%)",
+          position: "fixed",
+          top: position?.top ?? 0,
+          left: position?.left ?? 0,
+          opacity: position ? 1 : 0,
           background: theme.surface,
           border: `1px solid ${theme.border}`,
           color: theme.textMuted,
           fontSize: 11,
-          padding: "4px 8px",
-          borderRadius: 6,
+          padding: "5px 8px",
+          borderRadius: 8,
           whiteSpace: "nowrap",
           pointerEvents: "none",
-          boxShadow: "0 4px 12px rgba(0,0,0,0.3)",
-          zIndex: 9999
+          boxShadow: theme.shadowSoft,
+          zIndex: 9999,
+          transition: "opacity 0.12s ease"
         },
-        children: text
+        children: [
+          text,
+          /* @__PURE__ */ jsx_runtime.jsx("span", {
+            "aria-hidden": "true",
+            style: {
+              position: "absolute",
+              left: position?.arrowLeft ?? "50%",
+              [position?.placement === "bottom" ? "top" : "bottom"]: -4,
+              width: 7,
+              height: 7,
+              background: theme.surface,
+              borderLeft: `1px solid ${theme.border}`,
+              borderTop: `1px solid ${theme.border}`,
+              transform: position?.placement === "bottom" ? "translateX(-50%) rotate(45deg)" : "translateX(-50%) rotate(225deg)"
+            }
+          })
+        ]
+      })
+    ]
+  });
+}
+function BrandMark({ size = 40 }) {
+  return /* @__PURE__ */ jsx_runtime.jsxs("div", {
+    style: {
+      width: size,
+      height: size,
+      borderRadius: 8,
+      display: "grid",
+      placeItems: "center",
+      background: `linear-gradient(180deg, ${theme.brandStart}, ${theme.brandEnd})`,
+      border: `1px solid ${theme.border}`,
+      position: "relative",
+      overflow: "hidden",
+      flexShrink: 0
+    },
+    children: [
+      /* @__PURE__ */ jsx_runtime.jsx("img", {
+        src: "./assets/agentforge.png",
+        alt: "AgentForge",
+        style: { width: size, height: size, display: "block" }
+      }),
+      /* @__PURE__ */ jsx_runtime.jsx("div", {
+        "aria-hidden": "true",
+        style: {
+          position: "absolute",
+          inset: 1,
+          borderRadius: 7,
+          border: "1px solid rgba(255,255,255,0.14)",
+          pointerEvents: "none"
+        }
+      })
+    ]
+  });
+}
+function IconGlyph({
+  icon: Icon2,
+  size = 15,
+  strokeWidth = 2.35,
+  style: style2
+}) {
+  return /* @__PURE__ */ jsx_runtime.jsx(Icon2, {
+    "aria-hidden": "true",
+    size,
+    strokeWidth,
+    style: { display: "block", flexShrink: 0, ...style2 }
+  });
+}
+function IconWell({
+  icon,
+  color = theme.accent,
+  background = theme.field,
+  size = 28,
+  iconSize = 15,
+  active = false
+}) {
+  return /* @__PURE__ */ jsx_runtime.jsx("span", {
+    "aria-hidden": "true",
+    style: {
+      width: size,
+      height: size,
+      borderRadius: 7,
+      display: "grid",
+      placeItems: "center",
+      background: active ? theme.accentGlow : background,
+      border: `1px solid ${active ? theme.borderActive : theme.border}`,
+      color,
+      flexShrink: 0
+    },
+    children: /* @__PURE__ */ jsx_runtime.jsx(IconGlyph, {
+      icon,
+      size: iconSize
+    })
+  });
+}
+function HeaderButton({ children, onClick, title, active = false }) {
+  return /* @__PURE__ */ jsx_runtime.jsx(Tooltip, {
+    text: title,
+    children: /* @__PURE__ */ jsx_runtime.jsx("button", {
+      onClick,
+      "aria-label": title,
+      style: {
+        width: 32,
+        height: 32,
+        borderRadius: 6,
+        border: `1px solid ${active ? theme.accent : theme.border}`,
+        background: active ? theme.accentGlow : theme.surface,
+        color: active ? theme.accent : theme.textMuted,
+        cursor: "pointer",
+        fontSize: 15,
+        display: "grid",
+        placeItems: "center",
+        boxShadow: active ? `0 0 0 2px ${theme.accentGlow}` : "none",
+        transition: "background 0.15s ease, color 0.15s ease, border-color 0.15s ease"
+      },
+      children
+    })
+  });
+}
+function StatusPill({ connected, label, tone = theme.green, background = theme.greenBg }) {
+  const activeTone = connected ? tone : theme.red;
+  const activeBackground = connected ? background : theme.redBg;
+  return /* @__PURE__ */ jsx_runtime.jsxs("div", {
+    style: {
+      display: "inline-flex",
+      alignItems: "center",
+      gap: 7,
+      color: activeTone,
+      background: connected ? background : activeBackground,
+      border: `1px solid ${connected ? `${activeTone}40` : `${theme.red}55`}`,
+      borderRadius: 999,
+      padding: "4px 9px",
+      fontSize: 11,
+      fontWeight: 650,
+      fontFamily: MONO_FONT_STACK
+    },
+    children: [
+      /* @__PURE__ */ jsx_runtime.jsx("span", {
+        "aria-hidden": "true",
+        style: {
+          width: 7,
+          height: 7,
+          borderRadius: "50%",
+          background: activeTone
+        }
+      }),
+      connected ? label : "offline"
+    ]
+  });
+}
+function MetricTile({ label, value, tone = theme.text }) {
+  return /* @__PURE__ */ jsx_runtime.jsxs("div", {
+    style: {
+      minWidth: 84,
+      padding: "8px 10px",
+      borderRadius: 8,
+      border: `1px solid ${theme.border}`,
+      background: theme.surface
+    },
+    children: [
+      /* @__PURE__ */ jsx_runtime.jsx("div", {
+        style: { color: theme.textDim, fontSize: 11, fontWeight: 600 },
+        children: label
+      }),
+      /* @__PURE__ */ jsx_runtime.jsx("div", {
+        style: {
+          color: tone,
+          fontSize: 18,
+          fontWeight: 720,
+          lineHeight: 1.1,
+          marginTop: 2,
+          fontFamily: DISPLAY_FONT_STACK
+        },
+        children: value
       })
     ]
   });
@@ -14410,18 +14981,23 @@ function Badge({ status }) {
       display: "inline-flex",
       alignItems: "center",
       gap: 5,
-      padding: "3px 10px",
-      borderRadius: 20,
+      padding: "3px 7px",
+      borderRadius: 999,
       fontSize: 11,
-      fontWeight: 600,
+      fontWeight: 650,
       color: cfg.color,
       background: cfg.bg,
-      letterSpacing: 0.3
+      border: `1px solid ${cfg.color}33`
     },
     children: [
       /* @__PURE__ */ jsx_runtime.jsx("span", {
-        style: { fontSize: 10 },
-        children: cfg.icon
+        "aria-hidden": "true",
+        style: {
+          width: 6,
+          height: 6,
+          borderRadius: "50%",
+          background: cfg.color
+        }
       }),
       cfg.label
     ]
@@ -14430,13 +15006,13 @@ function Badge({ status }) {
 function Tag({ children }) {
   return /* @__PURE__ */ jsx_runtime.jsx("span", {
     style: {
-      padding: "2px 8px",
+      padding: "3px 7px",
       borderRadius: 4,
       fontSize: 10,
-      fontWeight: 500,
-      background: theme.accentGlow,
-      color: theme.accent,
-      letterSpacing: 0.4
+      fontWeight: 650,
+      background: theme.field,
+      color: theme.textMuted,
+      border: `1px solid ${theme.border}`
     },
     children
   });
@@ -14447,259 +15023,427 @@ function AgentBadge({ agent }) {
     style: {
       display: "inline-flex",
       alignItems: "center",
-      gap: 4,
-      padding: "2px 8px",
+      gap: 6,
+      padding: "3px 8px",
       borderRadius: 4,
       fontSize: 10,
-      fontWeight: 600,
+      fontWeight: 650,
       color: cfg.color,
       background: `${cfg.color}18`,
-      letterSpacing: 0.3
+      border: `1px solid ${cfg.color}2f`
     },
     children: [
       /* @__PURE__ */ jsx_runtime.jsx("span", {
-        style: { fontSize: 9 },
+        style: {
+          width: 14,
+          height: 14,
+          borderRadius: 4,
+          display: "grid",
+          placeItems: "center",
+          color: theme.brandInk,
+          background: cfg.color,
+          fontSize: 9,
+          fontWeight: 700,
+          lineHeight: 1,
+          fontFamily: MONO_FONT_STACK
+        },
         children: cfg.icon
       }),
       cfg.label
     ]
   });
 }
+function uiField(overrides = {}) {
+  return {
+    width: "100%",
+    padding: "9px 11px",
+    borderRadius: 6,
+    border: `1px solid ${theme.border}`,
+    background: theme.field,
+    color: theme.text,
+    fontSize: 13,
+    outline: "none",
+    boxSizing: "border-box",
+    fontFamily: APP_FONT_STACK,
+    transition: "border-color 0.15s ease, background 0.15s ease",
+    ...overrides
+  };
+}
+function uiLabel() {
+  return {
+    fontSize: 11,
+    fontWeight: 650,
+    color: theme.textMuted,
+    letterSpacing: 0,
+    marginBottom: 6,
+    display: "block"
+  };
+}
+function modalOverlay() {
+  return {
+    position: "fixed",
+    inset: 0,
+    background: "rgba(0, 0, 0, 0.58)",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    zIndex: 1000,
+    backdropFilter: "blur(6px)",
+    padding: 20
+  };
+}
+function modalPanel(width, maxHeight = "84vh") {
+  return {
+    background: theme.surface,
+    border: `1px solid ${theme.border}`,
+    borderRadius: 10,
+    padding: 24,
+    width,
+    maxWidth: "calc(100vw - 40px)",
+    maxHeight,
+    overflow: "auto",
+    boxShadow: theme.shadow
+  };
+}
+function modalTitle() {
+  return {
+    margin: "0 0 18px",
+    fontSize: 16,
+    fontWeight: 720,
+    color: theme.text,
+    fontFamily: DISPLAY_FONT_STACK
+  };
+}
+function secondaryButton() {
+  return {
+    padding: "8px 14px",
+    borderRadius: 6,
+    border: `1px solid ${theme.border}`,
+    background: theme.surface,
+    color: theme.textMuted,
+    cursor: "pointer",
+    fontSize: 13,
+    fontWeight: 650
+  };
+}
+function primaryButton() {
+  return {
+    padding: "8px 15px",
+    borderRadius: 6,
+    border: `1px solid ${theme.accent}`,
+    background: theme.accent,
+    color: theme.brandInk,
+    cursor: "pointer",
+    fontSize: 13,
+    fontWeight: 680
+  };
+}
+function segmentedButton(active) {
+  return {
+    flex: 1,
+    padding: "7px 10px",
+    borderRadius: 6,
+    cursor: "pointer",
+    border: `1px solid ${active ? theme.borderActive : theme.border}`,
+    background: active ? theme.accentGlow : theme.surface,
+    color: active ? theme.text : theme.textMuted,
+    fontSize: 12,
+    fontWeight: 650,
+    minWidth: 96,
+    transition: "background 0.15s ease, border-color 0.15s ease, color 0.15s ease"
+  };
+}
 function TaskCard({ task, onAction, onViewDetail }) {
-  const [hovered, setHovered] = import_react.useState(false);
-  const cfg = getStatusConfig()[task.status] || getStatusConfig().pending;
+  const [hovered, setHovered] = import_react4.useState(false);
   const tags = task.tags ? task.tags.split(",").filter(Boolean) : [];
-  return /* @__PURE__ */ jsx_runtime.jsxs("div", {
+  return /* @__PURE__ */ jsx_runtime.jsx("div", {
     onMouseEnter: () => setHovered(true),
     onMouseLeave: () => setHovered(false),
     onClick: () => onViewDetail(task),
     style: {
       background: hovered ? theme.surfaceHover : theme.surface,
       border: `1px solid ${hovered ? theme.borderActive : theme.border}`,
-      borderLeft: `3px solid ${cfg.color}`,
-      borderRadius: 10,
-      padding: "14px 16px",
+      borderRadius: 8,
       cursor: "pointer",
-      transition: "all 0.2s ease",
+      overflow: "hidden",
+      transition: "transform 0.16s ease, border-color 0.16s ease, box-shadow 0.16s ease, background 0.16s ease",
       transform: hovered ? "translateY(-1px)" : "none",
-      boxShadow: hovered ? `0 4px 20px rgba(0,0,0,0.3)` : "none"
+      boxShadow: hovered ? "0 8px 24px rgba(0,0,0,0.14)" : "none"
     },
-    children: [
-      /* @__PURE__ */ jsx_runtime.jsxs("div", {
-        style: {
-          display: "flex",
-          justifyContent: "space-between",
-          alignItems: "flex-start",
-          marginBottom: 8
-        },
-        children: [
-          /* @__PURE__ */ jsx_runtime.jsx("span", {
-            style: {
-              fontSize: 13,
-              fontWeight: 600,
-              color: theme.text,
-              lineHeight: 1.4,
-              flex: 1,
-              marginRight: 8,
-              fontFamily: "'JetBrains Mono', 'SF Mono', monospace"
-            },
-            children: task.title
-          }),
-          /* @__PURE__ */ jsx_runtime.jsx(Badge, {
-            status: task.status
-          })
-        ]
-      }),
-      /* @__PURE__ */ jsx_runtime.jsx("div", {
-        style: {
-          fontSize: 12,
-          color: theme.textMuted,
-          marginBottom: 10,
-          lineHeight: 1.5,
-          overflow: "hidden",
-          textOverflow: "ellipsis",
-          display: "-webkit-box",
-          WebkitLineClamp: 2,
-          WebkitBoxOrient: "vertical"
-        },
-        children: task.prompt
-      }),
-      /* @__PURE__ */ jsx_runtime.jsxs("div", {
-        style: { display: "flex", justifyContent: "space-between", alignItems: "center" },
-        children: [
-          /* @__PURE__ */ jsx_runtime.jsxs("div", {
-            style: { display: "flex", gap: 4, flexWrap: "wrap" },
-            children: [
-              /* @__PURE__ */ jsx_runtime.jsx(AgentBadge, {
-                agent: task.agent
-              }),
-              task.schedule_type === "delayed" && /* @__PURE__ */ jsx_runtime.jsxs(Tag, {
-                children: [
-                  "⏳ ",
-                  task.delay_seconds,
-                  "s"
-                ]
-              }),
-              task.schedule_type === "scheduled_at" && task.next_run_at && /* @__PURE__ */ jsx_runtime.jsxs(Tag, {
-                children: [
-                  "\uD83D\uDCC5 ",
-                  formatTaskDateTime(task.next_run_at)
-                ]
-              }),
-              task.schedule_type === "cron" && /* @__PURE__ */ jsx_runtime.jsxs(Tag, {
-                children: [
-                  "⏲ ",
-                  task.cron_expr
-                ]
-              }),
-              tags.map((t, i) => /* @__PURE__ */ jsx_runtime.jsx(Tag, {
-                children: t.trim()
-              }, i))
-            ]
-          }),
-          /* @__PURE__ */ jsx_runtime.jsxs("div", {
-            style: { display: "flex", gap: 4 },
-            onClick: (e) => e.stopPropagation(),
-            children: [
-              ["pending", "scheduled", "blocked"].includes(task.status) && /* @__PURE__ */ jsx_runtime.jsx(ActionBtn, {
-                label: "✎",
-                title: "Edit",
-                onClick: () => onAction("edit", task.id),
-                color: theme.blue || theme.accent
-              }),
-              ["completed", "cancelled", "failed"].includes(task.status) && /* @__PURE__ */ jsx_runtime.jsx(ActionBtn, {
-                label: "⑂",
-                title: "Fork",
-                onClick: () => onAction("fork", task.id),
-                color: theme.cyan || theme.accent
-              }),
-              task.status === "failed" && /* @__PURE__ */ jsx_runtime.jsx(ActionBtn, {
-                label: "↻",
-                title: "Retry",
-                onClick: () => onAction("retry", task.id),
-                color: theme.orange
-              }),
-              ["pending", "scheduled", "running"].includes(task.status) && /* @__PURE__ */ jsx_runtime.jsx(ActionBtn, {
-                label: "■",
-                title: "Cancel",
-                onClick: () => onAction("cancel", task.id),
-                color: theme.red
-              }),
-              /* @__PURE__ */ jsx_runtime.jsx(ActionBtn, {
-                label: "×",
-                title: "Delete",
-                onClick: () => onAction("delete", task.id),
-                color: theme.textMuted
-              })
-            ]
-          })
-        ]
-      }),
-      task.run_count > 0 && /* @__PURE__ */ jsx_runtime.jsxs("div", {
-        style: { fontSize: 10, color: theme.textDim, marginTop: 8, fontFamily: "monospace" },
-        children: [
-          "Runs: ",
-          task.run_count,
-          task.max_runs ? ` / ${task.max_runs}` : "",
-          task.last_run_at && ` · Last: ${formatTaskTime(task.last_run_at)}`
-        ]
-      }),
-      task.status === "blocked" && task.dependencies && task.dependencies.length > 0 && /* @__PURE__ */ jsx_runtime.jsxs("div", {
-        style: { fontSize: 10, color: theme.textDim, marginTop: 6, fontFamily: "monospace" },
-        children: [
-          "⊘ Waiting for: ",
-          task.dependencies.map((d) => `#${d.depends_on_task_id}`).join(", ")
-        ]
-      }),
-      task.dependents && task.dependents.length > 0 && task.status === "completed" && /* @__PURE__ */ jsx_runtime.jsxs("div", {
-        style: { fontSize: 10, color: theme.textDim, marginTop: 6, fontFamily: "monospace" },
-        children: [
-          "→ Unlocks: ",
-          task.dependents.map((id) => `#${id}`).join(", ")
-        ]
-      }),
-      task.dag_id && /* @__PURE__ */ jsx_runtime.jsxs("div", {
-        style: {
-          fontSize: 10,
-          color: theme.accent,
-          marginTop: 4,
-          opacity: 0.6,
-          fontFamily: "monospace"
-        },
-        children: [
-          "dag: ",
-          task.dag_id
-        ]
-      })
-    ]
+    children: /* @__PURE__ */ jsx_runtime.jsxs("div", {
+      style: {
+        padding: "12px 13px",
+        display: "flex",
+        flexDirection: "column",
+        gap: 9
+      },
+      children: [
+        /* @__PURE__ */ jsx_runtime.jsxs("div", {
+          style: {
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+            gap: 10
+          },
+          children: [
+            /* @__PURE__ */ jsx_runtime.jsxs("span", {
+              style: {
+                color: theme.textDim,
+                fontFamily: MONO_FONT_STACK,
+                fontSize: 10,
+                fontWeight: 800
+              },
+              children: [
+                "#",
+                task.id
+              ]
+            }),
+            /* @__PURE__ */ jsx_runtime.jsx(Badge, {
+              status: task.status
+            })
+          ]
+        }),
+        /* @__PURE__ */ jsx_runtime.jsx("div", {
+          style: {
+            fontSize: 13.5,
+            fontWeight: 680,
+            color: theme.text,
+            lineHeight: 1.35,
+            fontFamily: DISPLAY_FONT_STACK
+          },
+          children: task.title || "Untitled task"
+        }),
+        /* @__PURE__ */ jsx_runtime.jsx("div", {
+          style: {
+            fontSize: 12,
+            color: theme.textMuted,
+            lineHeight: 1.45,
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            display: "-webkit-box",
+            WebkitLineClamp: 2,
+            WebkitBoxOrient: "vertical"
+          },
+          children: task.prompt || "No prompt saved for this task."
+        }),
+        /* @__PURE__ */ jsx_runtime.jsxs("div", {
+          style: { display: "flex", gap: 5, flexWrap: "wrap" },
+          children: [
+            /* @__PURE__ */ jsx_runtime.jsx(AgentBadge, {
+              agent: task.agent
+            }),
+            task.schedule_type === "delayed" && /* @__PURE__ */ jsx_runtime.jsxs(Tag, {
+              children: [
+                "delay ",
+                task.delay_seconds,
+                "s"
+              ]
+            }),
+            task.schedule_type === "scheduled_at" && task.next_run_at && /* @__PURE__ */ jsx_runtime.jsxs(Tag, {
+              children: [
+                "at ",
+                formatTaskDateTime(task.next_run_at)
+              ]
+            }),
+            task.schedule_type === "cron" && /* @__PURE__ */ jsx_runtime.jsxs(Tag, {
+              children: [
+                "cron ",
+                task.cron_expr
+              ]
+            }),
+            task.run_count > 0 && /* @__PURE__ */ jsx_runtime.jsxs(Tag, {
+              children: [
+                "runs ",
+                task.run_count,
+                task.max_runs ? `/${task.max_runs}` : ""
+              ]
+            }),
+            tags.slice(0, 4).map((t, i) => /* @__PURE__ */ jsx_runtime.jsx(Tag, {
+              children: t.trim()
+            }, i))
+          ]
+        }),
+        /* @__PURE__ */ jsx_runtime.jsxs("div", {
+          style: {
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+            gap: 10,
+            borderTop: `1px solid ${theme.border}`,
+            paddingTop: 9
+          },
+          children: [
+            /* @__PURE__ */ jsx_runtime.jsx("div", {
+              style: { fontSize: 10, color: theme.textDim, fontFamily: MONO_FONT_STACK },
+              children: task.last_run_at ? `last ${formatTaskTime(task.last_run_at)}` : "not run yet"
+            }),
+            /* @__PURE__ */ jsx_runtime.jsxs("div", {
+              style: { display: "flex", gap: 4, opacity: hovered ? 1 : 0.7 },
+              onClick: (e) => e.stopPropagation(),
+              children: [
+                ["pending", "scheduled", "blocked"].includes(task.status) && /* @__PURE__ */ jsx_runtime.jsx(ActionBtn, {
+                  icon: Pencil,
+                  title: "Edit",
+                  onClick: () => onAction("edit", task.id),
+                  color: theme.blue || theme.accent
+                }),
+                ["completed", "cancelled", "failed"].includes(task.status) && /* @__PURE__ */ jsx_runtime.jsx(ActionBtn, {
+                  icon: GitFork,
+                  title: "Fork",
+                  onClick: () => onAction("fork", task.id),
+                  color: theme.cyan || theme.accent
+                }),
+                task.status === "failed" && /* @__PURE__ */ jsx_runtime.jsx(ActionBtn, {
+                  icon: RotateCcw,
+                  title: "Retry",
+                  onClick: () => onAction("retry", task.id),
+                  color: theme.orange
+                }),
+                ["pending", "scheduled", "running"].includes(task.status) && /* @__PURE__ */ jsx_runtime.jsx(ActionBtn, {
+                  icon: Square,
+                  title: "Cancel",
+                  onClick: () => onAction("cancel", task.id),
+                  color: theme.red
+                }),
+                /* @__PURE__ */ jsx_runtime.jsx(ActionBtn, {
+                  icon: Trash2,
+                  title: "Delete",
+                  onClick: () => onAction("delete", task.id),
+                  color: theme.textMuted
+                })
+              ]
+            })
+          ]
+        }),
+        task.status === "blocked" && task.dependencies && task.dependencies.length > 0 && /* @__PURE__ */ jsx_runtime.jsxs("div", {
+          style: { fontSize: 10, color: theme.textDim, fontFamily: MONO_FONT_STACK },
+          children: [
+            "waiting for ",
+            task.dependencies.map((d) => `#${d.depends_on_task_id}`).join(", ")
+          ]
+        }),
+        task.dependents && task.dependents.length > 0 && task.status === "completed" && /* @__PURE__ */ jsx_runtime.jsxs("div", {
+          style: { fontSize: 10, color: theme.textDim, fontFamily: MONO_FONT_STACK },
+          children: [
+            "unlocks ",
+            task.dependents.map((id) => `#${id}`).join(", ")
+          ]
+        }),
+        task.dag_id && /* @__PURE__ */ jsx_runtime.jsxs("div", {
+          style: {
+            fontSize: 10,
+            color: theme.accent,
+            opacity: 0.72,
+            fontFamily: MONO_FONT_STACK
+          },
+          children: [
+            "dag ",
+            task.dag_id
+          ]
+        })
+      ]
+    })
   });
 }
-function ActionBtn({ label, title, onClick, color }) {
-  const [hovered, setHovered] = import_react.useState(false);
+function ActionBtn({ icon, title, onClick, color }) {
+  const [hovered, setHovered] = import_react4.useState(false);
   return /* @__PURE__ */ jsx_runtime.jsx("button", {
     title,
     onClick,
     onMouseEnter: () => setHovered(true),
     onMouseLeave: () => setHovered(false),
     style: {
-      background: hovered ? `${color}22` : "transparent",
-      border: "none",
+      background: hovered ? `${color}22` : theme.field,
+      border: `1px solid ${hovered ? `${color}66` : theme.border}`,
       color,
       cursor: "pointer",
-      width: 24,
-      height: 24,
+      width: 26,
+      height: 26,
       borderRadius: 6,
-      fontSize: 14,
       display: "flex",
       alignItems: "center",
       justifyContent: "center",
-      transition: "background 0.15s"
+      transition: "background 0.15s ease, border-color 0.15s ease"
     },
-    children: label
+    children: /* @__PURE__ */ jsx_runtime.jsx(IconGlyph, {
+      icon,
+      size: 13,
+      strokeWidth: 2.4
+    })
   });
 }
 function Column({ col, tasks, onAction, onViewDetail }) {
+  const iconColor = theme[col.tone] || theme.accent;
+  const iconBackground = theme[`${col.tone}Bg`] || theme.field;
   return /* @__PURE__ */ jsx_runtime.jsxs("div", {
-    style: { flex: 1, minWidth: 300 },
+    style: {
+      minWidth: 0,
+      borderRadius: 8,
+      border: `1px solid ${theme.border}`,
+      background: theme.columnBg,
+      boxShadow: "none",
+      padding: 10,
+      minHeight: 420
+    },
     children: [
       /* @__PURE__ */ jsx_runtime.jsxs("div", {
         style: {
           display: "flex",
           alignItems: "center",
-          gap: 10,
-          marginBottom: 16,
-          padding: "0 4px"
+          justifyContent: "space-between",
+          gap: 12,
+          marginBottom: 12,
+          padding: "2px 2px 10px",
+          borderBottom: `1px solid ${theme.border}`
         },
         children: [
-          /* @__PURE__ */ jsx_runtime.jsx("span", {
-            style: { fontSize: 16, opacity: 0.4 },
-            children: col.icon
+          /* @__PURE__ */ jsx_runtime.jsxs("div", {
+            style: { display: "flex", alignItems: "center", gap: 9, minWidth: 0 },
+            children: [
+              /* @__PURE__ */ jsx_runtime.jsx(IconWell, {
+                icon: col.icon,
+                color: iconColor,
+                background: iconBackground,
+                size: 28,
+                iconSize: 15
+              }),
+              /* @__PURE__ */ jsx_runtime.jsxs("div", {
+                style: { minWidth: 0 },
+                children: [
+                  /* @__PURE__ */ jsx_runtime.jsx("div", {
+                    style: {
+                      fontSize: 13,
+                      fontWeight: 720,
+                      color: theme.columnHeader,
+                      fontFamily: DISPLAY_FONT_STACK
+                    },
+                    children: col.label
+                  }),
+                  /* @__PURE__ */ jsx_runtime.jsx("div", {
+                    style: { fontSize: 10, color: theme.textDim, marginTop: 2 },
+                    children: col.hint
+                  })
+                ]
+              })
+            ]
           }),
           /* @__PURE__ */ jsx_runtime.jsx("span", {
             style: {
-              fontSize: 12,
-              fontWeight: 700,
-              color: theme.textMuted,
-              letterSpacing: 1.5,
-              textTransform: "uppercase"
-            },
-            children: col.label
-          }),
-          /* @__PURE__ */ jsx_runtime.jsx("span", {
-            style: {
-              background: theme.border,
-              borderRadius: 10,
-              padding: "2px 8px",
+              background: theme.surface,
+              border: `1px solid ${theme.border}`,
+              borderRadius: 999,
+              padding: "3px 8px",
               fontSize: 11,
-              color: theme.textDim,
-              fontWeight: 600
+              color: theme.textMuted,
+              fontWeight: 600,
+              fontFamily: MONO_FONT_STACK
             },
             children: tasks.length
           })
         ]
       }),
       /* @__PURE__ */ jsx_runtime.jsxs("div", {
-        style: { display: "flex", flexDirection: "column", gap: 8 },
+        style: { display: "flex", flexDirection: "column", gap: 10 },
         children: [
           tasks.map((t) => /* @__PURE__ */ jsx_runtime.jsx(TaskCard, {
             task: t,
@@ -14709,13 +15453,14 @@ function Column({ col, tasks, onAction, onViewDetail }) {
           tasks.length === 0 && /* @__PURE__ */ jsx_runtime.jsx("div", {
             style: {
               border: `1px dashed ${theme.border}`,
-              borderRadius: 10,
-              padding: 32,
+              borderRadius: 8,
+              padding: "28px 18px",
               textAlign: "center",
               color: theme.textDim,
-              fontSize: 12
+              fontSize: 12,
+              background: theme.surface
             },
-            children: "No tasks"
+            children: "Clear"
           })
         ]
       })
@@ -14747,7 +15492,7 @@ function HeartbeatBadge({ enabled }) {
 }
 function HeartbeatModal({ onClose, onSubmit, initialData, defaultAgent, mode = "create" }) {
   const savedDir = localStorage.getItem("agentforge_working_dir") || "~/papers";
-  const [form, setForm] = import_react.useState(() => ({
+  const [form, setForm] = import_react4.useState(() => ({
     name: initialData?.name || "",
     working_dir: initialData?.working_dir || savedDir,
     schedule_type: initialData?.schedule_type || "interval",
@@ -14760,27 +15505,8 @@ function HeartbeatModal({ onClose, onSubmit, initialData, defaultAgent, mode = "
     enabled: initialData?.enabled ?? true
   }));
   const set = (k, v) => setForm((prev) => ({ ...prev, [k]: v }));
-  const inputStyle = {
-    width: "100%",
-    padding: "10px 14px",
-    borderRadius: 8,
-    border: `1px solid ${theme.border}`,
-    background: theme.bg,
-    color: theme.text,
-    fontSize: 13,
-    outline: "none",
-    boxSizing: "border-box",
-    fontFamily: "'JetBrains Mono', 'SF Mono', monospace"
-  };
-  const labelStyle = {
-    fontSize: 11,
-    fontWeight: 600,
-    color: theme.textMuted,
-    letterSpacing: 0.8,
-    textTransform: "uppercase",
-    marginBottom: 6,
-    display: "block"
-  };
+  const inputStyle = uiField();
+  const labelStyle = uiLabel();
   const handleSubmit = () => {
     localStorage.setItem("agentforge_working_dir", form.working_dir);
     onSubmit({
@@ -14793,37 +15519,15 @@ function HeartbeatModal({ onClose, onSubmit, initialData, defaultAgent, mode = "
   };
   return /* @__PURE__ */ jsx_runtime.jsx("div", {
     style: {
-      position: "fixed",
-      inset: 0,
-      background: "rgba(0,0,0,0.7)",
-      display: "flex",
-      alignItems: "center",
-      justifyContent: "center",
-      zIndex: 1000,
-      backdropFilter: "blur(8px)"
+      ...modalOverlay()
     },
     onClick: onClose,
     children: /* @__PURE__ */ jsx_runtime.jsxs("div", {
       onClick: (e) => e.stopPropagation(),
-      style: {
-        background: theme.surface,
-        border: `1px solid ${theme.border}`,
-        borderRadius: 16,
-        padding: 32,
-        width: 640,
-        maxHeight: "84vh",
-        overflow: "auto",
-        boxShadow: "0 24px 80px rgba(0,0,0,0.5)"
-      },
+      style: modalPanel(640),
       children: [
         /* @__PURE__ */ jsx_runtime.jsx("h2", {
-          style: {
-            margin: "0 0 24px",
-            fontSize: 18,
-            fontWeight: 700,
-            color: theme.text,
-            fontFamily: "'JetBrains Mono', monospace"
-          },
+          style: modalTitle(),
           children: mode === "edit" ? "Edit Heartbeat" : "New Heartbeat"
         }),
         /* @__PURE__ */ jsx_runtime.jsxs("div", {
@@ -14864,14 +15568,10 @@ function HeartbeatModal({ onClose, onSubmit, initialData, defaultAgent, mode = "
                           set("working_dir", dir);
                       },
                       style: {
-                        padding: "8px 14px",
-                        borderRadius: 8,
+                        ...secondaryButton(),
+                        padding: "0 13px",
+                        height: 37,
                         cursor: "pointer",
-                        border: `1px solid ${theme.border}`,
-                        background: theme.bg,
-                        color: theme.textMuted,
-                        fontSize: 12,
-                        fontWeight: 600,
                         whiteSpace: "nowrap"
                       },
                       children: "Browse"
@@ -14890,19 +15590,8 @@ function HeartbeatModal({ onClose, onSubmit, initialData, defaultAgent, mode = "
                   style: { display: "flex", gap: 8 },
                   children: ["interval", "cron"].map((t) => /* @__PURE__ */ jsx_runtime.jsx("button", {
                     onClick: () => set("schedule_type", t),
-                    style: {
-                      flex: 1,
-                      padding: "8px 12px",
-                      borderRadius: 8,
-                      cursor: "pointer",
-                      border: `1px solid ${form.schedule_type === t ? theme.accent : theme.border}`,
-                      background: form.schedule_type === t ? theme.accentGlow : "transparent",
-                      color: form.schedule_type === t ? theme.accent : theme.textMuted,
-                      fontSize: 12,
-                      fontWeight: 600,
-                      textTransform: "capitalize"
-                    },
-                    children: t === "interval" ? "⟳ Interval" : "⏲ Cron"
+                    style: segmentedButton(form.schedule_type === t),
+                    children: t === "interval" ? "Interval" : "Cron"
                   }, t))
                 })
               ]
@@ -15022,31 +15711,12 @@ function HeartbeatModal({ onClose, onSubmit, initialData, defaultAgent, mode = "
           children: [
             /* @__PURE__ */ jsx_runtime.jsx("button", {
               onClick: onClose,
-              style: {
-                padding: "10px 20px",
-                borderRadius: 8,
-                border: `1px solid ${theme.border}`,
-                background: "transparent",
-                color: theme.textMuted,
-                cursor: "pointer",
-                fontSize: 13,
-                fontWeight: 600
-              },
+              style: secondaryButton(),
               children: "Cancel"
             }),
             /* @__PURE__ */ jsx_runtime.jsx("button", {
               onClick: handleSubmit,
-              style: {
-                padding: "10px 24px",
-                borderRadius: 8,
-                border: "none",
-                background: theme.accent,
-                color: "#fff",
-                cursor: "pointer",
-                fontSize: 13,
-                fontWeight: 600,
-                boxShadow: `0 0 20px ${theme.accentGlow}`
-              },
+              style: primaryButton(),
               children: mode === "edit" ? "Save" : "Create Heartbeat"
             })
           ]
@@ -15058,9 +15728,9 @@ function HeartbeatModal({ onClose, onSubmit, initialData, defaultAgent, mode = "
 function HeartbeatCard({ heartbeat, onAction, onViewDetail }) {
   const tags = [];
   if (heartbeat.schedule_type === "interval" && heartbeat.interval_seconds)
-    tags.push(`⟳ ${heartbeat.interval_seconds}s`);
+    tags.push(`every ${heartbeat.interval_seconds}s`);
   if (heartbeat.schedule_type === "cron" && heartbeat.cron_expr)
-    tags.push(`⏲ ${heartbeat.cron_expr}`);
+    tags.push(`cron ${heartbeat.cron_expr}`);
   if (heartbeat.last_decision)
     tags.push(`Last: ${heartbeat.last_decision}`);
   return /* @__PURE__ */ jsx_runtime.jsxs("div", {
@@ -15068,10 +15738,10 @@ function HeartbeatCard({ heartbeat, onAction, onViewDetail }) {
     style: {
       background: theme.surface,
       border: `1px solid ${theme.border}`,
-      borderRadius: 12,
-      padding: "16px 18px",
+      borderRadius: 8,
+      padding: "14px 15px",
       cursor: "pointer",
-      transition: "all 0.2s ease"
+      transition: "border-color 0.16s ease, background 0.16s ease"
     },
     children: [
       /* @__PURE__ */ jsx_runtime.jsxs("div", {
@@ -15083,9 +15753,9 @@ function HeartbeatCard({ heartbeat, onAction, onViewDetail }) {
               /* @__PURE__ */ jsx_runtime.jsx("div", {
                 style: {
                   fontSize: 14,
-                  fontWeight: 700,
+                  fontWeight: 680,
                   color: theme.text,
-                  fontFamily: "'JetBrains Mono', monospace",
+                  fontFamily: DISPLAY_FONT_STACK,
                   marginBottom: 6
                 },
                 children: heartbeat.name
@@ -15129,30 +15799,30 @@ function HeartbeatCard({ heartbeat, onAction, onViewDetail }) {
             onClick: (e) => e.stopPropagation(),
             children: [
               /* @__PURE__ */ jsx_runtime.jsx(ActionBtn, {
-                label: "⚡",
+                icon: Play,
                 title: "Run now",
                 onClick: () => onAction("run", heartbeat.id),
                 color: theme.orange
               }),
               /* @__PURE__ */ jsx_runtime.jsx(ActionBtn, {
-                label: "✎",
+                icon: Pencil,
                 title: "Edit",
                 onClick: () => onAction("edit", heartbeat.id),
                 color: theme.blue
               }),
               heartbeat.enabled ? /* @__PURE__ */ jsx_runtime.jsx(ActionBtn, {
-                label: "❚❚",
+                icon: Pause,
                 title: "Pause",
                 onClick: () => onAction("pause", heartbeat.id),
                 color: theme.textMuted
               }) : /* @__PURE__ */ jsx_runtime.jsx(ActionBtn, {
-                label: "▶",
+                icon: Play,
                 title: "Resume",
                 onClick: () => onAction("resume", heartbeat.id),
                 color: theme.green
               }),
               /* @__PURE__ */ jsx_runtime.jsx(ActionBtn, {
-                label: "×",
+                icon: Trash2,
                 title: "Delete",
                 onClick: () => onAction("delete", heartbeat.id),
                 color: theme.red
@@ -15189,14 +15859,14 @@ function HeartbeatCard({ heartbeat, onAction, onViewDetail }) {
   });
 }
 function HeartbeatDetailPanel({ heartbeat, ticks, onClose }) {
-  const [selectedTickId, setSelectedTickId] = import_react.useState(null);
-  const [tickOutput, setTickOutput] = import_react.useState("");
-  const [tickRunning, setTickRunning] = import_react.useState(false);
-  const outputRef = import_react.useRef(null);
-  import_react.useEffect(() => {
+  const [selectedTickId, setSelectedTickId] = import_react4.useState(null);
+  const [tickOutput, setTickOutput] = import_react4.useState("");
+  const [tickRunning, setTickRunning] = import_react4.useState(false);
+  const outputRef = import_react4.useRef(null);
+  import_react4.useEffect(() => {
     setSelectedTickId(ticks[0]?.id || null);
   }, [heartbeat.id, ticks]);
-  import_react.useEffect(() => {
+  import_react4.useEffect(() => {
     if (!selectedTickId) {
       setTickOutput("");
       setTickRunning(false);
@@ -15224,7 +15894,7 @@ function HeartbeatDetailPanel({ heartbeat, ticks, onClose }) {
       clearInterval(interval);
     };
   }, [heartbeat.id, selectedTickId]);
-  import_react.useEffect(() => {
+  import_react4.useEffect(() => {
     if (outputRef.current) {
       outputRef.current.scrollTop = outputRef.current.scrollHeight;
     }
@@ -15259,9 +15929,9 @@ function HeartbeatDetailPanel({ heartbeat, ticks, onClose }) {
               /* @__PURE__ */ jsx_runtime.jsx("div", {
                 style: {
                   fontSize: 18,
-                  fontWeight: 700,
+                  fontWeight: 720,
                   color: theme.text,
-                  fontFamily: "'JetBrains Mono', monospace"
+                  fontFamily: DISPLAY_FONT_STACK
                 },
                 children: heartbeat.name
               }),
@@ -15299,13 +15969,13 @@ function HeartbeatDetailPanel({ heartbeat, ticks, onClose }) {
               }),
               heartbeat.schedule_type === "interval" ? /* @__PURE__ */ jsx_runtime.jsxs(Tag, {
                 children: [
-                  "⟳ ",
+                  "every ",
                   heartbeat.interval_seconds,
                   "s"
                 ]
               }) : /* @__PURE__ */ jsx_runtime.jsxs(Tag, {
                 children: [
-                  "⏲ ",
+                  "cron ",
                   heartbeat.cron_expr
                 ]
               }),
@@ -15554,7 +16224,7 @@ function HeartbeatDetailPanel({ heartbeat, ticks, onClose }) {
 }
 function NewTaskModal({ onClose, onSubmit, initialData, mode = "create" }) {
   const savedDir = localStorage.getItem("agentforge_working_dir") || "~/papers";
-  const [form, setForm] = import_react.useState(() => {
+  const [form, setForm] = import_react4.useState(() => {
     if (initialData) {
       return {
         title: initialData.title || "",
@@ -15584,7 +16254,7 @@ function NewTaskModal({ onClose, onSubmit, initialData, mode = "create" }) {
       dag_id: ""
     };
   });
-  const [promptImages, setPromptImages] = import_react.useState(() => {
+  const [promptImages, setPromptImages] = import_react4.useState(() => {
     if (initialData?.prompt_images && Array.isArray(initialData.prompt_images)) {
       return initialData.prompt_images.map((img) => ({
         name: img.name || "image",
@@ -15595,7 +16265,7 @@ function NewTaskModal({ onClose, onSubmit, initialData, mode = "create" }) {
     }
     return [];
   });
-  const [depRows, setDepRows] = import_react.useState(() => {
+  const [depRows, setDepRows] = import_react4.useState(() => {
     if (initialData?.dependencies && Array.isArray(initialData.dependencies)) {
       return initialData.dependencies.map((dep) => ({
         task_id: dep.depends_on_task_id,
@@ -15605,7 +16275,7 @@ function NewTaskModal({ onClose, onSubmit, initialData, mode = "create" }) {
     }
     return [];
   });
-  const [scheduledAtError, setScheduledAtError] = import_react.useState("");
+  const [scheduledAtError, setScheduledAtError] = import_react4.useState("");
   const set = (k, v) => setForm((prev) => ({ ...prev, [k]: v }));
   const handleImageSelect = (e) => {
     const files = Array.from(e.target.files || []);
@@ -15652,61 +16322,19 @@ function NewTaskModal({ onClose, onSubmit, initialData, mode = "create" }) {
     }
     onSubmit(data);
   };
-  const inputStyle = {
-    width: "100%",
-    padding: "10px 14px",
-    borderRadius: 8,
-    border: `1px solid ${theme.border}`,
-    background: theme.bg,
-    color: theme.text,
-    fontSize: 13,
-    outline: "none",
-    boxSizing: "border-box",
-    fontFamily: "'JetBrains Mono', 'SF Mono', monospace",
-    transition: "border-color 0.2s"
-  };
-  const labelStyle = {
-    fontSize: 11,
-    fontWeight: 600,
-    color: theme.textMuted,
-    letterSpacing: 0.8,
-    textTransform: "uppercase",
-    marginBottom: 6,
-    display: "block"
-  };
+  const inputStyle = uiField();
+  const labelStyle = uiLabel();
   return /* @__PURE__ */ jsx_runtime.jsx("div", {
     style: {
-      position: "fixed",
-      inset: 0,
-      background: "rgba(0,0,0,0.7)",
-      display: "flex",
-      alignItems: "center",
-      justifyContent: "center",
-      zIndex: 1000,
-      backdropFilter: "blur(8px)"
+      ...modalOverlay()
     },
     onClick: onClose,
     children: /* @__PURE__ */ jsx_runtime.jsxs("div", {
       onClick: (e) => e.stopPropagation(),
-      style: {
-        background: theme.surface,
-        border: `1px solid ${theme.border}`,
-        borderRadius: 16,
-        padding: 32,
-        width: 520,
-        maxHeight: "80vh",
-        overflow: "auto",
-        boxShadow: "0 24px 80px rgba(0,0,0,0.5)"
-      },
+      style: modalPanel(520, "82vh"),
       children: [
         /* @__PURE__ */ jsx_runtime.jsx("h2", {
-          style: {
-            margin: "0 0 24px",
-            fontSize: 18,
-            fontWeight: 700,
-            color: theme.text,
-            fontFamily: "'JetBrains Mono', monospace"
-          },
+          style: modalTitle(),
           children: mode === "edit" ? "Edit Task" : mode === "fork" ? "Fork Task" : "New Task"
         }),
         /* @__PURE__ */ jsx_runtime.jsxs("div", {
@@ -15852,16 +16480,11 @@ function NewTaskModal({ onClose, onSubmit, initialData, mode = "create" }) {
                           set("working_dir", dir);
                       },
                       style: {
-                        padding: "8px 14px",
-                        borderRadius: 8,
+                        ...secondaryButton(),
+                        padding: "0 13px",
+                        height: 37,
                         cursor: "pointer",
-                        border: `1px solid ${theme.border}`,
-                        background: theme.bg,
-                        color: theme.textMuted,
-                        fontSize: 12,
-                        fontWeight: 600,
-                        whiteSpace: "nowrap",
-                        transition: "all 0.15s"
+                        whiteSpace: "nowrap"
                       },
                       children: "Browse"
                     })
@@ -15879,21 +16502,8 @@ function NewTaskModal({ onClose, onSubmit, initialData, mode = "create" }) {
                   style: { display: "flex", gap: 8, flexWrap: "wrap" },
                   children: ["immediate", "delayed", "scheduled_at", "cron"].map((t) => /* @__PURE__ */ jsx_runtime.jsx("button", {
                     onClick: () => set("schedule_type", t),
-                    style: {
-                      flex: 1,
-                      padding: "8px 12px",
-                      borderRadius: 8,
-                      cursor: "pointer",
-                      border: `1px solid ${form.schedule_type === t ? theme.accent : theme.border}`,
-                      background: form.schedule_type === t ? theme.accentGlow : "transparent",
-                      color: form.schedule_type === t ? theme.accent : theme.textMuted,
-                      fontSize: 12,
-                      fontWeight: 600,
-                      textTransform: "capitalize",
-                      transition: "all 0.15s",
-                      minWidth: 100
-                    },
-                    children: t === "immediate" ? "⚡ Immediate" : t === "delayed" ? "⏳ Delayed" : t === "scheduled_at" ? "\uD83D\uDCC5 At Time" : "⏲ Cron"
+                    style: segmentedButton(form.schedule_type === t),
+                    children: t === "immediate" ? "Immediate" : t === "delayed" ? "Delayed" : t === "scheduled_at" ? "At Time" : "Cron"
                   }, t))
                 })
               ]
@@ -16051,11 +16661,11 @@ function NewTaskModal({ onClose, onSubmit, initialData, mode = "create" }) {
                     padding: "5px 12px",
                     borderRadius: 6,
                     border: `1px dashed ${theme.border}`,
-                    background: "transparent",
+                    background: theme.surface,
                     color: theme.textMuted,
                     cursor: "pointer",
                     fontSize: 11,
-                    fontWeight: 600
+                    fontWeight: 650
                   },
                   children: "+ Add dependency"
                 })
@@ -16109,31 +16719,12 @@ function NewTaskModal({ onClose, onSubmit, initialData, mode = "create" }) {
           children: [
             /* @__PURE__ */ jsx_runtime.jsx("button", {
               onClick: onClose,
-              style: {
-                padding: "10px 20px",
-                borderRadius: 8,
-                border: `1px solid ${theme.border}`,
-                background: "transparent",
-                color: theme.textMuted,
-                cursor: "pointer",
-                fontSize: 13,
-                fontWeight: 600
-              },
+              style: secondaryButton(),
               children: "Cancel"
             }),
             /* @__PURE__ */ jsx_runtime.jsx("button", {
               onClick: handleSubmit,
-              style: {
-                padding: "10px 24px",
-                borderRadius: 8,
-                border: "none",
-                background: theme.accent,
-                color: "#fff",
-                cursor: "pointer",
-                fontSize: 13,
-                fontWeight: 600,
-                boxShadow: `0 0 20px ${theme.accentGlow}`
-              },
+              style: primaryButton(),
               children: mode === "edit" ? "Save Changes" : mode === "fork" ? "Create Fork" : "Create Task"
             })
           ]
@@ -16143,19 +16734,19 @@ function NewTaskModal({ onClose, onSubmit, initialData, mode = "create" }) {
   });
 }
 function DetailPanel({ task, onClose, onResume }) {
-  const [liveOutput, setLiveOutput] = import_react.useState("");
-  const [resumeText, setResumeText] = import_react.useState("");
-  const [resumeError, setResumeError] = import_react.useState("");
-  const [resumeSent, setResumeSent] = import_react.useState(false);
-  const [messages, setMessages] = import_react.useState([]);
-  const [events, setEvents] = import_react.useState([]);
-  const [showMessages, setShowMessages] = import_react.useState(false);
-  const [showEvents, setShowEvents] = import_react.useState(false);
-  const [showLiveOutput, setShowLiveOutput] = import_react.useState(true);
-  const liveOutputRef = import_react.useRef(null);
-  const messagesRef = import_react.useRef(null);
-  const eventsRef = import_react.useRef(null);
-  import_react.useEffect(() => {
+  const [liveOutput, setLiveOutput] = import_react4.useState("");
+  const [resumeText, setResumeText] = import_react4.useState("");
+  const [resumeError, setResumeError] = import_react4.useState("");
+  const [resumeSent, setResumeSent] = import_react4.useState(false);
+  const [messages, setMessages] = import_react4.useState([]);
+  const [events, setEvents] = import_react4.useState([]);
+  const [showMessages, setShowMessages] = import_react4.useState(false);
+  const [showEvents, setShowEvents] = import_react4.useState(false);
+  const [showLiveOutput, setShowLiveOutput] = import_react4.useState(true);
+  const liveOutputRef = import_react4.useRef(null);
+  const messagesRef = import_react4.useRef(null);
+  const eventsRef = import_react4.useRef(null);
+  import_react4.useEffect(() => {
     if (task.status !== "running") {
       setLiveOutput("");
       return;
@@ -16183,17 +16774,17 @@ function DetailPanel({ task, onClose, onResume }) {
       clearInterval(interval);
     };
   }, [task.id, task.status]);
-  import_react.useEffect(() => {
+  import_react4.useEffect(() => {
     if (liveOutputRef.current) {
       liveOutputRef.current.scrollTop = liveOutputRef.current.scrollHeight;
     }
   }, [liveOutput]);
-  import_react.useEffect(() => {
+  import_react4.useEffect(() => {
     if (showMessages) {
       fetchTaskMessages(task.id).then(setMessages);
     }
   }, [task.id, showMessages]);
-  import_react.useEffect(() => {
+  import_react4.useEffect(() => {
     if (!showEvents)
       return;
     let cancelled = false;
@@ -16214,7 +16805,7 @@ function DetailPanel({ task, onClose, onResume }) {
       clearInterval(interval);
     };
   }, [task.id, task.status, showEvents]);
-  import_react.useEffect(() => {
+  import_react4.useEffect(() => {
     if (messagesRef.current) {
       messagesRef.current.scrollTop = messagesRef.current.scrollHeight;
     }
@@ -16771,7 +17362,7 @@ function DetailPanel({ task, onClose, onResume }) {
           }),
           resumeSent && /* @__PURE__ */ jsx_runtime.jsx("div", {
             style: { fontSize: 12, color: theme.green, marginTop: 6 },
-            children: "✨ 已发送！任务正在重新唤醒，请稍候~"
+            children: "Sent. The task is waking up again."
           }),
           /* @__PURE__ */ jsx_runtime.jsx("button", {
             onClick: handleResume,
@@ -16844,13 +17435,13 @@ function SettingsModal({
   channelsStatus: initialChannelsStatus,
   onChannelsSave
 }) {
-  const [tab, setTab] = import_react.useState("general");
-  const [timeout, setTimeout2] = import_react.useState(initialTimeout ?? DEFAULT_TIMEOUT_SECONDS);
-  const [defaultAgent, setDefaultAgent] = import_react.useState(initialDefaultAgent ?? DEFAULT_AGENT);
-  const [skillEnabled, setSkillEnabled] = import_react.useState(false);
-  const [skillSweepAgent, setSkillSweepAgent] = import_react.useState(DEFAULT_AGENT);
-  const [skillSweepCron, setSkillSweepCron] = import_react.useState("0 3 * * *");
-  const [feishu, setFeishu] = import_react.useState({
+  const [tab, setTab] = import_react4.useState("general");
+  const [timeout, setTimeout2] = import_react4.useState(initialTimeout ?? DEFAULT_TIMEOUT_SECONDS);
+  const [defaultAgent, setDefaultAgent] = import_react4.useState(initialDefaultAgent ?? DEFAULT_AGENT);
+  const [skillEnabled, setSkillEnabled] = import_react4.useState(false);
+  const [skillSweepAgent, setSkillSweepAgent] = import_react4.useState(DEFAULT_AGENT);
+  const [skillSweepCron, setSkillSweepCron] = import_react4.useState("0 3 * * *");
+  const [feishu, setFeishu] = import_react4.useState({
     feishu_app_id: "",
     feishu_app_secret: "",
     feishu_default_chat_id: "",
@@ -16858,19 +17449,19 @@ function SettingsModal({
     feishu_enabled: "false",
     ...initialFeishu
   });
-  const [feishuSaving, setFeishuSaving] = import_react.useState(false);
-  const [feishuMsg, setFeishuMsg] = import_react.useState(null);
-  const [channels, setChannels] = import_react.useState(createInitialChannelsState(initialChannelsStatus));
-  const [channelsSaving, setChannelsSaving] = import_react.useState(false);
-  const [channelsMsg, setChannelsMsg] = import_react.useState(null);
-  const [weixinQrSrc, setWeixinQrSrc] = import_react.useState("");
-  const [weixinActionBusy, setWeixinActionBusy] = import_react.useState(false);
-  const [collapsedChannels, setCollapsedChannels] = import_react.useState({
+  const [feishuSaving, setFeishuSaving] = import_react4.useState(false);
+  const [feishuMsg, setFeishuMsg] = import_react4.useState(null);
+  const [channels, setChannels] = import_react4.useState(createInitialChannelsState(initialChannelsStatus));
+  const [channelsSaving, setChannelsSaving] = import_react4.useState(false);
+  const [channelsMsg, setChannelsMsg] = import_react4.useState(null);
+  const [weixinQrSrc, setWeixinQrSrc] = import_react4.useState("");
+  const [weixinActionBusy, setWeixinActionBusy] = import_react4.useState(false);
+  const [collapsedChannels, setCollapsedChannels] = import_react4.useState({
     telegram: true,
     slack: true,
     weixin: true
   });
-  import_react.useEffect(() => {
+  import_react4.useEffect(() => {
     let cancelled = false;
     const refreshChannels = async (preserveUserEdits = true) => {
       const status = await fetchChannelsStatus();
@@ -16903,7 +17494,7 @@ function SettingsModal({
       clearInterval(intervalId);
     };
   }, []);
-  import_react.useEffect(() => {
+  import_react4.useEffect(() => {
     let cancelled = false;
     const qrValue = channels.weixin?.qr_code_url || "";
     if (!qrValue) {
@@ -16996,86 +17587,45 @@ function SettingsModal({
       setChannelsSaving(false);
     }
   };
-  const fieldStyle = {
-    width: "100%",
-    padding: "10px 14px",
-    borderRadius: 8,
-    border: `1px solid ${theme.border}`,
-    background: theme.bg,
-    color: theme.text,
-    fontSize: 13,
-    outline: "none",
-    boxSizing: "border-box",
-    fontFamily: "'JetBrains Mono', 'SF Mono', monospace"
-  };
-  const labelStyle = {
-    fontSize: 11,
-    fontWeight: 600,
-    color: theme.textMuted,
-    letterSpacing: 0.8,
-    textTransform: "uppercase",
-    marginBottom: 8,
-    display: "block"
-  };
+  const fieldStyle = uiField();
+  const labelStyle = uiLabel();
   const hintStyle = { fontSize: 10, color: theme.textDim, marginTop: 4 };
   const tabs = ["general", "channels", "feishu"];
   const tabLabel = { general: "General", channels: "Channels", feishu: "Feishu / Lark" };
   return /* @__PURE__ */ jsx_runtime.jsx("div", {
     style: {
-      position: "fixed",
-      inset: 0,
-      background: "rgba(0,0,0,0.7)",
-      display: "flex",
-      alignItems: "center",
-      justifyContent: "center",
-      zIndex: 1000,
-      backdropFilter: "blur(8px)"
+      ...modalOverlay()
     },
     onClick: onClose,
     children: /* @__PURE__ */ jsx_runtime.jsxs("div", {
       onClick: (e) => e.stopPropagation(),
-      style: {
-        background: theme.surface,
-        border: `1px solid ${theme.border}`,
-        borderRadius: 16,
-        padding: 32,
-        width: 480,
-        maxHeight: "85vh",
-        overflowY: "auto",
-        boxShadow: "0 24px 80px rgba(0,0,0,0.5)"
-      },
+      style: modalPanel(520, "85vh"),
       children: [
         /* @__PURE__ */ jsx_runtime.jsx("h2", {
-          style: {
-            margin: "0 0 20px",
-            fontSize: 18,
-            fontWeight: 700,
-            color: theme.text,
-            fontFamily: "'JetBrains Mono', monospace"
-          },
+          style: modalTitle(),
           children: "Settings"
         }),
         /* @__PURE__ */ jsx_runtime.jsx("div", {
           style: {
             display: "flex",
-            gap: 4,
-            marginBottom: 24,
-            borderBottom: `1px solid ${theme.border}`,
-            paddingBottom: 0
+            gap: 3,
+            marginBottom: 20,
+            padding: 2,
+            border: `1px solid ${theme.border}`,
+            borderRadius: 7,
+            background: theme.field
           },
           children: tabs.map((t) => /* @__PURE__ */ jsx_runtime.jsx("button", {
             onClick: () => setTab(t),
             style: {
-              padding: "7px 16px",
-              borderRadius: "8px 8px 0 0",
+              padding: "7px 12px",
+              borderRadius: 5,
               border: "none",
               cursor: "pointer",
               fontSize: 12,
-              fontWeight: 600,
-              background: tab === t ? theme.bg : "transparent",
-              color: tab === t ? theme.text : theme.textMuted,
-              borderBottom: tab === t ? `2px solid ${theme.accent}` : "2px solid transparent",
-              marginBottom: -1
+              fontWeight: 650,
+              background: tab === t ? theme.surface : "transparent",
+              color: tab === t ? theme.text : theme.textMuted
             },
             children: tabLabel[t]
           }, t))
@@ -17153,12 +17703,12 @@ function SettingsModal({
                       onChange: (e) => setSkillEnabled(e.target.checked),
                       style: { width: 16, height: 16, cursor: "pointer" }
                     }),
-                    "Skill Library 自动扫描"
+                    "Skill Library automatic scans"
                   ]
                 }),
                 /* @__PURE__ */ jsx_runtime.jsx("div", {
                   style: hintStyle,
-                  children: "定时让 agent 扫描已完成任务、检测复发模式（消耗 token，默认关闭）。 手动「扫一遍」按钮不受此开关影响。"
+                  children: "Run scheduled sweeps over completed tasks to detect recurring patterns. This uses tokens and is off by default. The manual scan button is not affected."
                 })
               ]
             }),
@@ -17169,7 +17719,7 @@ function SettingsModal({
                   children: [
                     /* @__PURE__ */ jsx_runtime.jsx("label", {
                       style: labelStyle,
-                      children: "扫描 Agent"
+                      children: "Sweep Agent"
                     }),
                     /* @__PURE__ */ jsx_runtime.jsxs("select", {
                       value: skillSweepAgent,
@@ -17188,7 +17738,7 @@ function SettingsModal({
                     }),
                     /* @__PURE__ */ jsx_runtime.jsx("div", {
                       style: hintStyle,
-                      children: "运行 sweep 的 agent。"
+                      children: "Agent used for skill sweeps."
                     })
                   ]
                 }),
@@ -17197,7 +17747,7 @@ function SettingsModal({
                   children: [
                     /* @__PURE__ */ jsx_runtime.jsx("label", {
                       style: labelStyle,
-                      children: "扫描节奏 (cron)"
+                      children: "Sweep Cadence (cron)"
                     }),
                     /* @__PURE__ */ jsx_runtime.jsx("input", {
                       value: skillSweepCron,
@@ -17207,7 +17757,7 @@ function SettingsModal({
                     }),
                     /* @__PURE__ */ jsx_runtime.jsx("div", {
                       style: hintStyle,
-                      children: "默认每日凌晨 3 点。增量扫描，只看上次以来的新任务。"
+                      children: "Default: 3 AM daily. Incremental scans only inspect tasks since the last sweep."
                     })
                   ]
                 })
@@ -17218,31 +17768,12 @@ function SettingsModal({
               children: [
                 /* @__PURE__ */ jsx_runtime.jsx("button", {
                   onClick: onClose,
-                  style: {
-                    padding: "10px 20px",
-                    borderRadius: 8,
-                    border: `1px solid ${theme.border}`,
-                    background: "transparent",
-                    color: theme.textMuted,
-                    cursor: "pointer",
-                    fontSize: 13,
-                    fontWeight: 600
-                  },
+                  style: secondaryButton(),
                   children: "Cancel"
                 }),
                 /* @__PURE__ */ jsx_runtime.jsx("button", {
                   onClick: handleSaveGeneral,
-                  style: {
-                    padding: "10px 24px",
-                    borderRadius: 8,
-                    border: "none",
-                    background: theme.accent,
-                    color: "#fff",
-                    cursor: "pointer",
-                    fontSize: 13,
-                    fontWeight: 600,
-                    boxShadow: `0 0 20px ${theme.accentGlow}`
-                  },
+                  style: primaryButton(),
                   children: "Save"
                 })
               ]
@@ -18435,9 +18966,9 @@ function SkillPatternCard({ p, tasks, onDraft, onApprove, onDismiss }) {
   const taskCount = taskIds.length;
   const ready = p.recurrence_count >= 3 && taskCount >= 2;
   const draftStatus = p.draft_status;
-  const [expanded, setExpanded] = import_react.useState(false);
-  const [body, setBody] = import_react.useState(p.draft_body || "");
-  import_react.useEffect(() => {
+  const [expanded, setExpanded] = import_react4.useState(false);
+  const [body, setBody] = import_react4.useState(p.draft_body || "");
+  import_react4.useEffect(() => {
     if (draftStatus === "ready")
       setBody(p.draft_body || "");
   }, [draftStatus, p.draft_body]);
@@ -18455,10 +18986,11 @@ function SkillPatternCard({ p, tasks, onDraft, onApprove, onDismiss }) {
   });
   return /* @__PURE__ */ jsx_runtime.jsxs("div", {
     style: {
-      background: theme.surface,
+      background: theme.columnBg,
       border: `1px solid ${borderColor}`,
-      borderRadius: 12,
+      borderRadius: 8,
       padding: 16,
+      boxShadow: theme.shadowSoft,
       opacity: muted ? 0.5 : 1
     },
     children: [
@@ -18475,7 +19007,16 @@ function SkillPatternCard({ p, tasks, onDraft, onApprove, onDismiss }) {
         ]
       }),
       /* @__PURE__ */ jsx_runtime.jsx("div", {
-        style: { color: theme.textMuted, fontSize: 13, marginBottom: 10 },
+        style: {
+          color: theme.textMuted,
+          fontSize: 13,
+          marginBottom: 10,
+          lineHeight: 1.5,
+          display: "-webkit-box",
+          WebkitBoxOrient: "vertical",
+          WebkitLineClamp: 2,
+          overflow: "hidden"
+        },
         children: p.summary || "—"
       }),
       /* @__PURE__ */ jsx_runtime.jsxs("div", {
@@ -18490,15 +19031,16 @@ function SkillPatternCard({ p, tasks, onDraft, onApprove, onDismiss }) {
         children: [
           /* @__PURE__ */ jsx_runtime.jsxs("span", {
             children: [
-              "复发 ",
+              "Recurs ",
               p.recurrence_count,
-              "×"
+              "x"
             ]
           }),
           /* @__PURE__ */ jsx_runtime.jsxs("span", {
             children: [
               taskCount,
-              " 个任务"
+              " ",
+              taskCount === 1 ? "task" : "tasks"
             ]
           }),
           /* @__PURE__ */ jsx_runtime.jsx("span", {
@@ -18506,7 +19048,7 @@ function SkillPatternCard({ p, tasks, onDraft, onApprove, onDismiss }) {
           }),
           ready && p.status !== "promoted" && /* @__PURE__ */ jsx_runtime.jsx("span", {
             style: { color: theme.accent, fontWeight: 700 },
-            children: "✓ 达标"
+            children: "Ready"
           }),
           /* @__PURE__ */ jsx_runtime.jsx("button", {
             onClick: () => setExpanded((v) => !v),
@@ -18519,7 +19061,7 @@ function SkillPatternCard({ p, tasks, onDraft, onApprove, onDismiss }) {
               fontSize: 11,
               fontWeight: 700
             },
-            children: expanded ? "收起 ▲" : "详情 ▼"
+            children: expanded ? "Hide" : "Details"
           })
         ]
       }),
@@ -18539,12 +19081,12 @@ function SkillPatternCard({ p, tasks, onDraft, onApprove, onDismiss }) {
             children: [
               /* @__PURE__ */ jsx_runtime.jsx("span", {
                 style: { color: theme.textDim },
-                children: "首次 "
+                children: "First seen "
               }),
               (p.first_seen || "").replace("T", " ").slice(0, 19) || "—",
               /* @__PURE__ */ jsx_runtime.jsx("span", {
                 style: { color: theme.textDim },
-                children: "　最近 "
+                children: " · Last seen "
               }),
               (p.last_seen || "").replace("T", " ").slice(0, 19) || "—"
             ]
@@ -18552,9 +19094,9 @@ function SkillPatternCard({ p, tasks, onDraft, onApprove, onDismiss }) {
           /* @__PURE__ */ jsx_runtime.jsxs("div", {
             style: { color: theme.textDim, marginBottom: 4 },
             children: [
-              "贡献的任务（",
+              "Contributing tasks (",
               taskCount,
-              "）："
+              "):"
             ]
           }),
           /* @__PURE__ */ jsx_runtime.jsxs("div", {
@@ -18574,7 +19116,7 @@ function SkillPatternCard({ p, tasks, onDraft, onApprove, onDismiss }) {
                     " ",
                     t ? t.title : /* @__PURE__ */ jsx_runtime.jsx("span", {
                       style: { color: theme.textDim },
-                      children: "(已删除)"
+                      children: "(deleted)"
                     })
                   ]
                 }, tid);
@@ -18594,13 +19136,13 @@ function SkillPatternCard({ p, tasks, onDraft, onApprove, onDismiss }) {
           border: `1px solid ${p.draft_worthy ? "rgba(34,197,94,0.3)" : "rgba(245,158,11,0.35)"}`
         },
         children: [
-          p.draft_worthy ? "✓ agent 建议沉淀" : "⚠ agent 认为价值有限（可仍批准或驳回）",
-          p.draft_worthiness_reason ? `：${p.draft_worthiness_reason}` : ""
+          p.draft_worthy ? "Agent recommends turning this into a skill" : "Agent thinks this may have limited value. You can still approve or reject it.",
+          p.draft_worthiness_reason ? `: ${p.draft_worthiness_reason}` : ""
         ]
       }),
       p.status === "promoted" && /* @__PURE__ */ jsx_runtime.jsx("div", {
         style: { fontSize: 12, color: theme.green, fontWeight: 700 },
-        children: "✓ 已沉淀为 Skill"
+        children: "Promoted to Skill"
       }),
       (p.status === "candidate" || p.status === "tracking") && draftStatus !== "ready" && draftStatus !== "drafting" && /* @__PURE__ */ jsx_runtime.jsxs("div", {
         style: { display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" },
@@ -18608,21 +19150,21 @@ function SkillPatternCard({ p, tasks, onDraft, onApprove, onDismiss }) {
           /* @__PURE__ */ jsx_runtime.jsx("button", {
             onClick: () => onDraft(p.id),
             style: btn(theme.accent, "#fff"),
-            children: draftStatus === "error" ? "重试蒸馏" : "蒸馏成 Skill"
+            children: draftStatus === "error" ? "Retry Distill" : "Distill Skill"
           }),
           /* @__PURE__ */ jsx_runtime.jsx("button", {
             onClick: () => onDismiss(p.id),
             style: btn("transparent", theme.textMuted),
-            children: "驳回"
+            children: "Reject"
           }),
           p.status === "tracking" && /* @__PURE__ */ jsx_runtime.jsx("span", {
             style: { color: theme.textDim, fontSize: 11 },
-            children: "未达自动阈值，可手动蒸馏（agent 会判断是否值得）"
+            children: "Below the automatic threshold. You can still distill it manually."
           }),
           draftStatus === "error" && /* @__PURE__ */ jsx_runtime.jsxs("span", {
             style: { color: theme.red, fontSize: 11 },
             children: [
-              "蒸馏失败：",
+              "Distill failed: ",
               p.draft_error
             ]
           })
@@ -18630,7 +19172,7 @@ function SkillPatternCard({ p, tasks, onDraft, onApprove, onDismiss }) {
       }),
       draftStatus === "drafting" && /* @__PURE__ */ jsx_runtime.jsx("div", {
         style: { fontSize: 12, color: theme.textMuted },
-        children: "蒸馏中…"
+        children: "Distilling…"
       }),
       draftStatus === "ready" && (() => {
         const fm = parseSkillFrontmatter(body);
@@ -18650,7 +19192,7 @@ function SkillPatternCard({ p, tasks, onDraft, onApprove, onDismiss }) {
                     padding: "3px 9px",
                     borderRadius: 6
                   },
-                  children: fm.name || "(无 name)"
+                  children: fm.name || "(no name)"
                 }),
                 /* @__PURE__ */ jsx_runtime.jsxs("span", {
                   style: { fontSize: 11, color: theme.textDim },
@@ -18676,7 +19218,7 @@ function SkillPatternCard({ p, tasks, onDraft, onApprove, onDismiss }) {
                     fontWeight: 600,
                     letterSpacing: 0.3
                   },
-                  children: "SKILL.md · 可编辑（frontmatter 决定名称与触发描述）"
+                  children: "SKILL.md · editable. Frontmatter controls the name and trigger description."
                 }),
                 /* @__PURE__ */ jsx_runtime.jsx("textarea", {
                   value: body,
@@ -18706,7 +19248,7 @@ function SkillPatternCard({ p, tasks, onDraft, onApprove, onDismiss }) {
                 /* @__PURE__ */ jsx_runtime.jsx("button", {
                   onClick: () => onApprove(p.id, { body }),
                   style: { ...btn(theme.green, "#fff"), padding: "8px 18px", fontSize: 12 },
-                  children: "✓ 批准并写入"
+                  children: "Approve and Write"
                 }),
                 /* @__PURE__ */ jsx_runtime.jsx("button", {
                   onClick: () => onDismiss(p.id),
@@ -18715,7 +19257,7 @@ function SkillPatternCard({ p, tasks, onDraft, onApprove, onDismiss }) {
                     padding: "8px 18px",
                     fontSize: 12
                   },
-                  children: "驳回"
+                  children: "Reject"
                 })
               ]
             })
@@ -18726,9 +19268,9 @@ function SkillPatternCard({ p, tasks, onDraft, onApprove, onDismiss }) {
   });
 }
 function SkillRegistryCard({ s, tasks, onToggle, onDelete }) {
-  const [expanded, setExpanded] = import_react.useState(false);
-  const [content, setContent] = import_react.useState(null);
-  const [loading, setLoading] = import_react.useState(false);
+  const [expanded, setExpanded] = import_react4.useState(false);
+  const [content, setContent] = import_react4.useState(null);
+  const [loading, setLoading] = import_react4.useState(false);
   let sourceTaskIds = [];
   try {
     sourceTaskIds = JSON.parse(s.source_task_ids || "[]");
@@ -18743,7 +19285,7 @@ function SkillRegistryCard({ s, tasks, onToggle, onDelete }) {
         const d = await res.json();
         setContent(d.content ?? "");
       } catch (e) {
-        setContent(`(加载失败：${e.message})`);
+        setContent(`(failed to load: ${e.message})`);
       } finally {
         setLoading(false);
       }
@@ -18751,10 +19293,11 @@ function SkillRegistryCard({ s, tasks, onToggle, onDelete }) {
   };
   return /* @__PURE__ */ jsx_runtime.jsxs("div", {
     style: {
-      background: theme.surface,
+      background: theme.columnBg,
       border: `1px solid ${theme.border}`,
-      borderRadius: 12,
+      borderRadius: 8,
       padding: 14,
+      boxShadow: theme.shadowSoft,
       opacity: s.enabled ? 1 : 0.55
     },
     children: [
@@ -18779,12 +19322,21 @@ function SkillRegistryCard({ s, tasks, onToggle, onDelete }) {
               fontSize: 11,
               fontWeight: 700
             },
-            children: expanded ? "收起 ▲" : "查看 SKILL.md ▼"
+            children: expanded ? "Hide" : "View SKILL.md"
           })
         ]
       }),
       /* @__PURE__ */ jsx_runtime.jsx("div", {
-        style: { color: theme.textMuted, fontSize: 12, marginBottom: 10, lineHeight: 1.5 },
+        style: {
+          color: theme.textMuted,
+          fontSize: 12,
+          marginBottom: 10,
+          lineHeight: 1.5,
+          display: "-webkit-box",
+          WebkitBoxOrient: "vertical",
+          WebkitLineClamp: 2,
+          overflow: "hidden"
+        },
         children: s.description || "—"
       }),
       expanded && /* @__PURE__ */ jsx_runtime.jsxs("div", {
@@ -18799,17 +19351,19 @@ function SkillRegistryCard({ s, tasks, onToggle, onDelete }) {
               }),
               s.source_pattern_key && /* @__PURE__ */ jsx_runtime.jsxs("span", {
                 children: [
-                  "　来源 pattern：",
+                  " · Source pattern: ",
                   s.source_pattern_key
                 ]
               }),
               sourceTaskIds.length > 0 && /* @__PURE__ */ jsx_runtime.jsxs("span", {
                 children: [
-                  "来源任务：",
+                  " ",
+                  "· Source tasks:",
+                  " ",
                   sourceTaskIds.map((tid) => {
                     const t = (tasks || []).find((x) => x.id === tid);
-                    return `#${tid}${t ? "（" + t.title + "）" : ""}`;
-                  }).join("、")
+                    return `#${tid}${t ? " (" + t.title + ")" : ""}`;
+                  }).join(", ")
                 ]
               })
             ]
@@ -18830,7 +19384,7 @@ function SkillRegistryCard({ s, tasks, onToggle, onDelete }) {
               maxHeight: 360,
               overflow: "auto"
             },
-            children: loading ? "加载中…" : content
+            children: loading ? "Loading…" : content
           })
         ]
       }),
@@ -18853,7 +19407,7 @@ function SkillRegistryCard({ s, tasks, onToggle, onDelete }) {
                 onChange: (e) => onToggle(s.id, e.target.checked),
                 style: { cursor: "pointer" }
               }),
-              s.enabled ? "已启用（claude/codex 加载中）" : "已停用（symlink 已摘除）"
+              s.enabled ? "Enabled for Claude/Codex" : "Disabled (symlinks removed)"
             ]
           }),
           /* @__PURE__ */ jsx_runtime.jsx("button", {
@@ -18869,7 +19423,7 @@ function SkillRegistryCard({ s, tasks, onToggle, onDelete }) {
               fontSize: 11,
               fontWeight: 700
             },
-            children: "删除"
+            children: "Delete"
           })
         ]
       })
@@ -18880,7 +19434,7 @@ function SkillsView({
   skillData,
   skills,
   tasks,
-  onSweep,
+  filter,
   onDraft,
   onApprove,
   onDismiss,
@@ -18888,22 +19442,58 @@ function SkillsView({
   onDeleteSkill
 }) {
   const patterns = (skillData.patterns || []).filter((p) => p.recurrence_count >= 2);
+  const skillQuery = (filter || "").trim().toLowerCase();
+  const matchesQuery = (values) => {
+    if (!skillQuery)
+      return true;
+    return values.some((value) => String(value ?? "").toLowerCase().includes(skillQuery));
+  };
+  const taskTitle = (id) => (tasks || []).find((t) => t.id === id)?.title || "";
+  const parseIds = (raw) => {
+    try {
+      return JSON.parse(raw || "[]");
+    } catch {
+      return [];
+    }
+  };
+  const filteredSkills = (skills || []).filter((s) => matchesQuery([
+    s.name,
+    s.description,
+    s.kind,
+    s.path,
+    s.source_pattern_key,
+    s.enabled ? "enabled" : "disabled",
+    ...parseIds(s.source_task_ids).map(taskTitle)
+  ]));
+  const filteredPatterns = patterns.filter((p) => matchesQuery([
+    p.pattern_key,
+    p.summary,
+    p.kind,
+    p.status,
+    p.draft_status,
+    p.draft_error,
+    p.draft_worthiness_reason,
+    p.draft_body,
+    ...parseIds(p.contributing_task_ids).map(taskTitle)
+  ]));
   const sweep = skillData.sweep || {};
   const running = sweep.running;
   const last = sweep.last;
   let lastNote = null;
-  if (last) {
-    lastNote = last.error ? `上次扫描失败：${last.error}` : last.scanned === 0 ? `上次扫描：没有已完成的任务可分析（agent ${last.agent}）` : `上次扫描：分析 ${last.scanned} 个任务、新增 ${last.new ?? 0} 次复发、候选 ${last.candidates ?? 0}（agent ${last.agent}）`;
+  if (running) {
+    lastNote = "Sweep running…";
+  } else if (last) {
+    lastNote = last.error ? `Last sweep failed: ${last.error}` : last.scanned === 0 ? `Last sweep: no completed tasks to analyze (agent ${last.agent})` : `Last sweep: analyzed ${last.scanned} tasks, added ${last.new ?? 0} recurrences, found ${last.candidates ?? 0} candidates (agent ${last.agent})`;
   }
-  const [showRegistry, setShowRegistry] = import_react.useState(true);
-  const [showPatterns, setShowPatterns] = import_react.useState(true);
+  const [showRegistry, setShowRegistry] = import_react4.useState(true);
+  const [showPatterns, setShowPatterns] = import_react4.useState(true);
   const sectionHeader = (label, count, open, toggle) => /* @__PURE__ */ jsx_runtime.jsxs("button", {
     onClick: toggle,
     style: {
       display: "flex",
       alignItems: "center",
       gap: 8,
-      width: "100%",
+      width: "auto",
       background: "transparent",
       border: "none",
       cursor: "pointer",
@@ -18922,95 +19512,89 @@ function SkillsView({
       /* @__PURE__ */ jsx_runtime.jsxs("span", {
         style: { color: theme.textDim, fontWeight: 600 },
         children: [
-          "（",
+          "(",
           count,
-          "）"
+          ")"
         ]
       })
     ]
   });
   return /* @__PURE__ */ jsx_runtime.jsxs("div", {
-    style: { padding: 28, minHeight: "calc(100vh - 72px)" },
+    style: { padding: 20, minHeight: "calc(100vh - 148px)" },
     children: [
-      /* @__PURE__ */ jsx_runtime.jsxs("div", {
+      /* @__PURE__ */ jsx_runtime.jsx("div", {
         style: {
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          marginBottom: 16,
-          gap: 12
+          marginBottom: 18,
+          minHeight: 30,
+          maxWidth: 920
         },
-        children: [
-          /* @__PURE__ */ jsx_runtime.jsxs("div", {
-            style: { color: theme.textMuted, fontSize: 12 },
-            children: [
-              "跨任务复发模式账本 · 复发 ≥2 即可手动蒸馏为 Skill（达 ≥3 且跨 ≥2 任务自动标记候选）",
-              lastNote && /* @__PURE__ */ jsx_runtime.jsxs("span", {
-                style: { marginLeft: 10, color: theme.textDim },
-                children: [
-                  "· ",
-                  lastNote
-                ]
-              })
-            ]
-          }),
-          /* @__PURE__ */ jsx_runtime.jsx("button", {
-            onClick: onSweep,
-            disabled: running,
-            style: {
-              padding: "8px 18px",
-              borderRadius: 8,
-              border: "none",
-              background: running ? theme.border : theme.accent,
-              color: "#fff",
-              cursor: running ? "default" : "pointer",
-              fontSize: 12,
-              fontWeight: 700,
-              letterSpacing: 0.3,
-              whiteSpace: "nowrap",
-              boxShadow: running ? "none" : `0 0 24px ${theme.accentGlow}`
-            },
-            children: running ? "扫描中…" : "扫一遍"
-          })
-        ]
+        children: /* @__PURE__ */ jsx_runtime.jsxs("div", {
+          style: { color: theme.textMuted, fontSize: 12 },
+          children: [
+            "Cross-task recurrence ledger. Recurrence >= 2 can be distilled manually; recurrence >= 3 across 2+ tasks becomes a candidate.",
+            lastNote && /* @__PURE__ */ jsx_runtime.jsxs("span", {
+              style: { marginLeft: 10, color: theme.textDim },
+              children: [
+                "· ",
+                lastNote
+              ]
+            })
+          ]
+        })
       }),
       (skills || []).length > 0 && /* @__PURE__ */ jsx_runtime.jsxs("div", {
         style: { marginBottom: 26 },
         children: [
-          sectionHeader("已沉淀 Skills", skills.length, showRegistry, () => setShowRegistry((v) => !v)),
-          showRegistry && /* @__PURE__ */ jsx_runtime.jsx("div", {
+          sectionHeader("Installed Skills", skillQuery ? `${filteredSkills.length}/${skills.length}` : skills.length, showRegistry, () => setShowRegistry((v) => !v)),
+          showRegistry && (filteredSkills.length === 0 ? /* @__PURE__ */ jsx_runtime.jsx("div", {
+            style: {
+              border: `1px dashed ${theme.border}`,
+              borderRadius: 8,
+              padding: 28,
+              textAlign: "center",
+              color: theme.textDim,
+              fontSize: 12,
+              background: theme.field,
+              maxWidth: 520
+            },
+            children: "No installed skills match this search."
+          }) : /* @__PURE__ */ jsx_runtime.jsx("div", {
             style: {
               display: "grid",
-              gridTemplateColumns: "repeat(auto-fit, minmax(360px, 1fr))",
-              gap: 12
+              gridTemplateColumns: "repeat(auto-fill, minmax(min(100%, 380px), 520px))",
+              gap: 12,
+              justifyContent: "start"
             },
-            children: skills.map((s) => /* @__PURE__ */ jsx_runtime.jsx(SkillRegistryCard, {
+            children: filteredSkills.map((s) => /* @__PURE__ */ jsx_runtime.jsx(SkillRegistryCard, {
               s,
               tasks,
               onToggle: onToggleSkill,
               onDelete: onDeleteSkill
             }, s.id))
-          })
+          }))
         ]
       }),
-      sectionHeader("检测到的模式", patterns.length, showPatterns, () => setShowPatterns((v) => !v)),
-      showPatterns && (patterns.length === 0 ? /* @__PURE__ */ jsx_runtime.jsx("div", {
+      sectionHeader("Detected Patterns", skillQuery ? `${filteredPatterns.length}/${patterns.length}` : patterns.length, showPatterns, () => setShowPatterns((v) => !v)),
+      showPatterns && (filteredPatterns.length === 0 ? /* @__PURE__ */ jsx_runtime.jsx("div", {
         style: {
           border: `1px dashed ${theme.border}`,
-          borderRadius: 12,
+          borderRadius: 8,
           padding: 32,
           textAlign: "center",
           color: theme.textDim,
-          fontSize: 12
+          fontSize: 12,
+          background: theme.field,
+          maxWidth: 520
         },
-        children: "还没有复发 ≥2 的模式 — 点「扫一遍」让 agent 分析最近完成的任务（复发 1 次的暂不展示）"
+        children: patterns.length === 0 ? "No patterns with recurrence >= 2 yet. Run a scan to analyze recent completed tasks." : "No detected patterns match this search."
       }) : /* @__PURE__ */ jsx_runtime.jsx("div", {
         style: {
           display: "grid",
-          gridTemplateColumns: "repeat(auto-fit, minmax(360px, 1fr))",
-          gap: 14
+          gridTemplateColumns: "repeat(auto-fill, minmax(min(100%, 380px), 520px))",
+          gap: 14,
+          justifyContent: "start"
         },
-        children: patterns.map((p) => /* @__PURE__ */ jsx_runtime.jsx(SkillPatternCard, {
+        children: filteredPatterns.map((p) => /* @__PURE__ */ jsx_runtime.jsx(SkillPatternCard, {
           p,
           tasks,
           onDraft,
@@ -19022,52 +19606,52 @@ function SkillsView({
   });
 }
 function App() {
-  const [tasks, setTasks] = import_react.useState([]);
-  const [heartbeats, setHeartbeats] = import_react.useState([]);
-  const [heartbeatTicks, setHeartbeatTicks] = import_react.useState([]);
-  const [skillData, setSkillData] = import_react.useState({
+  const [tasks, setTasks] = import_react4.useState([]);
+  const [heartbeats, setHeartbeats] = import_react4.useState([]);
+  const [heartbeatTicks, setHeartbeatTicks] = import_react4.useState([]);
+  const [skillData, setSkillData] = import_react4.useState({
     patterns: [],
     sweep: { running: false, last: null }
   });
-  const [skills, setSkills] = import_react.useState([]);
-  const [activeView, setActiveView] = import_react.useState("tasks");
-  const [showNew, setShowNew] = import_react.useState(false);
-  const [showNewHeartbeat, setShowNewHeartbeat] = import_react.useState(false);
-  const [showSettings, setShowSettings] = import_react.useState(false);
-  const [detail, setDetail] = import_react.useState(null);
-  const [heartbeatDetail, setHeartbeatDetail] = import_react.useState(null);
-  const [connected, setConnected] = import_react.useState(false);
-  const [filter, setFilter] = import_react.useState("");
-  const [taskTimeout, setTaskTimeout] = import_react.useState(DEFAULT_TIMEOUT_SECONDS);
-  const [defaultAgent, setDefaultAgent] = import_react.useState(DEFAULT_AGENT);
-  const [feishuSettings, setFeishuSettings] = import_react.useState({});
-  const [channelsStatus, setChannelsStatus] = import_react.useState({});
-  const [backendReady, setBackendReady] = import_react.useState(false);
-  const [backendError, setBackendError] = import_react.useState(null);
-  const [apiError, setApiError] = import_react.useState(null);
-  const [editingTask, setEditingTask] = import_react.useState(null);
-  const [forkingTask, setForkingTask] = import_react.useState(null);
-  const [editingHeartbeat, setEditingHeartbeat] = import_react.useState(null);
-  const [colorMode, setColorMode] = import_react.useState(() => localStorage.getItem("colorMode") || "system");
-  const [systemDark, setSystemDark] = import_react.useState(() => window.matchMedia("(prefers-color-scheme: dark)").matches);
+  const [skills, setSkills] = import_react4.useState([]);
+  const [activeView, setActiveView] = import_react4.useState("tasks");
+  const [showNew, setShowNew] = import_react4.useState(false);
+  const [showNewHeartbeat, setShowNewHeartbeat] = import_react4.useState(false);
+  const [showSettings, setShowSettings] = import_react4.useState(false);
+  const [detail, setDetail] = import_react4.useState(null);
+  const [heartbeatDetail, setHeartbeatDetail] = import_react4.useState(null);
+  const [connected, setConnected] = import_react4.useState(false);
+  const [filters, setFilters] = import_react4.useState({ tasks: "", heartbeats: "", skills: "" });
+  const [taskTimeout, setTaskTimeout] = import_react4.useState(DEFAULT_TIMEOUT_SECONDS);
+  const [defaultAgent, setDefaultAgent] = import_react4.useState(DEFAULT_AGENT);
+  const [feishuSettings, setFeishuSettings] = import_react4.useState({});
+  const [channelsStatus, setChannelsStatus] = import_react4.useState({});
+  const [backendReady, setBackendReady] = import_react4.useState(false);
+  const [backendError, setBackendError] = import_react4.useState(null);
+  const [apiError, setApiError] = import_react4.useState(null);
+  const [editingTask, setEditingTask] = import_react4.useState(null);
+  const [forkingTask, setForkingTask] = import_react4.useState(null);
+  const [editingHeartbeat, setEditingHeartbeat] = import_react4.useState(null);
+  const [colorMode, setColorMode] = import_react4.useState(() => localStorage.getItem("colorMode") || "system");
+  const [systemDark, setSystemDark] = import_react4.useState(() => window.matchMedia("(prefers-color-scheme: dark)").matches);
   const resolvedMode = colorMode === "system" ? systemDark ? "dark" : "light" : colorMode;
   theme = THEMES[resolvedMode];
-  import_react.useEffect(() => {
+  import_react4.useEffect(() => {
     localStorage.setItem("colorMode", colorMode);
     document.body.style.background = THEMES[resolvedMode].bg;
   }, [colorMode, resolvedMode]);
-  import_react.useEffect(() => {
+  import_react4.useEffect(() => {
     const mq = window.matchMedia("(prefers-color-scheme: dark)");
     const handler = (e) => setSystemDark(e.matches);
     mq.addEventListener("change", handler);
     return () => mq.removeEventListener("change", handler);
   }, []);
-  import_react.useEffect(() => {
+  import_react4.useEffect(() => {
     let cancelled = false;
     const deadline = Date.now() + 20000;
     const probe = async () => {
       try {
-        const res = await fetch(`${API}/health`, { signal: AbortSignal.timeout(800) });
+        const res = await fetchWithTimeout(`${API}/health`, 800);
         if (res.ok) {
           if (!cancelled)
             setBackendReady(true);
@@ -19087,7 +19671,7 @@ function App() {
       cancelled = true;
     };
   }, []);
-  const poll = import_react.useCallback(async () => {
+  const poll = import_react4.useCallback(async () => {
     try {
       const [taskData, heartbeatData, skillRes, skillsRes] = await Promise.all([
         fetchTasks(),
@@ -19106,14 +19690,14 @@ function App() {
       setApiError(`Failed to fetch tasks: ${err.message}`);
     }
   }, []);
-  import_react.useEffect(() => {
+  import_react4.useEffect(() => {
     if (!backendReady)
       return;
     poll();
     const interval = setInterval(poll, 3000);
     return () => clearInterval(interval);
   }, [poll, backendReady]);
-  import_react.useEffect(() => {
+  import_react4.useEffect(() => {
     if (!backendReady)
       return;
     fetchSettings().then((s) => {
@@ -19299,10 +19883,60 @@ function App() {
       setHeartbeatTicks([]);
     }
   };
+  const filter = activeView === "tasks" ? filters.tasks : activeView === "heartbeats" ? filters.heartbeats : filters.skills;
+  const setActiveFilter = (value) => {
+    setFilters((prev) => activeView === "tasks" ? { ...prev, tasks: value } : activeView === "heartbeats" ? { ...prev, heartbeats: value } : { ...prev, skills: value });
+  };
+  const searchPlaceholder = activeView === "tasks" ? "Search tasks" : activeView === "heartbeats" ? "Search heartbeats" : "Search skills";
   const filtered = filter ? tasks.filter((t) => t.title.toLowerCase().includes(filter.toLowerCase()) || t.tags?.toLowerCase().includes(filter.toLowerCase())) : tasks;
   const runningCount = tasks.filter((t) => t.status === "running").length;
-  const scheduledCount = tasks.filter((t) => t.status === "scheduled").length;
+  const queueCount = tasks.filter((t) => ["pending", "scheduled", "blocked"].includes(t.status)).length;
+  const doneCount = tasks.filter((t) => ["completed", "failed", "cancelled"].includes(t.status)).length;
   const enabledHeartbeatCount = heartbeats.filter((h) => h.enabled).length;
+  const pausedHeartbeatCount = Math.max(heartbeats.length - enabledHeartbeatCount, 0);
+  const heartbeatIssueCount = heartbeats.filter((h) => h.last_error).length;
+  const enabledSkillCount = skills.filter((s) => s.enabled).length;
+  const pausedSkillCount = Math.max(skills.length - enabledSkillCount, 0);
+  const skillPatternCount = (skillData.patterns || []).filter((p) => p.recurrence_count >= 2).length;
+  const activeSummary = {
+    tasks: {
+      label: `${runningCount} running / ${queueCount} queued`,
+      tone: runningCount > 0 ? theme.blue : theme.green,
+      background: runningCount > 0 ? theme.blueBg : theme.greenBg,
+      metrics: [
+        { label: "Total", value: tasks.length },
+        { label: "Queue", value: queueCount, tone: theme.orange },
+        { label: "Running", value: runningCount, tone: theme.blue },
+        { label: "Done", value: doneCount, tone: theme.green }
+      ]
+    },
+    heartbeats: {
+      label: heartbeatIssueCount > 0 ? `${enabledHeartbeatCount} enabled / ${heartbeatIssueCount} issues` : `${enabledHeartbeatCount} enabled / ${pausedHeartbeatCount} paused`,
+      tone: heartbeatIssueCount > 0 ? theme.orange : theme.cyan,
+      background: heartbeatIssueCount > 0 ? theme.orangeBg : theme.cyanBg,
+      metrics: [
+        { label: "Total", value: heartbeats.length },
+        { label: "Enabled", value: enabledHeartbeatCount, tone: theme.green },
+        { label: "Paused", value: pausedHeartbeatCount, tone: theme.textMuted },
+        {
+          label: "Issues",
+          value: heartbeatIssueCount,
+          tone: heartbeatIssueCount ? theme.orange : theme.green
+        }
+      ]
+    },
+    skills: {
+      label: `${enabledSkillCount} enabled / ${skillPatternCount} patterns`,
+      tone: theme.accent,
+      background: theme.accentGlow,
+      metrics: [
+        { label: "Installed", value: skills.length },
+        { label: "Enabled", value: enabledSkillCount, tone: theme.green },
+        { label: "Paused", value: pausedSkillCount, tone: theme.textMuted },
+        { label: "Patterns", value: skillPatternCount, tone: theme.accent }
+      ]
+    }
+  }[activeView];
   if (backendError) {
     return /* @__PURE__ */ jsx_runtime.jsxs("div", {
       style: {
@@ -19370,12 +20004,13 @@ function App() {
     style: {
       minHeight: "100vh",
       background: theme.bg,
+      backgroundImage: theme.boardBg,
       color: theme.text,
-      fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
+      fontFamily: APP_FONT_STACK
     },
     children: [
       /* @__PURE__ */ jsx_runtime.jsx("style", {
-        children: `@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.3} }`
+        children: `@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.3} } @keyframes deckIn { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: translateY(0); } }`
       }),
       apiError && /* @__PURE__ */ jsx_runtime.jsxs("div", {
         style: {
@@ -19425,197 +20060,260 @@ function App() {
       }),
       /* @__PURE__ */ jsx_runtime.jsxs("div", {
         style: {
-          borderBottom: `1px solid ${theme.border}`,
-          padding: "16px 28px",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          backdropFilter: "blur(10px)",
+          borderBottom: `1px solid ${theme.headerBorder}`,
+          padding: "12px 20px",
+          backdropFilter: "blur(16px)",
           position: "sticky",
           top: 0,
           zIndex: 100,
-          background: `${theme.bg}ee`
+          background: theme.headerBg,
+          animation: "deckIn 0.25s ease"
         },
         children: [
           /* @__PURE__ */ jsx_runtime.jsxs("div", {
-            style: { display: "flex", alignItems: "center", gap: 14 },
+            className: "app-topbar",
+            style: {
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              gap: 14
+            },
             children: [
+              /* @__PURE__ */ jsx_runtime.jsxs("div", {
+                style: { display: "flex", alignItems: "center", gap: 11, minWidth: 218 },
+                children: [
+                  /* @__PURE__ */ jsx_runtime.jsx(BrandMark, {
+                    size: 34
+                  }),
+                  /* @__PURE__ */ jsx_runtime.jsxs("div", {
+                    children: [
+                      /* @__PURE__ */ jsx_runtime.jsx("div", {
+                        style: {
+                          fontSize: 17,
+                          fontWeight: 780,
+                          fontFamily: DISPLAY_FONT_STACK,
+                          letterSpacing: 0,
+                          lineHeight: 1
+                        },
+                        children: "AgentForge"
+                      }),
+                      /* @__PURE__ */ jsx_runtime.jsx("div", {
+                        style: { fontSize: 11, color: theme.textDim, marginTop: 4, fontWeight: 650 },
+                        children: "Agent orchestration board"
+                      })
+                    ]
+                  })
+                ]
+              }),
               /* @__PURE__ */ jsx_runtime.jsx("div", {
                 style: {
-                  width: 32,
-                  height: 32,
-                  borderRadius: 8,
-                  background: `linear-gradient(135deg, ${theme.accent}, #a855f7)`,
                   display: "flex",
                   alignItems: "center",
-                  justifyContent: "center",
-                  fontSize: 16,
-                  fontWeight: 800,
-                  color: "#fff"
+                  gap: 10,
+                  minWidth: 0,
+                  flex: 1,
+                  justifyContent: "center"
                 },
-                children: "⌘"
+                children: /* @__PURE__ */ jsx_runtime.jsx(StatusPill, {
+                  connected,
+                  label: activeSummary.label,
+                  tone: activeSummary.tone,
+                  background: activeSummary.background
+                })
               }),
               /* @__PURE__ */ jsx_runtime.jsxs("div", {
+                className: "app-toolbar",
+                style: { display: "flex", alignItems: "center", gap: 8 },
                 children: [
                   /* @__PURE__ */ jsx_runtime.jsx("div", {
                     style: {
-                      fontSize: 15,
-                      fontWeight: 700,
-                      fontFamily: "'JetBrains Mono', monospace",
-                      letterSpacing: -0.3
+                      display: "flex",
+                      background: theme.surface,
+                      border: `1px solid ${theme.border}`,
+                      borderRadius: 7,
+                      padding: 2,
+                      gap: 2
                     },
-                    children: "AgentForge"
+                    children: [
+                      { key: "tasks", label: "Tasks", icon: SquareKanban },
+                      { key: "heartbeats", label: "Heartbeats", icon: HeartPulse },
+                      { key: "skills", label: "Skills", icon: Sparkles }
+                    ].map((tab) => /* @__PURE__ */ jsx_runtime.jsxs("button", {
+                      onClick: () => setActiveView(tab.key),
+                      style: {
+                        padding: "6px 9px",
+                        borderRadius: 5,
+                        border: "none",
+                        background: activeView === tab.key ? theme.field : "transparent",
+                        color: activeView === tab.key ? theme.text : theme.textMuted,
+                        cursor: "pointer",
+                        fontSize: 12,
+                        fontWeight: 720,
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 6,
+                        transition: "background 0.15s ease, color 0.15s ease"
+                      },
+                      children: [
+                        /* @__PURE__ */ jsx_runtime.jsx(IconGlyph, {
+                          icon: tab.icon,
+                          size: 13,
+                          strokeWidth: 2.6
+                        }),
+                        tab.label
+                      ]
+                    }, tab.key))
                   }),
                   /* @__PURE__ */ jsx_runtime.jsxs("div", {
-                    style: { fontSize: 11, color: theme.textDim, marginTop: 1 },
+                    style: {
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 8,
+                      padding: "0 9px",
+                      height: 32,
+                      borderRadius: 7,
+                      border: `1px solid ${theme.border}`,
+                      background: theme.surface
+                    },
                     children: [
-                      connected ? /* @__PURE__ */ jsx_runtime.jsx("span", {
-                        style: { color: theme.green },
-                        children: "● Connected"
-                      }) : /* @__PURE__ */ jsx_runtime.jsx("span", {
-                        style: { color: theme.red },
-                        children: "● Disconnected — run `bun taskboard.ts`"
+                      /* @__PURE__ */ jsx_runtime.jsx(Search, {
+                        "aria-hidden": "true",
+                        size: 14,
+                        strokeWidth: 2.4,
+                        style: { color: theme.textDim, flexShrink: 0 }
                       }),
-                      connected && ` · ${runningCount} running · ${scheduledCount} scheduled · ${enabledHeartbeatCount} heartbeats`
+                      /* @__PURE__ */ jsx_runtime.jsx("input", {
+                        placeholder: searchPlaceholder,
+                        value: filter,
+                        onChange: (e) => setActiveFilter(e.target.value),
+                        style: {
+                          border: "none",
+                          background: "transparent",
+                          color: theme.text,
+                          fontSize: 12,
+                          outline: "none",
+                          width: 152,
+                          fontFamily: APP_FONT_STACK
+                        }
+                      })
+                    ]
+                  }),
+                  (() => {
+                    const cycle = { system: "light", light: "dark", dark: "system" };
+                    const icons = { system: MonitorCog, light: Sun, dark: Moon };
+                    const labels = { system: "System theme", light: "Light mode", dark: "Dark mode" };
+                    const ThemeIcon = icons[colorMode];
+                    return /* @__PURE__ */ jsx_runtime.jsx(HeaderButton, {
+                      title: labels[colorMode],
+                      onClick: () => setColorMode(cycle[colorMode]),
+                      active: colorMode !== "system",
+                      children: /* @__PURE__ */ jsx_runtime.jsx(IconGlyph, {
+                        icon: ThemeIcon,
+                        size: 15
+                      })
+                    });
+                  })(),
+                  /* @__PURE__ */ jsx_runtime.jsx(HeaderButton, {
+                    title: "Settings",
+                    onClick: () => setShowSettings(true),
+                    children: /* @__PURE__ */ jsx_runtime.jsx(IconGlyph, {
+                      icon: Settings,
+                      size: 15
+                    })
+                  }),
+                  activeView === "skills" ? /* @__PURE__ */ jsx_runtime.jsxs("button", {
+                    onClick: handleSweep,
+                    disabled: !!skillData.sweep?.running,
+                    style: {
+                      height: 32,
+                      padding: "0 12px",
+                      borderRadius: 6,
+                      border: `1px solid ${skillData.sweep?.running ? theme.border : theme.accent}`,
+                      background: skillData.sweep?.running ? theme.field : theme.accent,
+                      color: skillData.sweep?.running ? theme.textMuted : theme.brandInk,
+                      cursor: skillData.sweep?.running ? "default" : "pointer",
+                      fontSize: 12,
+                      fontWeight: 720,
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 7,
+                      transition: "transform 0.15s ease, box-shadow 0.15s ease"
+                    },
+                    children: [
+                      /* @__PURE__ */ jsx_runtime.jsx(IconGlyph, {
+                        icon: Radar,
+                        size: 15,
+                        strokeWidth: 2.8
+                      }),
+                      skillData.sweep?.running ? "Scanning" : "Run Scan"
+                    ]
+                  }) : /* @__PURE__ */ jsx_runtime.jsxs("button", {
+                    onClick: () => activeView === "tasks" ? setShowNew(true) : setShowNewHeartbeat(true),
+                    style: {
+                      height: 32,
+                      padding: "0 12px",
+                      borderRadius: 6,
+                      border: `1px solid ${theme.accent}`,
+                      background: theme.accent,
+                      color: theme.brandInk,
+                      cursor: "pointer",
+                      fontSize: 12,
+                      fontWeight: 720,
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 7,
+                      transition: "transform 0.15s ease, box-shadow 0.15s ease"
+                    },
+                    children: [
+                      /* @__PURE__ */ jsx_runtime.jsx(IconGlyph, {
+                        icon: Plus,
+                        size: 15,
+                        strokeWidth: 2.8
+                      }),
+                      activeView === "tasks" ? "New Task" : "New Heartbeat"
                     ]
                   })
                 ]
               })
             ]
           }),
-          /* @__PURE__ */ jsx_runtime.jsxs("div", {
-            style: { display: "flex", alignItems: "center", gap: 10 },
-            children: [
-              /* @__PURE__ */ jsx_runtime.jsx("div", {
-                style: {
-                  display: "flex",
-                  background: theme.surface,
-                  border: `1px solid ${theme.border}`,
-                  borderRadius: 10,
-                  padding: 4,
-                  gap: 4
-                },
-                children: [
-                  { key: "tasks", label: "Tasks" },
-                  { key: "heartbeats", label: "Heartbeats" },
-                  { key: "skills", label: "Skills" }
-                ].map((tab) => /* @__PURE__ */ jsx_runtime.jsx("button", {
-                  onClick: () => setActiveView(tab.key),
-                  style: {
-                    padding: "6px 10px",
-                    borderRadius: 8,
-                    border: "none",
-                    background: activeView === tab.key ? theme.accentGlow : "transparent",
-                    color: activeView === tab.key ? theme.accent : theme.textMuted,
-                    cursor: "pointer",
-                    fontSize: 12,
-                    fontWeight: 700
-                  },
-                  children: tab.label
-                }, tab.key))
-              }),
-              /* @__PURE__ */ jsx_runtime.jsx("input", {
-                placeholder: activeView === "tasks" ? "Filter tasks..." : "Filter heartbeats...",
-                value: filter,
-                onChange: (e) => setFilter(e.target.value),
-                style: {
-                  padding: "8px 14px",
-                  borderRadius: 8,
-                  border: `1px solid ${theme.border}`,
-                  background: theme.surface,
-                  color: theme.text,
-                  fontSize: 12,
-                  outline: "none",
-                  width: 180
-                }
-              }),
-              (() => {
-                const cycle = { system: "light", light: "dark", dark: "system" };
-                const icons = { system: "⊙", light: "☀", dark: "☾" };
-                const labels = { system: "System theme", light: "Light mode", dark: "Dark mode" };
-                return /* @__PURE__ */ jsx_runtime.jsx(Tooltip, {
-                  text: labels[colorMode],
-                  children: /* @__PURE__ */ jsx_runtime.jsx("button", {
-                    onClick: () => setColorMode(cycle[colorMode]),
-                    style: {
-                      padding: "8px 10px",
-                      borderRadius: 8,
-                      border: `1px solid ${theme.border}`,
-                      background: "transparent",
-                      color: theme.textMuted,
-                      cursor: "pointer",
-                      fontSize: 15,
-                      display: "flex",
-                      alignItems: "center",
-                      transition: "all 0.15s"
-                    },
-                    children: icons[colorMode]
-                  })
-                });
-              })(),
-              /* @__PURE__ */ jsx_runtime.jsx(Tooltip, {
-                text: "Settings",
-                children: /* @__PURE__ */ jsx_runtime.jsx("button", {
-                  onClick: () => setShowSettings(true),
-                  style: {
-                    padding: "8px 12px",
-                    borderRadius: 8,
-                    border: `1px solid ${theme.border}`,
-                    background: "transparent",
-                    color: theme.textMuted,
-                    cursor: "pointer",
-                    fontSize: 15,
-                    display: "flex",
-                    alignItems: "center",
-                    transition: "all 0.15s"
-                  },
-                  children: "⚙"
-                })
-              }),
-              activeView !== "skills" && /* @__PURE__ */ jsx_runtime.jsx("button", {
-                onClick: () => activeView === "tasks" ? setShowNew(true) : setShowNewHeartbeat(true),
-                style: {
-                  padding: "8px 18px",
-                  borderRadius: 8,
-                  border: "none",
-                  background: theme.accent,
-                  color: "#fff",
-                  cursor: "pointer",
-                  fontSize: 12,
-                  fontWeight: 700,
-                  letterSpacing: 0.3,
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 6,
-                  boxShadow: `0 0 24px ${theme.accentGlow}`,
-                  transition: "transform 0.15s"
-                },
-                children: activeView === "tasks" ? "+ New Task" : "+ New Heartbeat"
-              })
-            ]
+          /* @__PURE__ */ jsx_runtime.jsx("div", {
+            style: { display: "flex", gap: 8, marginTop: 10, overflowX: "auto" },
+            children: activeSummary.metrics.map((metric) => /* @__PURE__ */ jsx_runtime.jsx(MetricTile, {
+              label: metric.label,
+              value: metric.value,
+              tone: metric.tone
+            }, metric.label))
           })
         ]
       }),
       activeView === "tasks" ? /* @__PURE__ */ jsx_runtime.jsx("div", {
         style: {
-          display: "flex",
-          gap: 20,
-          padding: 28,
-          minHeight: "calc(100vh - 72px)"
+          padding: "20px",
+          minHeight: "calc(100vh - 148px)"
         },
-        children: COLUMNS.map((col) => /* @__PURE__ */ jsx_runtime.jsx(Column, {
-          col,
-          tasks: filtered.filter((t) => col.statuses.includes(t.status)),
-          onAction: handleAction,
-          onViewDetail: setDetail
-        }, col.key))
+        children: /* @__PURE__ */ jsx_runtime.jsx("div", {
+          className: "board-grid",
+          style: {
+            display: "grid",
+            gridTemplateColumns: "repeat(3, minmax(0, 1fr))",
+            gap: 12,
+            alignItems: "start"
+          },
+          children: COLUMNS.map((col) => /* @__PURE__ */ jsx_runtime.jsx(Column, {
+            col,
+            tasks: filtered.filter((t) => col.statuses.includes(t.status)),
+            onAction: handleAction,
+            onViewDetail: setDetail
+          }, col.key))
+        })
       }) : activeView === "heartbeats" ? /* @__PURE__ */ jsx_runtime.jsx("div", {
-        style: { padding: 28, minHeight: "calc(100vh - 72px)" },
+        style: { padding: 20, minHeight: "calc(100vh - 148px)" },
         children: /* @__PURE__ */ jsx_runtime.jsxs("div", {
           style: {
             display: "grid",
             gridTemplateColumns: "repeat(auto-fit, minmax(360px, 1fr))",
-            gap: 14
+            gap: 12
           },
           children: [
             (filter ? heartbeats.filter((h) => h.name.toLowerCase().includes(filter.toLowerCase()) || h.check_prompt.toLowerCase().includes(filter.toLowerCase())) : heartbeats).map((h) => /* @__PURE__ */ jsx_runtime.jsx(HeartbeatCard, {
@@ -19626,12 +20324,13 @@ function App() {
             heartbeats.length === 0 && /* @__PURE__ */ jsx_runtime.jsx("div", {
               style: {
                 border: `1px dashed ${theme.border}`,
-                borderRadius: 12,
+                borderRadius: 8,
                 padding: 32,
                 textAlign: "center",
                 color: theme.textDim,
                 fontSize: 12,
-                gridColumn: "1 / -1"
+                gridColumn: "1 / -1",
+                background: theme.columnBg
               },
               children: "No heartbeats yet"
             })
@@ -19641,7 +20340,7 @@ function App() {
         skillData,
         skills,
         tasks,
-        onSweep: handleSweep,
+        filter,
         onDraft: handleSkillDraft,
         onApprove: handleSkillApprove,
         onDismiss: handleSkillDismiss,
@@ -19784,6 +20483,40 @@ function App() {
   });
 }
 var styles = `
+  html, body, #root {
+    min-height: 100%;
+    margin: 0;
+  }
+
+  body {
+    overflow-x: hidden;
+  }
+
+  button, input, textarea, select {
+    font: inherit;
+  }
+
+  ::selection {
+    background: ${theme.accentGlow};
+    color: ${theme.text};
+  }
+
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background: ${theme.borderActive};
+    border: 3px solid transparent;
+    border-radius: 8px;
+    background-clip: padding-box;
+  }
+
   @keyframes pulse {
     0%, 100% { opacity: 1; }
     50% { opacity: 0.5; }
@@ -19827,9 +20560,9 @@ if (typeof document !== "undefined" && !document.querySelector("#live-output-sty
 
 // src/renderer/main.tsx
 var jsx_runtime2 = __toESM(require_jsx_runtime(), 1);
-import_client.createRoot(document.getElementById("root")).render(/* @__PURE__ */ jsx_runtime2.jsx(import_react2.StrictMode, {
+import_client.createRoot(document.getElementById("root")).render(/* @__PURE__ */ jsx_runtime2.jsx(import_react5.StrictMode, {
   children: /* @__PURE__ */ jsx_runtime2.jsx(App, {})
 }));
 
-//# debugId=6D6D54C3905035A964756E2164756E21
-//# sourceMappingURL=chunk-qgtap3d3.js.map
+//# debugId=4BA23EF813E45A2F64756E2164756E21
+//# sourceMappingURL=chunk-cs88ar74.js.map

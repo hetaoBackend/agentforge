@@ -13,8 +13,10 @@ import path from "node:path";
 
 import {
   Channel,
+  InboundMessageType,
   MessageBus,
   OutboundMessageType,
+  type InboundMessage,
   type OutboundMessage,
   type TaskDBLike,
 } from "../bus.ts";
@@ -29,6 +31,24 @@ import {
   resolve_agent,
   type SettingsDB,
 } from "./agent_utils.ts";
+import {
+  build_brief_payload,
+  build_runbook_payload,
+  format_brief_created_reply,
+  format_brief_discarded_reply,
+  format_brief_help,
+  format_brief_started_reply,
+  format_runbook_brief_reply,
+  format_runbook_created_reply,
+  format_skill_suggestion_action_reply,
+  format_skill_suggestion_help,
+  parse_brief_command,
+  parse_runbook_fallback,
+  parse_skill_suggestion_command,
+  type BriefCommand,
+  type ParsedRunbookCommand,
+  type SkillSuggestionCommand,
+} from "./brief_utils.ts";
 import { handle_dir_command, resolve_working_dir } from "./dir_utils.ts";
 
 type Row = Record<string, any>;
@@ -45,6 +65,13 @@ export const HELP_TEXT = `**AgentForge Bot** 👋
 • \`/agent <name>\` — 切换 coding agent（\`claude\` / \`codex\`）
 • \`/ccu\` — 查看 Claude Code 当前用量（ccu-blocks）
 • \`/help\` — 显示此帮助
+
+**自定义命令：**
+• 先在 AgentForge 里创建自定义命令，或从已用过的任务生成命令。
+• 然后在聊天里输入：\`/看报错 TypeError: Cannot read properties of undefined\`
+• 命令可以是中文，也可以配置 alias，例如：\`/err ...\`
+• 如果命令需要确认，Bot 会返回 Draft task。
+　用 \`/run-draft <id>\` 开始执行，用 \`/cancel-draft <id>\` 取消。
 
 **小技巧：**
 • 消息中直接提到路径，Bot 会自动识别并使用。
@@ -97,6 +124,7 @@ export interface FeishuTaskDB extends TaskDBLike, SettingsDB {
 
 export interface FeishuScheduler {
   submit_task(task: Task): number;
+  handle_inbound_message?(msg: InboundMessage): Record<string, unknown>;
   add_output_listener(cb: OutputListener): void;
   remove_output_listener(cb: OutputListener): void;
 }
@@ -1576,6 +1604,31 @@ export class FeishuChannel extends Channel {
       await this._send_message(reply_to, HELP_TEXT);
       return;
     }
+    const brief_cmd = parse_brief_command(content);
+    if (brief_cmd !== null) {
+      await this._handle_brief_command(brief_cmd, reply_to, message, sender_id);
+      return;
+    }
+    const runbook_cmd = parse_runbook_fallback(content, this.db);
+    if (runbook_cmd !== null) {
+      await this._handle_runbook_command(
+        runbook_cmd,
+        reply_to,
+        message,
+        sender_id,
+      );
+      return;
+    }
+    const skill_suggestion_cmd = parse_skill_suggestion_command(content);
+    if (skill_suggestion_cmd !== null) {
+      await this._handle_skill_suggestion_command(
+        skill_suggestion_cmd,
+        reply_to,
+        message,
+        sender_id,
+      );
+      return;
+    }
     if (content.startsWith("/dir ") || content.startsWith("/cd ")) {
       const reply = handle_dir_command(content, "feishu", this.db);
       if (reply) await this._send_message(reply_to, reply);
@@ -1774,6 +1827,243 @@ export class FeishuChannel extends Channel {
       reply_to,
       `${icon} **Task #${tid}** — ${task["status"]}\n\n**${task["title"]}**`,
     );
+  }
+
+  async _handle_brief_command(
+    command: BriefCommand,
+    reply_to: string,
+    message: Row,
+    sender_id: string,
+  ): Promise<void> {
+    if (command.action === "help") {
+      await this._send_message(reply_to, format_brief_help(command.reason));
+      return;
+    }
+    if (!this.scheduler.handle_inbound_message) {
+      await this._send_message(
+        reply_to,
+        "❌ Draft task flow is not available in this scheduler.",
+      );
+      return;
+    }
+
+    const message_id = asString(message["message_id"], reply_to);
+    const metadata = this._brief_source_metadata(message, sender_id);
+    try {
+      if (command.action === "create") {
+        const payload = build_brief_payload({
+          channel: "feishu",
+          goal: command.goal,
+          source_ref: message_id,
+          source_metadata: metadata,
+          working_dir: await resolve_working_dir(
+            command.goal,
+            "feishu",
+            this.db,
+          ),
+          agent: resolve_agent("feishu", this.db),
+        });
+        const result = this.scheduler.handle_inbound_message(
+          this._make_inbound(
+            InboundMessageType.CREATE_BRIEF,
+            payload,
+            reply_to,
+            metadata,
+          ),
+        );
+        const brief_id = Number(result["brief_id"]);
+        await this._send_message(
+          reply_to,
+          format_brief_created_reply(brief_id, String(payload["title"])),
+        );
+        return;
+      }
+
+      if (command.action === "confirm") {
+        const result = this.scheduler.handle_inbound_message(
+          this._make_inbound(
+            InboundMessageType.CONFIRM_BRIEF,
+            { brief_id: command.brief_id },
+            reply_to,
+            metadata,
+          ),
+        );
+        const task_id = Number(result["task_id"]);
+        if (!Number.isInteger(task_id) || task_id <= 0) {
+          await this._send_message(
+            reply_to,
+            "❌ Draft task confirmation failed.",
+          );
+          return;
+        }
+
+        this._task_origin.set(task_id, [reply_to, message_id, message_id]);
+        this._root_msg_map.set(message_id, task_id);
+        this._remember_task_source(task_id);
+        const title =
+          (this.db.get_task(task_id) as Row | null)?.["title"] ??
+          `Task #${task_id}`;
+        const running_msg_id = await this._create_reply(
+          message_id,
+          this._build_legacy_markdown_card(
+            format_brief_started_reply(command.brief_id, task_id),
+          ),
+        );
+        if (running_msg_id)
+          this._start_streaming(task_id, running_msg_id, String(title));
+        return;
+      }
+
+      const result = this.scheduler.handle_inbound_message(
+        this._make_inbound(
+          InboundMessageType.DISCARD_BRIEF,
+          { brief_id: command.brief_id },
+          reply_to,
+          metadata,
+        ),
+      );
+      await this._send_message(
+        reply_to,
+        format_brief_discarded_reply(Number(result["brief_id"])),
+      );
+    } catch (e) {
+      await this._send_message(
+        reply_to,
+        `❌ ${e instanceof Error ? e.message : String(e)}`,
+      );
+    }
+  }
+
+  async _handle_runbook_command(
+    command: ParsedRunbookCommand,
+    reply_to: string,
+    message: Row,
+    sender_id: string,
+  ): Promise<void> {
+    if (!this.scheduler.handle_inbound_message) {
+      await this._send_message(
+        reply_to,
+        "❌ Custom command flow is not available in this scheduler.",
+      );
+      return;
+    }
+
+    const message_id = asString(message["message_id"], reply_to);
+    const metadata = this._brief_source_metadata(message, sender_id);
+    try {
+      const payload = build_runbook_payload({
+        channel: "feishu",
+        command,
+        source_ref: message_id,
+        source_metadata: metadata,
+        working_dir: await resolve_working_dir(
+          command.raw_args || command.name,
+          "feishu",
+          this.db,
+        ),
+        agent: resolve_agent("feishu", this.db),
+      });
+      const result = this.scheduler.handle_inbound_message(
+        this._make_inbound(
+          InboundMessageType.RUN_RUNBOOK,
+          payload,
+          reply_to,
+          metadata,
+        ),
+      );
+      if (result["status"] === "created") {
+        const task_id = Number(result["task_id"]);
+        this._task_origin.set(task_id, [reply_to, message_id, message_id]);
+        this._root_msg_map.set(message_id, task_id);
+        this._remember_task_source(task_id);
+        const title =
+          (this.db.get_task(task_id) as Row | null)?.["title"] ??
+          `Task #${task_id}`;
+        const running_msg_id = await this._create_reply(
+          message_id,
+          this._build_legacy_markdown_card(
+            format_runbook_created_reply(task_id, command.name),
+          ),
+        );
+        if (running_msg_id)
+          this._start_streaming(task_id, running_msg_id, String(title));
+        return;
+      }
+      if (result["status"] === "draft") {
+        await this._send_message(
+          reply_to,
+          format_runbook_brief_reply(Number(result["brief_id"]), command.name),
+        );
+        return;
+      }
+      await this._send_message(reply_to, "❌ Custom command failed.");
+    } catch (e) {
+      await this._send_message(
+        reply_to,
+        `❌ ${e instanceof Error ? e.message : String(e)}`,
+      );
+    }
+  }
+
+  async _handle_skill_suggestion_command(
+    command: SkillSuggestionCommand,
+    reply_to: string,
+    message: Row,
+    sender_id: string,
+  ): Promise<void> {
+    if (command.action === "help") {
+      await this._send_message(
+        reply_to,
+        format_skill_suggestion_help(command.reason),
+      );
+      return;
+    }
+    if (!this.scheduler.handle_inbound_message) {
+      await this._send_message(
+        reply_to,
+        "❌ Skill suggestion flow is not available in this scheduler.",
+      );
+      return;
+    }
+
+    const metadata = this._brief_source_metadata(message, sender_id);
+    try {
+      const result = this.scheduler.handle_inbound_message(
+        this._make_inbound(
+          InboundMessageType.SKILL_SUGGESTION_ACTION,
+          {
+            action: command.action,
+            pattern_id: command.pattern_id,
+            source_channel: "feishu",
+            target: reply_to,
+            source_metadata: metadata,
+          },
+          reply_to,
+          metadata,
+        ),
+      );
+      await this._send_message(
+        reply_to,
+        format_skill_suggestion_action_reply(result),
+      );
+    } catch (e) {
+      await this._send_message(
+        reply_to,
+        `❌ ${e instanceof Error ? e.message : String(e)}`,
+      );
+    }
+  }
+
+  _brief_source_metadata(
+    message: Row,
+    sender_id: string,
+  ): Record<string, unknown> {
+    return {
+      chat_id: asString(message["chat_id"]),
+      chat_type: asString(message["chat_type"]),
+      message_id: asString(message["message_id"]),
+      sender_id,
+    };
   }
 
   async _try_resume_thread_message(

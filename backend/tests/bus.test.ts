@@ -76,6 +76,88 @@ test("test_message_bus_round_trips_inbound_and_outbound_messages", async () => {
   expect(await bus.get_outbound()).toBe(outbound);
 });
 
+test("test_message_bus_round_trips_task_brief_inbound_messages", async () => {
+  const bus = new MessageBus();
+  const channel = new RecordingChannel(bus, new StubDB());
+
+  const create = channel._make_inbound(InboundMessageType.CREATE_BRIEF, {
+    title: "Fix auth",
+    goal: "Fix login redirect",
+    source_channel: "telegram",
+    source_ref: "chat-1:msg-2",
+  });
+  const confirm = channel._make_inbound(InboundMessageType.CONFIRM_BRIEF, {
+    brief_id: 1,
+  });
+  const discard = channel._make_inbound(InboundMessageType.DISCARD_BRIEF, {
+    brief_id: 2,
+  });
+
+  bus.publish_inbound(create);
+  bus.publish_inbound(confirm);
+  bus.publish_inbound(discard);
+
+  expect((await bus.get_inbound())!.type).toBe("create_brief");
+  expect((await bus.get_inbound())!.type).toBe("confirm_brief");
+  expect((await bus.get_inbound())!.type).toBe("discard_brief");
+});
+
+test("test_message_bus_round_trips_runbook_inbound_messages", async () => {
+  const bus = new MessageBus();
+  const channel = new RecordingChannel(bus, new StubDB());
+
+  const preview = channel._make_inbound(InboundMessageType.PREVIEW_RUNBOOK, {
+    name: "release-check",
+    raw_args: "",
+    source_channel: "slack",
+    source_ref: "C1:1.0",
+  });
+  const run = channel._make_inbound(InboundMessageType.RUN_RUNBOOK, {
+    name: "review-pr",
+    raw_args: "https://github.com/acme/app/pull/42",
+    source_channel: "slack",
+    source_ref: "C1:1.0",
+  });
+
+  bus.publish_inbound(preview);
+  bus.publish_inbound(run);
+
+  expect((await bus.get_inbound())!.type).toBe("preview_runbook");
+  expect((await bus.get_inbound())!.type).toBe("run_runbook");
+});
+
+test("test_message_bus_round_trips_digest_inbound_messages", async () => {
+  const bus = new MessageBus();
+  const channel = new RecordingChannel(bus, new StubDB());
+
+  const digest = channel._make_inbound(InboundMessageType.TRIGGER_DIGEST, {
+    include_empty: true,
+  });
+
+  bus.publish_inbound(digest);
+
+  expect((await bus.get_inbound())!.type).toBe("trigger_digest");
+});
+
+test("test_message_bus_round_trips_skill_suggestion_inbound_messages", async () => {
+  const bus = new MessageBus();
+  const channel = new RecordingChannel(bus, new StubDB());
+
+  const action = channel._make_inbound(
+    InboundMessageType.SKILL_SUGGESTION_ACTION,
+    {
+      action: "draft",
+      pattern_id: 1,
+      source_channel: "slack",
+      target: "C1",
+    },
+  );
+
+  bus.publish_inbound(action);
+
+  expect((await bus.get_inbound())!.type).toBe("skill_suggestion_action");
+});
+
 test("test_message_bus_returns_none_when_queue_is_empty", async () => {
   const bus = new MessageBus();
 

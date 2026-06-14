@@ -14,7 +14,14 @@ import {
   nowIso,
   parseComparableDatetime,
 } from "./util.ts";
-import { HeartbeatScheduleType, type Heartbeat, type Task } from "./types.ts";
+import {
+  HeartbeatScheduleType,
+  TaskBriefStatus,
+  type Heartbeat,
+  type IMRunbook,
+  type Task,
+  type TaskBrief,
+} from "./types.ts";
 
 type Row = Record<string, any>;
 
@@ -90,6 +97,53 @@ export class TaskDB {
           key TEXT PRIMARY KEY,
           value TEXT
       )
+    `);
+    this.conn.run(`
+      CREATE TABLE IF NOT EXISTS task_briefs (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          status TEXT NOT NULL DEFAULT 'draft',
+          title TEXT NOT NULL,
+          goal TEXT NOT NULL,
+          context_summary TEXT NOT NULL DEFAULT '',
+          acceptance_criteria TEXT NOT NULL DEFAULT '[]',
+          working_dir TEXT,
+          working_dir_confidence TEXT NOT NULL DEFAULT 'unknown',
+          agent TEXT,
+          risk_level TEXT NOT NULL DEFAULT 'normal',
+          needs_confirmation INTEGER NOT NULL DEFAULT 1,
+          source_channel TEXT NOT NULL,
+          source_ref TEXT NOT NULL,
+          source_metadata TEXT NOT NULL DEFAULT '{}',
+          created_task_id INTEGER,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          expires_at TEXT
+      )
+    `);
+    this.conn.run(`
+      CREATE INDEX IF NOT EXISTS idx_task_briefs_status
+      ON task_briefs(status, updated_at DESC)
+    `);
+    this.conn.run(`
+      CREATE TABLE IF NOT EXISTS im_runbooks (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          name TEXT NOT NULL UNIQUE,
+          aliases TEXT NOT NULL DEFAULT '[]',
+          description TEXT NOT NULL DEFAULT '',
+          source_type TEXT NOT NULL DEFAULT 'template',
+          source_id TEXT,
+          command_schema TEXT NOT NULL DEFAULT '{}',
+          prompt_template TEXT NOT NULL DEFAULT '',
+          default_agent TEXT,
+          confirmation_policy TEXT NOT NULL DEFAULT 'required',
+          enabled INTEGER NOT NULL DEFAULT 1,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+      )
+    `);
+    this.conn.run(`
+      CREATE INDEX IF NOT EXISTS idx_im_runbooks_enabled
+      ON im_runbooks(enabled, updated_at DESC)
     `);
     this.conn.run(`
       CREATE TABLE IF NOT EXISTS task_runs (
@@ -327,6 +381,29 @@ export class TaskDB {
       this._migrate(`ALTER TABLE skill_drafts ADD COLUMN ${col} ${decl}`);
     }
 
+    this.conn.run(`
+      CREATE TABLE IF NOT EXISTS im_skill_suggestions (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          pattern_id INTEGER NOT NULL,
+          channel TEXT NOT NULL,
+          target TEXT NOT NULL DEFAULT '',
+          status TEXT NOT NULL DEFAULT 'suggested',
+          suggested_at TEXT,
+          draft_shown_at TEXT,
+          dismissed_at TEXT,
+          approved_at TEXT,
+          metadata TEXT NOT NULL DEFAULT '{}',
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          UNIQUE(pattern_id, channel, target),
+          FOREIGN KEY (pattern_id) REFERENCES skill_patterns(id)
+      )
+    `);
+    this.conn.run(`
+      CREATE INDEX IF NOT EXISTS idx_im_skill_suggestions_status
+      ON im_skill_suggestions(status, updated_at DESC)
+    `);
+
     this._migrate("ALTER TABLE tasks ADD COLUMN dag_id TEXT");
     // Migration: add feishu_root_msg_id column for post-restart resume
     this._migrate("ALTER TABLE tasks ADD COLUMN feishu_root_msg_id TEXT");
@@ -439,6 +516,303 @@ export class TaskDB {
     this.conn
       .query("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)")
       .run(key, value);
+  }
+
+  private _serialize_task_brief_value(key: string, value: unknown): unknown {
+    if (key === "acceptance_criteria") {
+      return JSON.stringify(Array.isArray(value) ? value.map(String) : []);
+    }
+    if (key === "source_metadata") {
+      return JSON.stringify(
+        typeof value === "object" && value !== null && !Array.isArray(value)
+          ? value
+          : {},
+      );
+    }
+    if (key === "needs_confirmation") {
+      return value ? 1 : 0;
+    }
+    return value;
+  }
+
+  private _deserialize_task_brief(row: Row): Row {
+    const d: Row = { ...row };
+    try {
+      const parsed = JSON.parse(String(d["acceptance_criteria"] ?? "[]"));
+      d["acceptance_criteria"] = Array.isArray(parsed) ? parsed : [];
+    } catch {
+      d["acceptance_criteria"] = [];
+    }
+    try {
+      const parsed = JSON.parse(String(d["source_metadata"] ?? "{}"));
+      d["source_metadata"] =
+        typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)
+          ? parsed
+          : {};
+    } catch {
+      d["source_metadata"] = {};
+    }
+    d["needs_confirmation"] = Boolean(d["needs_confirmation"]);
+    return d;
+  }
+
+  add_task_brief(brief: TaskBrief): number {
+    const now = nowIso();
+    const cur = this.conn
+      .query(
+        `
+        INSERT INTO task_briefs (
+            status, title, goal, context_summary, acceptance_criteria,
+            working_dir, working_dir_confidence, agent, risk_level,
+            needs_confirmation, source_channel, source_ref, source_metadata,
+            created_task_id, created_at, updated_at, expires_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `,
+      )
+      .run(
+        brief.status,
+        brief.title,
+        brief.goal,
+        brief.context_summary,
+        JSON.stringify(brief.acceptance_criteria.map(String)),
+        brief.working_dir,
+        brief.working_dir_confidence,
+        brief.agent,
+        brief.risk_level,
+        brief.needs_confirmation ? 1 : 0,
+        brief.source_channel,
+        brief.source_ref,
+        JSON.stringify(brief.source_metadata),
+        brief.created_task_id,
+        now,
+        now,
+        brief.expires_at,
+      );
+    return Number(cur.lastInsertRowid);
+  }
+
+  get_task_brief(brief_id: number): Row | null {
+    const row = this.conn
+      .query("SELECT * FROM task_briefs WHERE id = ?")
+      .get(brief_id) as Row | null;
+    return row ? this._deserialize_task_brief(row) : null;
+  }
+
+  get_task_briefs(status: string | null = null): Row[] {
+    const rows =
+      status === null
+        ? (this.conn
+            .query(
+              "SELECT * FROM task_briefs ORDER BY updated_at DESC, id DESC",
+            )
+            .all() as Row[])
+        : (this.conn
+            .query(
+              "SELECT * FROM task_briefs WHERE status = ? ORDER BY updated_at DESC, id DESC",
+            )
+            .all(status) as Row[]);
+    return rows.map((r) => this._deserialize_task_brief(r));
+  }
+
+  static readonly ALLOWED_TASK_BRIEF_COLUMNS: ReadonlySet<string> = new Set([
+    "status",
+    "title",
+    "goal",
+    "context_summary",
+    "acceptance_criteria",
+    "working_dir",
+    "working_dir_confidence",
+    "agent",
+    "risk_level",
+    "needs_confirmation",
+    "source_channel",
+    "source_ref",
+    "source_metadata",
+    "created_task_id",
+    "expires_at",
+  ]);
+
+  update_task_brief(brief_id: number, kwargs: Record<string, unknown>): void {
+    const invalid = Object.keys(kwargs).filter(
+      (k) => !TaskDB.ALLOWED_TASK_BRIEF_COLUMNS.has(k),
+    );
+    if (invalid.length) {
+      throw new Error(
+        `Invalid task brief column(s): ${JSON.stringify(invalid)}`,
+      );
+    }
+    const updates: Record<string, unknown> = {
+      ...kwargs,
+      updated_at: nowIso(),
+    };
+    const sets = Object.keys(updates)
+      .map((k) => `${k} = ?`)
+      .join(", ");
+    const vals = [
+      ...Object.entries(updates).map(([k, v]) =>
+        this._serialize_task_brief_value(k, v),
+      ),
+      brief_id,
+    ];
+    this.conn
+      .query(`UPDATE task_briefs SET ${sets} WHERE id = ?`)
+      .run(...(vals as any[]));
+  }
+
+  discard_task_brief(brief_id: number): void {
+    this.update_task_brief(brief_id, { status: TaskBriefStatus.DISCARDED });
+  }
+
+  confirm_task_brief(brief_id: number, task_id: number): void {
+    this.update_task_brief(brief_id, {
+      status: TaskBriefStatus.CONVERTED,
+      created_task_id: task_id,
+    });
+  }
+
+  private _serialize_im_runbook_value(key: string, value: unknown): unknown {
+    if (key === "aliases") {
+      return JSON.stringify(Array.isArray(value) ? value.map(String) : []);
+    }
+    if (key === "command_schema") {
+      return JSON.stringify(
+        typeof value === "object" && value !== null && !Array.isArray(value)
+          ? value
+          : {},
+      );
+    }
+    if (key === "enabled") {
+      return value ? 1 : 0;
+    }
+    return value;
+  }
+
+  private _deserialize_im_runbook(row: Row): Row {
+    const d: Row = { ...row };
+    try {
+      const parsed = JSON.parse(String(d["aliases"] ?? "[]"));
+      d["aliases"] = Array.isArray(parsed) ? parsed.map(String) : [];
+    } catch {
+      d["aliases"] = [];
+    }
+    try {
+      const parsed = JSON.parse(String(d["command_schema"] ?? "{}"));
+      d["command_schema"] =
+        typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)
+          ? parsed
+          : {};
+    } catch {
+      d["command_schema"] = {};
+    }
+    d["enabled"] = Boolean(d["enabled"]);
+    return d;
+  }
+
+  add_im_runbook(runbook: IMRunbook): number {
+    const now = nowIso();
+    const cur = this.conn
+      .query(
+        `
+        INSERT INTO im_runbooks (
+            name, aliases, description, source_type, source_id,
+            command_schema, prompt_template, default_agent,
+            confirmation_policy, enabled, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `,
+      )
+      .run(
+        runbook.name,
+        JSON.stringify(runbook.aliases.map(String)),
+        runbook.description,
+        runbook.source_type,
+        runbook.source_id,
+        JSON.stringify(runbook.command_schema),
+        runbook.prompt_template,
+        runbook.default_agent,
+        runbook.confirmation_policy,
+        runbook.enabled ? 1 : 0,
+        now,
+        now,
+      );
+    return Number(cur.lastInsertRowid);
+  }
+
+  get_im_runbook(runbook_id: number): Row | null {
+    const row = this.conn
+      .query("SELECT * FROM im_runbooks WHERE id = ?")
+      .get(runbook_id) as Row | null;
+    return row ? this._deserialize_im_runbook(row) : null;
+  }
+
+  get_im_runbook_by_name(nameOrAlias: string): Row | null {
+    const normalized = nameOrAlias.toLowerCase();
+    for (const runbook of this.get_im_runbooks()) {
+      const name = String(runbook["name"] ?? "").toLowerCase();
+      const aliases = Array.isArray(runbook["aliases"])
+        ? runbook["aliases"].map((alias) => String(alias).toLowerCase())
+        : [];
+      if (name === normalized || aliases.includes(normalized)) {
+        return runbook;
+      }
+    }
+    return null;
+  }
+
+  get_im_runbooks(enabled_only: boolean = false): Row[] {
+    const rows = enabled_only
+      ? (this.conn
+          .query(
+            "SELECT * FROM im_runbooks WHERE enabled = 1 ORDER BY updated_at DESC, id DESC",
+          )
+          .all() as Row[])
+      : (this.conn
+          .query("SELECT * FROM im_runbooks ORDER BY updated_at DESC, id DESC")
+          .all() as Row[]);
+    return rows.map((row) => this._deserialize_im_runbook(row));
+  }
+
+  static readonly ALLOWED_IM_RUNBOOK_COLUMNS: ReadonlySet<string> = new Set([
+    "name",
+    "aliases",
+    "description",
+    "source_type",
+    "source_id",
+    "command_schema",
+    "prompt_template",
+    "default_agent",
+    "confirmation_policy",
+    "enabled",
+  ]);
+
+  update_im_runbook(runbook_id: number, kwargs: Record<string, unknown>): void {
+    const invalid = Object.keys(kwargs).filter(
+      (k) => !TaskDB.ALLOWED_IM_RUNBOOK_COLUMNS.has(k),
+    );
+    if (invalid.length) {
+      throw new Error(
+        `Invalid IM runbook column(s): ${JSON.stringify(invalid)}`,
+      );
+    }
+    const updates: Record<string, unknown> = {
+      ...kwargs,
+      updated_at: nowIso(),
+    };
+    const sets = Object.keys(updates)
+      .map((k) => `${k} = ?`)
+      .join(", ");
+    const vals = [
+      ...Object.entries(updates).map(([k, v]) =>
+        this._serialize_im_runbook_value(k, v),
+      ),
+      runbook_id,
+    ];
+    this.conn
+      .query(`UPDATE im_runbooks SET ${sets} WHERE id = ?`)
+      .run(...(vals as any[]));
+  }
+
+  delete_im_runbook(runbook_id: number): void {
+    this.conn.query("DELETE FROM im_runbooks WHERE id = ?").run(runbook_id);
   }
 
   private _deserialize_heartbeat(row: Row): Row {
@@ -1301,6 +1675,167 @@ export class TaskDB {
     this.conn
       .query("DELETE FROM skill_drafts WHERE pattern_id = ?")
       .run(pattern_id);
+  }
+
+  // ── IM Skill Suggestions ──────────────────────────────────────────────
+
+  private _normalize_im_skill_suggestion_target(
+    target: string | null | undefined,
+  ): string {
+    return String(target ?? "").trim();
+  }
+
+  private _deserialize_im_skill_suggestion(row: Row): Row {
+    const d: Row = { ...row };
+    try {
+      const parsed = JSON.parse(String(d["metadata"] ?? "{}"));
+      d["metadata"] =
+        typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)
+          ? parsed
+          : {};
+    } catch {
+      d["metadata"] = {};
+    }
+    return d;
+  }
+
+  upsert_im_skill_suggestion(input: {
+    pattern_id: number;
+    channel: string;
+    target?: string | null;
+    status?: string;
+    metadata?: Record<string, unknown>;
+  }): void {
+    const pattern_id = Number(input.pattern_id);
+    const channel = String(input.channel ?? "").trim();
+    if (!Number.isInteger(pattern_id) || pattern_id <= 0) {
+      throw new Error("pattern_id is required");
+    }
+    if (!channel) {
+      throw new Error("channel is required");
+    }
+    const target = this._normalize_im_skill_suggestion_target(input.target);
+    const status = String(input.status ?? "suggested").trim() || "suggested";
+    const now = nowIso();
+    this.conn
+      .query(
+        `
+        INSERT INTO im_skill_suggestions (
+            pattern_id, channel, target, status, suggested_at,
+            metadata, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(pattern_id, channel, target) DO UPDATE SET
+            status = excluded.status,
+            suggested_at = COALESCE(im_skill_suggestions.suggested_at, excluded.suggested_at),
+            metadata = excluded.metadata,
+            updated_at = excluded.updated_at
+        `,
+      )
+      .run(
+        pattern_id,
+        channel,
+        target,
+        status,
+        now,
+        JSON.stringify(input.metadata ?? {}),
+        now,
+        now,
+      );
+  }
+
+  get_im_skill_suggestion(
+    pattern_id: number,
+    channel: string,
+    target: string | null = null,
+  ): Row | null {
+    const row = this.conn
+      .query(
+        `
+        SELECT * FROM im_skill_suggestions
+        WHERE pattern_id = ? AND channel = ? AND target = ?
+        `,
+      )
+      .get(
+        pattern_id,
+        String(channel ?? "").trim(),
+        this._normalize_im_skill_suggestion_target(target),
+      ) as Row | null;
+    return row ? this._deserialize_im_skill_suggestion(row) : null;
+  }
+
+  should_send_im_skill_suggestion(
+    pattern_id: number,
+    channel: string,
+    target: string | null = null,
+  ): boolean {
+    return this.get_im_skill_suggestion(pattern_id, channel, target) === null;
+  }
+
+  mark_im_skill_suggestion_draft_shown(
+    pattern_id: number,
+    channel: string,
+    target: string | null = null,
+  ): void {
+    const existing = this.get_im_skill_suggestion(pattern_id, channel, target);
+    if (!existing) {
+      this.upsert_im_skill_suggestion({
+        pattern_id,
+        channel,
+        target,
+        status: "suggested",
+      });
+    }
+    this.conn
+      .query(
+        `
+        UPDATE im_skill_suggestions
+        SET draft_shown_at = ?, updated_at = ?
+        WHERE pattern_id = ? AND channel = ? AND target = ?
+        `,
+      )
+      .run(
+        nowIso(),
+        nowIso(),
+        pattern_id,
+        String(channel ?? "").trim(),
+        this._normalize_im_skill_suggestion_target(target),
+      );
+  }
+
+  mark_im_skill_suggestion_status(
+    pattern_id: number,
+    channel: string,
+    target: string | null,
+    status: "dismissed" | "approved",
+  ): void {
+    const existing = this.get_im_skill_suggestion(pattern_id, channel, target);
+    if (!existing) {
+      this.upsert_im_skill_suggestion({
+        pattern_id,
+        channel,
+        target,
+        status: "suggested",
+      });
+    }
+    const now = nowIso();
+    const timestampColumn =
+      status === "dismissed" ? "dismissed_at" : "approved_at";
+    this.conn
+      .query(
+        `
+        UPDATE im_skill_suggestions
+        SET status = ?, ${timestampColumn} = ?, updated_at = ?
+        WHERE pattern_id = ? AND channel = ? AND target = ?
+        `,
+      )
+      .run(
+        status,
+        now,
+        now,
+        pattern_id,
+        String(channel ?? "").trim(),
+        this._normalize_im_skill_suggestion_target(target),
+      );
   }
 
   // ── Skill registry ─────────────────────────────────────────────────────

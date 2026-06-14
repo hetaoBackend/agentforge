@@ -10,9 +10,11 @@ import os from "node:os";
 import path from "node:path";
 
 import {
+  InboundMessageType,
   MessageBus,
   makeOutboundMessage,
   OutboundMessageType,
+  type InboundMessage,
 } from "../src/bus.ts";
 import { _hooks as dirHooks } from "../src/channels/dir_utils.ts";
 import {
@@ -39,6 +41,32 @@ class StubDB implements FeishuTaskDB {
   runs: Row[] = [];
   events: Row[] = [];
   byRoot = new Map<string, Row>();
+  runbooks: Row[] = [
+    {
+      name: "看-pr",
+      aliases: [],
+      description: "看 PR",
+      source_type: "template",
+      source_id: null,
+      command_schema: { args: ["url"] },
+      prompt_template: "Review this pull request:\n{{raw_args}}",
+      default_agent: null,
+      confirmation_policy: "auto",
+      enabled: true,
+    },
+    {
+      name: "检查发布",
+      aliases: [],
+      description: "检查发布",
+      source_type: "template",
+      source_id: null,
+      command_schema: { args: [] },
+      prompt_template: "检查发布风险",
+      default_agent: null,
+      confirmation_policy: "required",
+      enabled: true,
+    },
+  ];
 
   get_setting(key: string, defaultValue: string | null = null): string | null {
     return this.settings[key] ?? defaultValue;
@@ -68,6 +96,12 @@ class StubDB implements FeishuTaskDB {
     return this.events;
   }
 
+  get_im_runbooks(enabled_only: boolean = false): Row[] {
+    return enabled_only
+      ? this.runbooks.filter((runbook) => runbook["enabled"] !== false)
+      : this.runbooks;
+  }
+
   get_task_by_feishu_root_msg(root_msg_id: string): Row | null {
     return this.byRoot.get(root_msg_id) ?? null;
   }
@@ -75,12 +109,61 @@ class StubDB implements FeishuTaskDB {
 
 class StubScheduler implements FeishuScheduler {
   submitted: Task[] = [];
+  inbound: InboundMessage[] = [];
   listeners: OutputListener[] = [];
   removed: OutputListener[] = [];
+  nextBriefId = 1;
 
   submit_task(task: Task): number {
     this.submitted.push(task);
     return this.submitted.length;
+  }
+
+  handle_inbound_message(msg: InboundMessage): Row {
+    this.inbound.push(msg);
+    if (msg.type === InboundMessageType.CREATE_BRIEF) {
+      return { brief_id: this.nextBriefId++, status: "draft" };
+    }
+    if (msg.type === InboundMessageType.CONFIRM_BRIEF) {
+      return { task_id: this.submitted.length + 1, status: "created" };
+    }
+    if (msg.type === InboundMessageType.DISCARD_BRIEF) {
+      return { brief_id: msg.payload["brief_id"], status: "discarded" };
+    }
+    if (msg.type === InboundMessageType.RUN_RUNBOOK) {
+      if (msg.payload["name"] === "检查发布") {
+        return {
+          brief_id: this.nextBriefId++,
+          runbook: msg.payload["name"],
+          status: "draft",
+        };
+      }
+      return {
+        runbook: msg.payload["name"],
+        status: "created",
+        task_id: this.submitted.length + 1,
+      };
+    }
+    if (msg.type === InboundMessageType.SKILL_SUGGESTION_ACTION) {
+      const action = String(msg.payload["action"]);
+      if (action === "show") {
+        return {
+          pattern_id: msg.payload["pattern_id"],
+          status: "ready",
+          text: "Skill suggestion: fix-ci-investigation\n\nDraft preview:\n# Fix CI",
+        };
+      }
+      return {
+        pattern_id: msg.payload["pattern_id"],
+        status:
+          action === "draft"
+            ? "drafting"
+            : action === "approve"
+              ? "approved"
+              : "dismissed",
+      };
+    }
+    return { status: "ignored" };
   }
 
   add_output_listener(cb: OutputListener): void {
@@ -1125,6 +1208,10 @@ describe("Feishu forwarded, media, and command handling", () => {
     expect(sent.some((text: string) => text.includes("AgentForge Bot"))).toBe(
       true,
     );
+    expect(HELP_TEXT).toContain("/看报错");
+    expect(HELP_TEXT).toContain("自定义命令");
+    expect(HELP_TEXT).toContain("/run-draft");
+    expect(HELP_TEXT).toContain("/cancel-draft");
     expect(
       sent.some((text: string) => text.includes("Working directory")),
     ).toBe(true);
@@ -1260,6 +1347,174 @@ describe("Feishu inbound handling", () => {
     ]);
     expect((channel._create_reply as any).mock.calls[0][0]).toBe("om_root");
     expect((channel._start_streaming as any).mock.calls[0][0]).toBe(1);
+  });
+
+  test("brief command is not the draft entrypoint", async () => {
+    const { channel, db, scheduler } = makeChannel();
+    db.settings["default_agent"] = "codex";
+    channel._send_message = mock(async () => "om_reply") as any;
+    channel._add_reaction = mock(() => undefined) as any;
+
+    await withResolvedDir("/tmp/repo", async () => {
+      await channel._handle_inbound(
+        makeEvent({
+          content: textPayload("/brief fix the login redirect"),
+          messageId: "om_brief",
+          chatId: "oc_product",
+        }),
+      );
+    });
+
+    expect(scheduler.submitted).toHaveLength(1);
+    expect(scheduler.submitted[0]!.prompt).toBe(
+      "/brief fix the login redirect",
+    );
+    expect(scheduler.inbound).toHaveLength(0);
+    expect((channel._send_message as any).mock.calls).toHaveLength(0);
+  });
+
+  test("confirm and discard brief commands use text fallback", async () => {
+    const { channel, bus, scheduler } = makeChannel();
+    channel._send_message = mock(async () => "om_reply") as any;
+    channel._create_reply = mock(async () => "om_running") as any;
+    channel._start_streaming = mock(() => undefined) as any;
+    channel._add_reaction = mock(() => undefined) as any;
+
+    await channel._handle_inbound(
+      makeEvent({
+        content: textPayload("/run-draft 4"),
+        messageId: "om_confirm",
+      }),
+    );
+
+    expect(scheduler.inbound[0]!.type).toBe(InboundMessageType.CONFIRM_BRIEF);
+    expect(scheduler.inbound[0]!.payload["brief_id"]).toBe(4);
+    expect(channel._task_origin.get(1)).toEqual([
+      "ou_sender",
+      "om_confirm",
+      "om_confirm",
+    ]);
+    expect(channel._root_msg_map.get("om_confirm")).toBe(1);
+    expect(bus.get_task_source(1)).toBe("feishu");
+    expect((channel._create_reply as any).mock.calls[0][0]).toBe("om_confirm");
+    expect((channel._start_streaming as any).mock.calls[0][0]).toBe(1);
+
+    await channel._handle_inbound(
+      makeEvent({
+        content: textPayload("/cancel-draft #4"),
+        messageId: "om_discard",
+      }),
+    );
+
+    expect(scheduler.inbound[1]!.type).toBe(InboundMessageType.DISCARD_BRIEF);
+    expect(scheduler.inbound[1]!.payload["brief_id"]).toBe(4);
+    const sent = (channel._send_message as any).mock.calls.at(-1);
+    expect(sent[0]).toBe("ou_sender");
+    expect(sent[1]).toContain("discarded");
+  });
+
+  test("runbook commands use text fallback", async () => {
+    const { channel, bus, scheduler } = makeChannel();
+    channel._send_message = mock(async () => "om_reply") as any;
+    channel._create_reply = mock(async () => "om_running") as any;
+    channel._start_streaming = mock(() => undefined) as any;
+    channel._add_reaction = mock(() => undefined) as any;
+
+    await withResolvedDir("/tmp/repo", async () => {
+      await channel._handle_inbound(
+        makeEvent({
+          content: textPayload("/看-pr https://github.com/acme/app/pull/42"),
+          messageId: "om_runbook",
+        }),
+      );
+    });
+
+    expect(scheduler.inbound[0]!.type).toBe(InboundMessageType.RUN_RUNBOOK);
+    expect(scheduler.inbound[0]!.payload["name"]).toBe("看-pr");
+    expect(scheduler.inbound[0]!.payload["raw_args"]).toBe(
+      "https://github.com/acme/app/pull/42",
+    );
+    expect(scheduler.inbound[0]!.payload["working_dir"]).toBe("/tmp/repo");
+    expect(channel._task_origin.get(1)).toEqual([
+      "ou_sender",
+      "om_runbook",
+      "om_runbook",
+    ]);
+    expect(channel._root_msg_map.get("om_runbook")).toBe(1);
+    expect(bus.get_task_source(1)).toBe("feishu");
+    expect((channel._create_reply as any).mock.calls[0][0]).toBe("om_runbook");
+    expect((channel._start_streaming as any).mock.calls[0][0]).toBe(1);
+
+    await channel._handle_inbound(
+      makeEvent({
+        content: textPayload("/检查发布"),
+        messageId: "om_release",
+      }),
+    );
+
+    expect(scheduler.inbound[1]!.type).toBe(InboundMessageType.RUN_RUNBOOK);
+    expect(scheduler.inbound[1]!.payload["name"]).toBe("检查发布");
+    const sent = (channel._send_message as any).mock.calls.at(-1);
+    expect(sent[1]).toContain("Draft task #1");
+    expect(sent[1]).toContain("/run-draft 1");
+  });
+
+  test("skill suggestion commands use text fallback", async () => {
+    const { channel, scheduler } = makeChannel();
+    channel._send_message = mock(async () => "om_reply") as any;
+    channel._add_reaction = mock(() => undefined) as any;
+
+    await channel._handle_inbound(
+      makeEvent({
+        content: textPayload("/draft-skill 4"),
+        messageId: "om_draft_skill",
+        chatId: "oc_product",
+      }),
+    );
+
+    expect(scheduler.inbound[0]!.type).toBe(
+      InboundMessageType.SKILL_SUGGESTION_ACTION,
+    );
+    expect(scheduler.inbound[0]!.payload["action"]).toBe("draft");
+    expect(scheduler.inbound[0]!.payload["pattern_id"]).toBe(4);
+    expect(scheduler.inbound[0]!.payload["source_channel"]).toBe("feishu");
+    expect(scheduler.inbound[0]!.payload["target"]).toBe("ou_sender");
+    expect((channel._send_message as any).mock.calls.at(-1)[1]).toContain(
+      "Skill draft",
+    );
+
+    await channel._handle_inbound(
+      makeEvent({
+        content: textPayload("/show-skill #4"),
+        messageId: "om_show_skill",
+      }),
+    );
+    expect(scheduler.inbound[1]!.payload["action"]).toBe("show");
+    expect((channel._send_message as any).mock.calls.at(-1)[1]).toContain(
+      "Draft preview",
+    );
+
+    await channel._handle_inbound(
+      makeEvent({
+        content: textPayload("/approve-skill 4"),
+        messageId: "om_approve_skill",
+      }),
+    );
+    expect(scheduler.inbound[2]!.payload["action"]).toBe("approve");
+    expect((channel._send_message as any).mock.calls.at(-1)[1]).toContain(
+      "approved",
+    );
+
+    await channel._handle_inbound(
+      makeEvent({
+        content: textPayload("/dismiss-skill 4"),
+        messageId: "om_dismiss_skill",
+      }),
+    );
+    expect(scheduler.inbound[3]!.payload["action"]).toBe("dismiss");
+    expect((channel._send_message as any).mock.calls.at(-1)[1]).toContain(
+      "dismissed",
+    );
   });
 
   test("post message with only an image creates default image-analysis prompt", async () => {

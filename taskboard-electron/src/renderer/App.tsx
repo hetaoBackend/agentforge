@@ -1,18 +1,24 @@
 import { useState, useEffect, useCallback, useRef, type CSSProperties } from "react";
 import {
   CheckCircle2,
+  GitFork,
   HeartPulse,
   Inbox,
   KanbanSquare,
   MonitorCog,
   Moon,
+  Pause,
+  Pencil,
   Play,
   Plus,
   Radar,
+  RotateCcw,
   Search,
   Settings,
   Sparkles,
+  Square,
   Sun,
+  Trash2,
   type LucideIcon,
 } from "lucide-react";
 import QRCode from "qrcode";
@@ -36,77 +42,75 @@ const API = "http://127.0.0.1:9712/api";
 // ─── Theme ───
 const THEMES: Record<string, Record<string, string>> = {
   dark: {
-    bg: "#0f1116",
-    surface: "rgba(28, 30, 36, 0.86)",
-    surfaceHover: "rgba(38, 41, 48, 0.92)",
-    panel: "rgba(22, 24, 29, 0.74)",
-    panelRaised: "rgba(34, 37, 44, 0.76)",
-    field: "rgba(12, 14, 18, 0.56)",
-    border: "rgba(235, 245, 255, 0.11)",
-    borderActive: "rgba(10, 132, 255, 0.46)",
-    text: "#f5f5f7",
-    textMuted: "#b3b8c2",
-    textDim: "#727783",
-    accent: "#0a84ff",
-    accentGlow: "rgba(10, 132, 255, 0.18)",
-    green: "#30d158",
-    greenBg: "rgba(48, 209, 88, 0.12)",
-    orange: "#ff9f0a",
-    orangeBg: "rgba(255, 159, 10, 0.13)",
-    red: "#ff453a",
-    redBg: "rgba(255, 69, 58, 0.13)",
-    blue: "#64d2ff",
-    blueBg: "rgba(100, 210, 255, 0.12)",
-    cyan: "#5e5ce6",
-    cyanBg: "rgba(94, 92, 230, 0.13)",
-    yellow: "#ffd60a",
-    headerBg: "rgba(20, 22, 27, 0.74)",
-    headerBorder: "rgba(235, 245, 255, 0.12)",
-    boardBg:
-      "radial-gradient(circle at 20% 0%, rgba(10,132,255,0.18), transparent 32%), radial-gradient(circle at 78% 12%, rgba(94,92,230,0.14), transparent 28%), linear-gradient(180deg, #12141a 0%, #0f1116 42%)",
-    columnBg: "rgba(24, 27, 33, 0.58)",
-    columnHeader: "#f5f5f7",
-    shadow: "0 24px 60px rgba(0, 0, 0, 0.38)",
-    shadowSoft: "0 10px 30px rgba(0, 0, 0, 0.24)",
-    brandStart: "#64d2ff",
-    brandEnd: "#5e5ce6",
+    bg: "#0d0e10",
+    surface: "#17181c",
+    surfaceHover: "#1c1d22",
+    panel: "#111216",
+    panelRaised: "#18191e",
+    field: "#101115",
+    border: "rgba(255, 255, 255, 0.085)",
+    borderActive: "rgba(94, 106, 210, 0.48)",
+    text: "#f4f4f5",
+    textMuted: "#a6a8b0",
+    textDim: "#70737c",
+    accent: "#5e6ad2",
+    accentGlow: "rgba(94, 106, 210, 0.18)",
+    green: "#4cb782",
+    greenBg: "rgba(76, 183, 130, 0.12)",
+    orange: "#d99a45",
+    orangeBg: "rgba(217, 154, 69, 0.13)",
+    red: "#e06c75",
+    redBg: "rgba(224, 108, 117, 0.13)",
+    blue: "#6aa6f8",
+    blueBg: "rgba(106, 166, 248, 0.12)",
+    cyan: "#64b5d9",
+    cyanBg: "rgba(100, 181, 217, 0.12)",
+    yellow: "#d8b84e",
+    headerBg: "rgba(13, 14, 16, 0.9)",
+    headerBorder: "rgba(255, 255, 255, 0.08)",
+    boardBg: "linear-gradient(180deg, #101114 0%, #0d0e10 48%, #0b0c0e 100%)",
+    columnBg: "rgba(18, 19, 23, 0.72)",
+    columnHeader: "#f4f4f5",
+    shadow: "0 22px 54px rgba(0, 0, 0, 0.34)",
+    shadowSoft: "0 10px 28px rgba(0, 0, 0, 0.2)",
+    brandStart: "#f2f3f5",
+    brandEnd: "#bfc4cf",
     brandInk: "#ffffff",
   },
   light: {
-    bg: "#f5f5f7",
-    surface: "rgba(255, 255, 255, 0.88)",
-    surfaceHover: "rgba(255, 255, 255, 0.96)",
-    panel: "rgba(255, 255, 255, 0.62)",
-    panelRaised: "rgba(255, 255, 255, 0.82)",
-    field: "rgba(244, 246, 250, 0.86)",
-    border: "rgba(60, 60, 67, 0.14)",
-    borderActive: "rgba(0, 122, 255, 0.36)",
-    text: "#1d1d1f",
-    textMuted: "#6e6e73",
-    textDim: "#9a9aa1",
-    accent: "#007aff",
-    accentGlow: "rgba(0, 122, 255, 0.13)",
-    green: "#34c759",
-    greenBg: "rgba(52, 199, 89, 0.1)",
-    orange: "#ff9500",
-    orangeBg: "rgba(255, 149, 0, 0.11)",
-    red: "#ff3b30",
-    redBg: "rgba(255, 59, 48, 0.1)",
-    blue: "#007aff",
-    blueBg: "rgba(0, 122, 255, 0.1)",
-    cyan: "#5856d6",
-    cyanBg: "rgba(88, 86, 214, 0.1)",
-    yellow: "#ffcc00",
-    headerBg: "rgba(245, 245, 247, 0.72)",
-    headerBorder: "rgba(60, 60, 67, 0.12)",
-    boardBg:
-      "radial-gradient(circle at 18% 0%, rgba(0,122,255,0.14), transparent 34%), radial-gradient(circle at 82% 8%, rgba(88,86,214,0.11), transparent 30%), linear-gradient(180deg, #fbfbfd 0%, #f5f5f7 44%)",
-    columnBg: "rgba(255, 255, 255, 0.58)",
-    columnHeader: "#1d1d1f",
-    shadow: "0 18px 44px rgba(31, 35, 45, 0.12)",
-    shadowSoft: "0 8px 24px rgba(31, 35, 45, 0.09)",
-    brandStart: "#00c7ff",
-    brandEnd: "#5856d6",
+    bg: "#f7f8fa",
+    surface: "#ffffff",
+    surfaceHover: "#fafbfc",
+    panel: "#f1f2f5",
+    panelRaised: "#ffffff",
+    field: "#f3f4f7",
+    border: "rgba(31, 35, 40, 0.12)",
+    borderActive: "rgba(94, 106, 210, 0.44)",
+    text: "#1f2328",
+    textMuted: "#636a75",
+    textDim: "#8a919d",
+    accent: "#5e6ad2",
+    accentGlow: "rgba(94, 106, 210, 0.13)",
+    green: "#2f9f6a",
+    greenBg: "rgba(47, 159, 106, 0.1)",
+    orange: "#b97722",
+    orangeBg: "rgba(185, 119, 34, 0.11)",
+    red: "#d14d57",
+    redBg: "rgba(209, 77, 87, 0.1)",
+    blue: "#3978d8",
+    blueBg: "rgba(57, 120, 216, 0.1)",
+    cyan: "#2f8fb7",
+    cyanBg: "rgba(47, 143, 183, 0.1)",
+    yellow: "#a98b19",
+    headerBg: "rgba(247, 248, 250, 0.9)",
+    headerBorder: "rgba(31, 35, 40, 0.1)",
+    boardBg: "linear-gradient(180deg, #fbfbfc 0%, #f7f8fa 48%, #eef0f4 100%)",
+    columnBg: "rgba(255, 255, 255, 0.78)",
+    columnHeader: "#1f2328",
+    shadow: "0 18px 42px rgba(31, 35, 40, 0.12)",
+    shadowSoft: "0 8px 22px rgba(31, 35, 40, 0.08)",
+    brandStart: "#ffffff",
+    brandEnd: "#d9dde7",
     brandInk: "#ffffff",
   },
 };
@@ -125,18 +129,17 @@ function clamp(value: number, min: number, max: number): number {
 
 function getStatusConfig() {
   return {
-    pending: { label: "Pending", color: theme.orange, bg: theme.orangeBg, icon: "◌" },
-    scheduled: { label: "Scheduled", color: theme.cyan, bg: theme.cyanBg, icon: "⏱" },
-    running: { label: "Running", color: theme.blue, bg: theme.blueBg, icon: "⟳" },
-    completed: { label: "Completed", color: theme.green, bg: theme.greenBg, icon: "✓" },
-    failed: { label: "Failed", color: theme.red, bg: theme.redBg, icon: "✕" },
+    pending: { label: "Pending", color: theme.orange, bg: theme.orangeBg },
+    scheduled: { label: "Scheduled", color: theme.cyan, bg: theme.cyanBg },
+    running: { label: "Running", color: theme.blue, bg: theme.blueBg },
+    completed: { label: "Completed", color: theme.green, bg: theme.greenBg },
+    failed: { label: "Failed", color: theme.red, bg: theme.redBg },
     cancelled: {
       label: "Cancelled",
       color: theme.textMuted,
       bg: "rgba(107,107,138,0.08)",
-      icon: "◻",
     },
-    blocked: { label: "Blocked", color: theme.textMuted, bg: "rgba(107,107,138,0.1)", icon: "⊘" },
+    blocked: { label: "Blocked", color: theme.textMuted, bg: "rgba(107,107,138,0.1)" },
   };
 }
 
@@ -793,6 +796,32 @@ async function csrfHeaders(extra = {}) {
   return { "Content-Type": "application/json", "X-CSRF-Token": token, ...extra };
 }
 
+async function fetchWithTimeout(
+  input: RequestInfo | URL,
+  timeoutMs: number,
+  init: RequestInit = {},
+) {
+  if (typeof AbortController === "undefined") {
+    let timeout = 0;
+    const timeoutPromise = new Promise<Response>((_, reject) => {
+      timeout = window.setTimeout(() => reject(new Error("Request timed out")), timeoutMs);
+    });
+    try {
+      return await Promise.race([fetch(input, init), timeoutPromise]);
+    } finally {
+      window.clearTimeout(timeout);
+    }
+  }
+
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(input, { ...init, signal: controller.signal });
+  } finally {
+    window.clearTimeout(timeout);
+  }
+}
+
 // ─── API helpers ───
 async function fetchTasks() {
   const res = await fetch(`${API}/tasks`);
@@ -1217,8 +1246,8 @@ function BrandMark({ size = 40 }) {
         borderRadius: 8,
         display: "grid",
         placeItems: "center",
-        background: `radial-gradient(circle at 30% 18%, rgba(255,255,255,0.92), transparent 22%), linear-gradient(135deg, ${theme.brandStart}, ${theme.brandEnd})`,
-        boxShadow: `0 14px 36px ${theme.accentGlow}`,
+        background: `linear-gradient(180deg, ${theme.brandStart}, ${theme.brandEnd})`,
+        border: `1px solid ${theme.border}`,
         position: "relative",
         overflow: "hidden",
         flexShrink: 0,
@@ -1235,7 +1264,7 @@ function BrandMark({ size = 40 }) {
           position: "absolute",
           inset: 1,
           borderRadius: 7,
-          border: "1px solid rgba(255,255,255,0.22)",
+          border: "1px solid rgba(255,255,255,0.14)",
           pointerEvents: "none",
         }}
       />
@@ -1285,13 +1314,12 @@ function IconWell({
       style={{
         width: size,
         height: size,
-        borderRadius: 8,
+        borderRadius: 7,
         display: "grid",
         placeItems: "center",
-        background: active ? "rgba(255,255,255,0.18)" : background,
-        border: `1px solid ${active ? "rgba(255,255,255,0.32)" : theme.border}`,
+        background: active ? theme.accentGlow : background,
+        border: `1px solid ${active ? theme.borderActive : theme.border}`,
         color,
-        boxShadow: active ? "inset 0 1px 0 rgba(255,255,255,0.18)" : "none",
         flexShrink: 0,
       }}
     >
@@ -1307,18 +1335,17 @@ function HeaderButton({ children, onClick, title, active = false }) {
         onClick={onClick}
         aria-label={title}
         style={{
-          width: 34,
-          height: 34,
-          borderRadius: 8,
+          width: 32,
+          height: 32,
+          borderRadius: 6,
           border: `1px solid ${active ? theme.accent : theme.border}`,
-          background: active ? theme.accentGlow : theme.panelRaised,
+          background: active ? theme.accentGlow : theme.surface,
           color: active ? theme.accent : theme.textMuted,
           cursor: "pointer",
           fontSize: 15,
           display: "grid",
           placeItems: "center",
-          backdropFilter: "blur(22px)",
-          boxShadow: active ? `0 0 0 3px ${theme.accentGlow}` : "none",
+          boxShadow: active ? `0 0 0 2px ${theme.accentGlow}` : "none",
           transition: "background 0.15s ease, color 0.15s ease, border-color 0.15s ease",
         }}
       >
@@ -1337,16 +1364,15 @@ function StatusPill({ connected, label, tone = theme.green, background = theme.g
       style={{
         display: "inline-flex",
         alignItems: "center",
-        gap: 8,
+        gap: 7,
         color: activeTone,
-        background: activeBackground,
-        border: `1px solid ${connected ? activeTone : theme.red}`,
-        borderRadius: 8,
-        padding: "5px 10px",
+        background: connected ? background : activeBackground,
+        border: `1px solid ${connected ? `${activeTone}40` : `${theme.red}55`}`,
+        borderRadius: 999,
+        padding: "4px 9px",
         fontSize: 11,
-        fontWeight: 600,
+        fontWeight: 650,
         fontFamily: MONO_FONT_STACK,
-        boxShadow: connected ? `0 0 0 1px ${activeBackground}` : "none",
       }}
     >
       <span
@@ -1356,7 +1382,6 @@ function StatusPill({ connected, label, tone = theme.green, background = theme.g
           height: 7,
           borderRadius: "50%",
           background: activeTone,
-          boxShadow: `0 0 12px ${activeTone}`,
         }}
       />
       {connected ? label : "offline"}
@@ -1368,21 +1393,19 @@ function MetricTile({ label, value, tone = theme.text }) {
   return (
     <div
       style={{
-        minWidth: 92,
-        padding: "10px 12px",
+        minWidth: 84,
+        padding: "8px 10px",
         borderRadius: 8,
         border: `1px solid ${theme.border}`,
-        background: theme.panelRaised,
-        backdropFilter: "blur(22px)",
-        boxShadow: theme.shadowSoft,
+        background: theme.surface,
       }}
     >
-      <div style={{ color: theme.textMuted, fontSize: 11, fontWeight: 600 }}>{label}</div>
+      <div style={{ color: theme.textDim, fontSize: 11, fontWeight: 600 }}>{label}</div>
       <div
         style={{
           color: tone,
-          fontSize: 20,
-          fontWeight: 700,
+          fontSize: 18,
+          fontWeight: 720,
           lineHeight: 1.1,
           marginTop: 2,
           fontFamily: DISPLAY_FONT_STACK,
@@ -1402,16 +1425,24 @@ function Badge({ status }) {
         display: "inline-flex",
         alignItems: "center",
         gap: 5,
-        padding: "3px 8px",
-        borderRadius: 8,
+        padding: "3px 7px",
+        borderRadius: 999,
         fontSize: 11,
-        fontWeight: 600,
+        fontWeight: 650,
         color: cfg.color,
         background: cfg.bg,
         border: `1px solid ${cfg.color}33`,
       }}
     >
-      <span style={{ fontSize: 10 }}>{cfg.icon}</span>
+      <span
+        aria-hidden="true"
+        style={{
+          width: 6,
+          height: 6,
+          borderRadius: "50%",
+          background: cfg.color,
+        }}
+      />
       {cfg.label}
     </span>
   );
@@ -1424,7 +1455,7 @@ function Tag({ children }) {
         padding: "3px 7px",
         borderRadius: 4,
         fontSize: 10,
-        fontWeight: 600,
+        fontWeight: 650,
         background: theme.field,
         color: theme.textMuted,
         border: `1px solid ${theme.border}`,
@@ -1446,7 +1477,7 @@ function AgentBadge({ agent }) {
         padding: "3px 8px",
         borderRadius: 4,
         fontSize: 10,
-        fontWeight: 600,
+        fontWeight: 650,
         color: cfg.color,
         background: `${cfg.color}18`,
         border: `1px solid ${cfg.color}2f`,
@@ -1474,9 +1505,116 @@ function AgentBadge({ agent }) {
   );
 }
 
+function uiField(overrides: CSSProperties = {}): CSSProperties {
+  return {
+    width: "100%",
+    padding: "9px 11px",
+    borderRadius: 6,
+    border: `1px solid ${theme.border}`,
+    background: theme.field,
+    color: theme.text,
+    fontSize: 13,
+    outline: "none",
+    boxSizing: "border-box",
+    fontFamily: APP_FONT_STACK,
+    transition: "border-color 0.15s ease, background 0.15s ease",
+    ...overrides,
+  };
+}
+
+function uiLabel(): CSSProperties {
+  return {
+    fontSize: 11,
+    fontWeight: 650,
+    color: theme.textMuted,
+    letterSpacing: 0,
+    marginBottom: 6,
+    display: "block",
+  };
+}
+
+function modalOverlay(): CSSProperties {
+  return {
+    position: "fixed",
+    inset: 0,
+    background: "rgba(0, 0, 0, 0.58)",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    zIndex: 1000,
+    backdropFilter: "blur(6px)",
+    padding: 20,
+  };
+}
+
+function modalPanel(width: number, maxHeight = "84vh"): CSSProperties {
+  return {
+    background: theme.surface,
+    border: `1px solid ${theme.border}`,
+    borderRadius: 10,
+    padding: 24,
+    width,
+    maxWidth: "calc(100vw - 40px)",
+    maxHeight,
+    overflow: "auto",
+    boxShadow: theme.shadow,
+  };
+}
+
+function modalTitle(): CSSProperties {
+  return {
+    margin: "0 0 18px",
+    fontSize: 16,
+    fontWeight: 720,
+    color: theme.text,
+    fontFamily: DISPLAY_FONT_STACK,
+  };
+}
+
+function secondaryButton(): CSSProperties {
+  return {
+    padding: "8px 14px",
+    borderRadius: 6,
+    border: `1px solid ${theme.border}`,
+    background: theme.surface,
+    color: theme.textMuted,
+    cursor: "pointer",
+    fontSize: 13,
+    fontWeight: 650,
+  };
+}
+
+function primaryButton(): CSSProperties {
+  return {
+    padding: "8px 15px",
+    borderRadius: 6,
+    border: `1px solid ${theme.accent}`,
+    background: theme.accent,
+    color: theme.brandInk,
+    cursor: "pointer",
+    fontSize: 13,
+    fontWeight: 680,
+  };
+}
+
+function segmentedButton(active: boolean): CSSProperties {
+  return {
+    flex: 1,
+    padding: "7px 10px",
+    borderRadius: 6,
+    cursor: "pointer",
+    border: `1px solid ${active ? theme.borderActive : theme.border}`,
+    background: active ? theme.accentGlow : theme.surface,
+    color: active ? theme.text : theme.textMuted,
+    fontSize: 12,
+    fontWeight: 650,
+    minWidth: 96,
+    transition: "background 0.15s ease, border-color 0.15s ease, color 0.15s ease",
+  };
+}
+
 function TaskCard({ task, onAction, onViewDetail }) {
   const [hovered, setHovered] = useState(false);
-  const cfg = getStatusConfig()[task.status] || getStatusConfig().pending;
   const tags = task.tags ? task.tags.split(",").filter(Boolean) : [];
 
   return (
@@ -1490,19 +1628,18 @@ function TaskCard({ task, onAction, onViewDetail }) {
         borderRadius: 8,
         cursor: "pointer",
         overflow: "hidden",
-        backdropFilter: "blur(26px)",
-        transition: "transform 0.18s ease, border-color 0.18s ease, box-shadow 0.18s ease",
-        transform: hovered ? "translateY(-2px)" : "none",
-        boxShadow: hovered ? theme.shadowSoft : "none",
+        transition:
+          "transform 0.16s ease, border-color 0.16s ease, box-shadow 0.16s ease, background 0.16s ease",
+        transform: hovered ? "translateY(-1px)" : "none",
+        boxShadow: hovered ? "0 8px 24px rgba(0,0,0,0.14)" : "none",
       }}
     >
-      <div style={{ height: 3, background: cfg.color }} />
       <div
         style={{
-          padding: "13px 14px 12px",
+          padding: "12px 13px",
           display: "flex",
           flexDirection: "column",
-          gap: 10,
+          gap: 9,
         }}
       >
         <div
@@ -1528,8 +1665,8 @@ function TaskCard({ task, onAction, onViewDetail }) {
 
         <div
           style={{
-            fontSize: 14,
-            fontWeight: 650,
+            fontSize: 13.5,
+            fontWeight: 680,
             color: theme.text,
             lineHeight: 1.35,
             fontFamily: DISPLAY_FONT_STACK,
@@ -1542,7 +1679,7 @@ function TaskCard({ task, onAction, onViewDetail }) {
           style={{
             fontSize: 12,
             color: theme.textMuted,
-            lineHeight: 1.5,
+            lineHeight: 1.45,
             overflow: "hidden",
             textOverflow: "ellipsis",
             display: "-webkit-box",
@@ -1585,10 +1722,13 @@ function TaskCard({ task, onAction, onViewDetail }) {
             {task.last_run_at ? `last ${formatTaskTime(task.last_run_at)}` : "not run yet"}
           </div>
 
-          <div style={{ display: "flex", gap: 4 }} onClick={(e) => e.stopPropagation()}>
+          <div
+            style={{ display: "flex", gap: 4, opacity: hovered ? 1 : 0.7 }}
+            onClick={(e) => e.stopPropagation()}
+          >
             {["pending", "scheduled", "blocked"].includes(task.status) && (
               <ActionBtn
-                label="✎"
+                icon={Pencil}
                 title="Edit"
                 onClick={() => onAction("edit", task.id)}
                 color={theme.blue || theme.accent}
@@ -1596,7 +1736,7 @@ function TaskCard({ task, onAction, onViewDetail }) {
             )}
             {["completed", "cancelled", "failed"].includes(task.status) && (
               <ActionBtn
-                label="⑂"
+                icon={GitFork}
                 title="Fork"
                 onClick={() => onAction("fork", task.id)}
                 color={theme.cyan || theme.accent}
@@ -1604,7 +1744,7 @@ function TaskCard({ task, onAction, onViewDetail }) {
             )}
             {task.status === "failed" && (
               <ActionBtn
-                label="↻"
+                icon={RotateCcw}
                 title="Retry"
                 onClick={() => onAction("retry", task.id)}
                 color={theme.orange}
@@ -1612,14 +1752,14 @@ function TaskCard({ task, onAction, onViewDetail }) {
             )}
             {["pending", "scheduled", "running"].includes(task.status) && (
               <ActionBtn
-                label="■"
+                icon={Square}
                 title="Cancel"
                 onClick={() => onAction("cancel", task.id)}
                 color={theme.red}
               />
             )}
             <ActionBtn
-              label="×"
+              icon={Trash2}
               title="Delete"
               onClick={() => onAction("delete", task.id)}
               color={theme.textMuted}
@@ -1654,7 +1794,7 @@ function TaskCard({ task, onAction, onViewDetail }) {
   );
 }
 
-function ActionBtn({ label, title, onClick, color }) {
+function ActionBtn({ icon, title, onClick, color }) {
   const [hovered, setHovered] = useState(false);
   return (
     <button
@@ -1670,15 +1810,13 @@ function ActionBtn({ label, title, onClick, color }) {
         width: 26,
         height: 26,
         borderRadius: 6,
-        fontSize: 13,
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
-        backdropFilter: "blur(18px)",
         transition: "background 0.15s ease, border-color 0.15s ease",
       }}
     >
-      {label}
+      <IconGlyph icon={icon} size={13} strokeWidth={2.4} />
     </button>
   );
 }
@@ -1694,9 +1832,8 @@ function Column({ col, tasks, onAction, onViewDetail }) {
         borderRadius: 8,
         border: `1px solid ${theme.border}`,
         background: theme.columnBg,
-        backdropFilter: "blur(28px)",
-        boxShadow: theme.shadowSoft,
-        padding: 12,
+        boxShadow: "none",
+        padding: 10,
         minHeight: 420,
       }}
     >
@@ -1707,7 +1844,7 @@ function Column({ col, tasks, onAction, onViewDetail }) {
           justifyContent: "space-between",
           gap: 12,
           marginBottom: 12,
-          padding: "4px 2px 10px",
+          padding: "2px 2px 10px",
           borderBottom: `1px solid ${theme.border}`,
         }}
       >
@@ -1723,7 +1860,7 @@ function Column({ col, tasks, onAction, onViewDetail }) {
             <div
               style={{
                 fontSize: 13,
-                fontWeight: 700,
+                fontWeight: 720,
                 color: theme.columnHeader,
                 fontFamily: DISPLAY_FONT_STACK,
               }}
@@ -1735,9 +1872,9 @@ function Column({ col, tasks, onAction, onViewDetail }) {
         </div>
         <span
           style={{
-            background: theme.field,
+            background: theme.surface,
             border: `1px solid ${theme.border}`,
-            borderRadius: 8,
+            borderRadius: 999,
             padding: "3px 8px",
             fontSize: 11,
             color: theme.textMuted,
@@ -1757,11 +1894,11 @@ function Column({ col, tasks, onAction, onViewDetail }) {
             style={{
               border: `1px dashed ${theme.border}`,
               borderRadius: 8,
-              padding: "30px 18px",
+              padding: "28px 18px",
               textAlign: "center",
               color: theme.textDim,
               fontSize: 12,
-              background: theme.field,
+              background: theme.surface,
             }}
           >
             Clear
@@ -1811,27 +1948,8 @@ function HeartbeatModal({ onClose, onSubmit, initialData, defaultAgent, mode = "
 
   const set = (k, v) => setForm((prev) => ({ ...prev, [k]: v }));
 
-  const inputStyle: CSSProperties = {
-    width: "100%",
-    padding: "10px 14px",
-    borderRadius: 8,
-    border: `1px solid ${theme.border}`,
-    background: theme.bg,
-    color: theme.text,
-    fontSize: 13,
-    outline: "none",
-    boxSizing: "border-box",
-    fontFamily: "'JetBrains Mono', 'SF Mono', monospace",
-  };
-  const labelStyle = {
-    fontSize: 11,
-    fontWeight: 600,
-    color: theme.textMuted,
-    letterSpacing: 0.8,
-    textTransform: "uppercase",
-    marginBottom: 6,
-    display: "block",
-  };
+  const inputStyle = uiField();
+  const labelStyle = uiLabel();
 
   const handleSubmit = () => {
     localStorage.setItem("agentforge_working_dir", form.working_dir);
@@ -1848,41 +1966,12 @@ function HeartbeatModal({ onClose, onSubmit, initialData, defaultAgent, mode = "
   return (
     <div
       style={{
-        position: "fixed",
-        inset: 0,
-        background: "rgba(0,0,0,0.7)",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        zIndex: 1000,
-        backdropFilter: "blur(8px)",
+        ...modalOverlay(),
       }}
       onClick={onClose}
     >
-      <div
-        onClick={(e) => e.stopPropagation()}
-        style={{
-          background: theme.surface,
-          border: `1px solid ${theme.border}`,
-          borderRadius: 16,
-          padding: 32,
-          width: 640,
-          maxHeight: "84vh",
-          overflow: "auto",
-          boxShadow: "0 24px 80px rgba(0,0,0,0.5)",
-        }}
-      >
-        <h2
-          style={{
-            margin: "0 0 24px",
-            fontSize: 18,
-            fontWeight: 700,
-            color: theme.text,
-            fontFamily: "'JetBrains Mono', monospace",
-          }}
-        >
-          {mode === "edit" ? "Edit Heartbeat" : "New Heartbeat"}
-        </h2>
+      <div onClick={(e) => e.stopPropagation()} style={modalPanel(640)}>
+        <h2 style={modalTitle()}>{mode === "edit" ? "Edit Heartbeat" : "New Heartbeat"}</h2>
         <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
           <div>
             <label style={labelStyle}>Name</label>
@@ -1908,14 +1997,10 @@ function HeartbeatModal({ onClose, onSubmit, initialData, defaultAgent, mode = "
                     if (dir) set("working_dir", dir);
                   }}
                   style={{
-                    padding: "8px 14px",
-                    borderRadius: 8,
+                    ...secondaryButton(),
+                    padding: "0 13px",
+                    height: 37,
                     cursor: "pointer",
-                    border: `1px solid ${theme.border}`,
-                    background: theme.bg,
-                    color: theme.textMuted,
-                    fontSize: 12,
-                    fontWeight: 600,
                     whiteSpace: "nowrap",
                   }}
                 >
@@ -1931,20 +2016,9 @@ function HeartbeatModal({ onClose, onSubmit, initialData, defaultAgent, mode = "
                 <button
                   key={t}
                   onClick={() => set("schedule_type", t)}
-                  style={{
-                    flex: 1,
-                    padding: "8px 12px",
-                    borderRadius: 8,
-                    cursor: "pointer",
-                    border: `1px solid ${form.schedule_type === t ? theme.accent : theme.border}`,
-                    background: form.schedule_type === t ? theme.accentGlow : "transparent",
-                    color: form.schedule_type === t ? theme.accent : theme.textMuted,
-                    fontSize: 12,
-                    fontWeight: 600,
-                    textTransform: "capitalize",
-                  }}
+                  style={segmentedButton(form.schedule_type === t)}
                 >
-                  {t === "interval" ? "⟳ Interval" : "⏲ Cron"}
+                  {t === "interval" ? "Interval" : "Cron"}
                 </button>
               ))}
             </div>
@@ -2031,35 +2105,10 @@ function HeartbeatModal({ onClose, onSubmit, initialData, defaultAgent, mode = "
           </label>
         </div>
         <div style={{ display: "flex", gap: 10, justifyContent: "flex-end", marginTop: 24 }}>
-          <button
-            onClick={onClose}
-            style={{
-              padding: "10px 20px",
-              borderRadius: 8,
-              border: `1px solid ${theme.border}`,
-              background: "transparent",
-              color: theme.textMuted,
-              cursor: "pointer",
-              fontSize: 13,
-              fontWeight: 600,
-            }}
-          >
+          <button onClick={onClose} style={secondaryButton()}>
             Cancel
           </button>
-          <button
-            onClick={handleSubmit}
-            style={{
-              padding: "10px 24px",
-              borderRadius: 8,
-              border: "none",
-              background: theme.accent,
-              color: "#fff",
-              cursor: "pointer",
-              fontSize: 13,
-              fontWeight: 600,
-              boxShadow: `0 0 20px ${theme.accentGlow}`,
-            }}
-          >
+          <button onClick={handleSubmit} style={primaryButton()}>
             {mode === "edit" ? "Save" : "Create Heartbeat"}
           </button>
         </div>
@@ -2071,9 +2120,9 @@ function HeartbeatModal({ onClose, onSubmit, initialData, defaultAgent, mode = "
 function HeartbeatCard({ heartbeat, onAction, onViewDetail }) {
   const tags = [];
   if (heartbeat.schedule_type === "interval" && heartbeat.interval_seconds)
-    tags.push(`⟳ ${heartbeat.interval_seconds}s`);
+    tags.push(`every ${heartbeat.interval_seconds}s`);
   if (heartbeat.schedule_type === "cron" && heartbeat.cron_expr)
-    tags.push(`⏲ ${heartbeat.cron_expr}`);
+    tags.push(`cron ${heartbeat.cron_expr}`);
   if (heartbeat.last_decision) tags.push(`Last: ${heartbeat.last_decision}`);
 
   return (
@@ -2082,10 +2131,10 @@ function HeartbeatCard({ heartbeat, onAction, onViewDetail }) {
       style={{
         background: theme.surface,
         border: `1px solid ${theme.border}`,
-        borderRadius: 12,
-        padding: "16px 18px",
+        borderRadius: 8,
+        padding: "14px 15px",
         cursor: "pointer",
-        transition: "all 0.2s ease",
+        transition: "border-color 0.16s ease, background 0.16s ease",
       }}
     >
       <div style={{ display: "flex", justifyContent: "space-between", gap: 16, marginBottom: 8 }}>
@@ -2093,9 +2142,9 @@ function HeartbeatCard({ heartbeat, onAction, onViewDetail }) {
           <div
             style={{
               fontSize: 14,
-              fontWeight: 700,
+              fontWeight: 680,
               color: theme.text,
-              fontFamily: "'JetBrains Mono', monospace",
+              fontFamily: DISPLAY_FONT_STACK,
               marginBottom: 6,
             }}
           >
@@ -2130,34 +2179,34 @@ function HeartbeatCard({ heartbeat, onAction, onViewDetail }) {
         </div>
         <div style={{ display: "flex", gap: 4 }} onClick={(e) => e.stopPropagation()}>
           <ActionBtn
-            label="⚡"
+            icon={Play}
             title="Run now"
             onClick={() => onAction("run", heartbeat.id)}
             color={theme.orange}
           />
           <ActionBtn
-            label="✎"
+            icon={Pencil}
             title="Edit"
             onClick={() => onAction("edit", heartbeat.id)}
             color={theme.blue}
           />
           {heartbeat.enabled ? (
             <ActionBtn
-              label="❚❚"
+              icon={Pause}
               title="Pause"
               onClick={() => onAction("pause", heartbeat.id)}
               color={theme.textMuted}
             />
           ) : (
             <ActionBtn
-              label="▶"
+              icon={Play}
               title="Resume"
               onClick={() => onAction("resume", heartbeat.id)}
               color={theme.green}
             />
           )}
           <ActionBtn
-            label="×"
+            icon={Trash2}
             title="Delete"
             onClick={() => onAction("delete", heartbeat.id)}
             color={theme.red}
@@ -2262,9 +2311,9 @@ function HeartbeatDetailPanel({ heartbeat, ticks, onClose }) {
           <div
             style={{
               fontSize: 18,
-              fontWeight: 700,
+              fontWeight: 720,
               color: theme.text,
-              fontFamily: "'JetBrains Mono', monospace",
+              fontFamily: DISPLAY_FONT_STACK,
             }}
           >
             {heartbeat.name}
@@ -2292,9 +2341,9 @@ function HeartbeatDetailPanel({ heartbeat, ticks, onClose }) {
           <HeartbeatBadge enabled={heartbeat.enabled} />
           <AgentBadge agent={heartbeat.default_agent} />
           {heartbeat.schedule_type === "interval" ? (
-            <Tag>⟳ {heartbeat.interval_seconds}s</Tag>
+            <Tag>every {heartbeat.interval_seconds}s</Tag>
           ) : (
-            <Tag>⏲ {heartbeat.cron_expr}</Tag>
+            <Tag>cron {heartbeat.cron_expr}</Tag>
           )}
           {heartbeat.last_decision && <Tag>{heartbeat.last_decision}</Tag>}
         </div>
@@ -2633,66 +2682,18 @@ function NewTaskModal({ onClose, onSubmit, initialData, mode = "create" }) {
     onSubmit(data);
   };
 
-  const inputStyle: CSSProperties = {
-    width: "100%",
-    padding: "10px 14px",
-    borderRadius: 8,
-    border: `1px solid ${theme.border}`,
-    background: theme.bg,
-    color: theme.text,
-    fontSize: 13,
-    outline: "none",
-    boxSizing: "border-box",
-    fontFamily: "'JetBrains Mono', 'SF Mono', monospace",
-    transition: "border-color 0.2s",
-  };
-
-  const labelStyle = {
-    fontSize: 11,
-    fontWeight: 600,
-    color: theme.textMuted,
-    letterSpacing: 0.8,
-    textTransform: "uppercase",
-    marginBottom: 6,
-    display: "block",
-  };
+  const inputStyle = uiField();
+  const labelStyle = uiLabel();
 
   return (
     <div
       style={{
-        position: "fixed",
-        inset: 0,
-        background: "rgba(0,0,0,0.7)",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        zIndex: 1000,
-        backdropFilter: "blur(8px)",
+        ...modalOverlay(),
       }}
       onClick={onClose}
     >
-      <div
-        onClick={(e) => e.stopPropagation()}
-        style={{
-          background: theme.surface,
-          border: `1px solid ${theme.border}`,
-          borderRadius: 16,
-          padding: 32,
-          width: 520,
-          maxHeight: "80vh",
-          overflow: "auto",
-          boxShadow: "0 24px 80px rgba(0,0,0,0.5)",
-        }}
-      >
-        <h2
-          style={{
-            margin: "0 0 24px",
-            fontSize: 18,
-            fontWeight: 700,
-            color: theme.text,
-            fontFamily: "'JetBrains Mono', monospace",
-          }}
-        >
+      <div onClick={(e) => e.stopPropagation()} style={modalPanel(520, "82vh")}>
+        <h2 style={modalTitle()}>
           {mode === "edit" ? "Edit Task" : mode === "fork" ? "Fork Task" : "New Task"}
         </h2>
 
@@ -2813,16 +2814,11 @@ function NewTaskModal({ onClose, onSubmit, initialData, mode = "create" }) {
                     if (dir) set("working_dir", dir);
                   }}
                   style={{
-                    padding: "8px 14px",
-                    borderRadius: 8,
+                    ...secondaryButton(),
+                    padding: "0 13px",
+                    height: 37,
                     cursor: "pointer",
-                    border: `1px solid ${theme.border}`,
-                    background: theme.bg,
-                    color: theme.textMuted,
-                    fontSize: 12,
-                    fontWeight: 600,
                     whiteSpace: "nowrap",
-                    transition: "all 0.15s",
                   }}
                 >
                   Browse
@@ -2838,28 +2834,15 @@ function NewTaskModal({ onClose, onSubmit, initialData, mode = "create" }) {
                 <button
                   key={t}
                   onClick={() => set("schedule_type", t)}
-                  style={{
-                    flex: 1,
-                    padding: "8px 12px",
-                    borderRadius: 8,
-                    cursor: "pointer",
-                    border: `1px solid ${form.schedule_type === t ? theme.accent : theme.border}`,
-                    background: form.schedule_type === t ? theme.accentGlow : "transparent",
-                    color: form.schedule_type === t ? theme.accent : theme.textMuted,
-                    fontSize: 12,
-                    fontWeight: 600,
-                    textTransform: "capitalize",
-                    transition: "all 0.15s",
-                    minWidth: 100,
-                  }}
+                  style={segmentedButton(form.schedule_type === t)}
                 >
                   {t === "immediate"
-                    ? "⚡ Immediate"
+                    ? "Immediate"
                     : t === "delayed"
-                      ? "⏳ Delayed"
+                      ? "Delayed"
                       : t === "scheduled_at"
-                        ? "📅 At Time"
-                        : "⏲ Cron"}
+                        ? "At Time"
+                        : "Cron"}
                 </button>
               ))}
             </div>
@@ -3012,11 +2995,11 @@ function NewTaskModal({ onClose, onSubmit, initialData, mode = "create" }) {
                 padding: "5px 12px",
                 borderRadius: 6,
                 border: `1px dashed ${theme.border}`,
-                background: "transparent",
+                background: theme.surface,
                 color: theme.textMuted,
                 cursor: "pointer",
                 fontSize: 11,
-                fontWeight: 600,
+                fontWeight: 650,
               }}
             >
               + Add dependency
@@ -3050,35 +3033,10 @@ function NewTaskModal({ onClose, onSubmit, initialData, mode = "create" }) {
         </div>
 
         <div style={{ display: "flex", gap: 10, marginTop: 28, justifyContent: "flex-end" }}>
-          <button
-            onClick={onClose}
-            style={{
-              padding: "10px 20px",
-              borderRadius: 8,
-              border: `1px solid ${theme.border}`,
-              background: "transparent",
-              color: theme.textMuted,
-              cursor: "pointer",
-              fontSize: 13,
-              fontWeight: 600,
-            }}
-          >
+          <button onClick={onClose} style={secondaryButton()}>
             Cancel
           </button>
-          <button
-            onClick={handleSubmit}
-            style={{
-              padding: "10px 24px",
-              borderRadius: 8,
-              border: "none",
-              background: theme.accent,
-              color: "#fff",
-              cursor: "pointer",
-              fontSize: 13,
-              fontWeight: 600,
-              boxShadow: `0 0 20px ${theme.accentGlow}`,
-            }}
-          >
+          <button onClick={handleSubmit} style={primaryButton()}>
             {mode === "edit" ? "Save Changes" : mode === "fork" ? "Create Fork" : "Create Task"}
           </button>
         </div>
@@ -3943,27 +3901,8 @@ function SettingsModal({
     }
   };
 
-  const fieldStyle: CSSProperties = {
-    width: "100%",
-    padding: "10px 14px",
-    borderRadius: 8,
-    border: `1px solid ${theme.border}`,
-    background: theme.bg,
-    color: theme.text,
-    fontSize: 13,
-    outline: "none",
-    boxSizing: "border-box",
-    fontFamily: "'JetBrains Mono', 'SF Mono', monospace",
-  };
-  const labelStyle = {
-    fontSize: 11,
-    fontWeight: 600,
-    color: theme.textMuted,
-    letterSpacing: 0.8,
-    textTransform: "uppercase",
-    marginBottom: 8,
-    display: "block",
-  };
+  const fieldStyle = uiField();
+  const labelStyle = uiLabel();
   const hintStyle = { fontSize: 10, color: theme.textDim, marginTop: 4 };
 
   const tabs = ["general", "channels", "feishu"];
@@ -3972,50 +3911,23 @@ function SettingsModal({
   return (
     <div
       style={{
-        position: "fixed",
-        inset: 0,
-        background: "rgba(0,0,0,0.7)",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        zIndex: 1000,
-        backdropFilter: "blur(8px)",
+        ...modalOverlay(),
       }}
       onClick={onClose}
     >
-      <div
-        onClick={(e) => e.stopPropagation()}
-        style={{
-          background: theme.surface,
-          border: `1px solid ${theme.border}`,
-          borderRadius: 16,
-          padding: 32,
-          width: 480,
-          maxHeight: "85vh",
-          overflowY: "auto",
-          boxShadow: "0 24px 80px rgba(0,0,0,0.5)",
-        }}
-      >
-        <h2
-          style={{
-            margin: "0 0 20px",
-            fontSize: 18,
-            fontWeight: 700,
-            color: theme.text,
-            fontFamily: "'JetBrains Mono', monospace",
-          }}
-        >
-          Settings
-        </h2>
+      <div onClick={(e) => e.stopPropagation()} style={modalPanel(520, "85vh")}>
+        <h2 style={modalTitle()}>Settings</h2>
 
         {/* Tab bar */}
         <div
           style={{
             display: "flex",
-            gap: 4,
-            marginBottom: 24,
-            borderBottom: `1px solid ${theme.border}`,
-            paddingBottom: 0,
+            gap: 3,
+            marginBottom: 20,
+            padding: 2,
+            border: `1px solid ${theme.border}`,
+            borderRadius: 7,
+            background: theme.field,
           }}
         >
           {tabs.map((t) => (
@@ -4023,16 +3935,14 @@ function SettingsModal({
               key={t}
               onClick={() => setTab(t)}
               style={{
-                padding: "7px 16px",
-                borderRadius: "8px 8px 0 0",
+                padding: "7px 12px",
+                borderRadius: 5,
                 border: "none",
                 cursor: "pointer",
                 fontSize: 12,
-                fontWeight: 600,
-                background: tab === t ? theme.bg : "transparent",
+                fontWeight: 650,
+                background: tab === t ? theme.surface : "transparent",
                 color: tab === t ? theme.text : theme.textMuted,
-                borderBottom: tab === t ? `2px solid ${theme.accent}` : "2px solid transparent",
-                marginBottom: -1,
               }}
             >
               {tabLabel[t]}
@@ -4130,35 +4040,10 @@ function SettingsModal({
             )}
 
             <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
-              <button
-                onClick={onClose}
-                style={{
-                  padding: "10px 20px",
-                  borderRadius: 8,
-                  border: `1px solid ${theme.border}`,
-                  background: "transparent",
-                  color: theme.textMuted,
-                  cursor: "pointer",
-                  fontSize: 13,
-                  fontWeight: 600,
-                }}
-              >
+              <button onClick={onClose} style={secondaryButton()}>
                 Cancel
               </button>
-              <button
-                onClick={handleSaveGeneral}
-                style={{
-                  padding: "10px 24px",
-                  borderRadius: 8,
-                  border: "none",
-                  background: theme.accent,
-                  color: "#fff",
-                  cursor: "pointer",
-                  fontSize: 13,
-                  fontWeight: 600,
-                  boxShadow: `0 0 20px ${theme.accentGlow}`,
-                }}
-              >
+              <button onClick={handleSaveGeneral} style={primaryButton()}>
                 Save
               </button>
             </div>
@@ -5774,7 +5659,7 @@ function SkillsView({
   );
 
   return (
-    <div style={{ padding: 24, minHeight: "calc(100vh - 148px)" }}>
+    <div style={{ padding: 20, minHeight: "calc(100vh - 148px)" }}>
       <div
         style={{
           marginBottom: 18,
@@ -5938,7 +5823,7 @@ export default function App() {
     const deadline = Date.now() + 20000;
     const probe = async () => {
       try {
-        const res = await fetch(`${API}/health`, { signal: AbortSignal.timeout(800) });
+        const res = await fetchWithTimeout(`${API}/health`, 800);
         if (res.ok) {
           if (!cancelled) setBackendReady(true);
           return;
@@ -6330,7 +6215,6 @@ export default function App() {
         minHeight: "100vh",
         background: theme.bg,
         backgroundImage: theme.boardBg,
-        backgroundSize: "100% 100%, 100% 100%, 100% 100%",
         color: theme.text,
         fontFamily: APP_FONT_STACK,
       }}
@@ -6383,31 +6267,31 @@ export default function App() {
       <div
         style={{
           borderBottom: `1px solid ${theme.headerBorder}`,
-          padding: "14px 24px 16px",
-          backdropFilter: "blur(10px)",
+          padding: "12px 20px",
+          backdropFilter: "blur(16px)",
           position: "sticky",
           top: 0,
           zIndex: 100,
           background: theme.headerBg,
-          boxShadow: theme.shadowSoft,
           animation: "deckIn 0.25s ease",
         }}
       >
         <div
+          className="app-topbar"
           style={{
             display: "flex",
             alignItems: "center",
             justifyContent: "space-between",
-            gap: 18,
+            gap: 14,
           }}
         >
-          <div style={{ display: "flex", alignItems: "center", gap: 13, minWidth: 245 }}>
-            <BrandMark size={42} />
+          <div style={{ display: "flex", alignItems: "center", gap: 11, minWidth: 218 }}>
+            <BrandMark size={34} />
             <div>
               <div
                 style={{
-                  fontSize: 21,
-                  fontWeight: 900,
+                  fontSize: 17,
+                  fontWeight: 780,
                   fontFamily: DISPLAY_FONT_STACK,
                   letterSpacing: 0,
                   lineHeight: 1,
@@ -6415,7 +6299,7 @@ export default function App() {
               >
                 AgentForge
               </div>
-              <div style={{ fontSize: 11, color: theme.textDim, marginTop: 5, fontWeight: 700 }}>
+              <div style={{ fontSize: 11, color: theme.textDim, marginTop: 4, fontWeight: 650 }}>
                 Agent orchestration board
               </div>
             </div>
@@ -6439,15 +6323,15 @@ export default function App() {
             />
           </div>
 
-          <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
+          <div className="app-toolbar" style={{ display: "flex", alignItems: "center", gap: 8 }}>
             <div
               style={{
                 display: "flex",
-                background: theme.panelRaised,
+                background: theme.surface,
                 border: `1px solid ${theme.border}`,
-                borderRadius: 8,
-                padding: 3,
-                gap: 3,
+                borderRadius: 7,
+                padding: 2,
+                gap: 2,
               }}
             >
               {[
@@ -6459,14 +6343,14 @@ export default function App() {
                   key={tab.key}
                   onClick={() => setActiveView(tab.key)}
                   style={{
-                    padding: "7px 10px",
-                    borderRadius: 6,
+                    padding: "6px 9px",
+                    borderRadius: 5,
                     border: "none",
-                    background: activeView === tab.key ? theme.accent : "transparent",
-                    color: activeView === tab.key ? theme.brandInk : theme.textMuted,
+                    background: activeView === tab.key ? theme.field : "transparent",
+                    color: activeView === tab.key ? theme.text : theme.textMuted,
                     cursor: "pointer",
                     fontSize: 12,
-                    fontWeight: 900,
+                    fontWeight: 720,
                     display: "flex",
                     alignItems: "center",
                     gap: 6,
@@ -6484,11 +6368,11 @@ export default function App() {
                 display: "flex",
                 alignItems: "center",
                 gap: 8,
-                padding: "0 10px",
-                height: 34,
-                borderRadius: 8,
+                padding: "0 9px",
+                height: 32,
+                borderRadius: 7,
                 border: `1px solid ${theme.border}`,
-                background: theme.panelRaised,
+                background: theme.surface,
               }}
             >
               <Search
@@ -6507,7 +6391,7 @@ export default function App() {
                   color: theme.text,
                   fontSize: 12,
                   outline: "none",
-                  width: 164,
+                  width: 152,
                   fontFamily: APP_FONT_STACK,
                 }}
               />
@@ -6538,19 +6422,18 @@ export default function App() {
                 onClick={handleSweep}
                 disabled={!!skillData.sweep?.running}
                 style={{
-                  height: 34,
-                  padding: "0 14px",
-                  borderRadius: 8,
+                  height: 32,
+                  padding: "0 12px",
+                  borderRadius: 6,
                   border: `1px solid ${skillData.sweep?.running ? theme.border : theme.accent}`,
-                  background: skillData.sweep?.running ? theme.border : theme.accent,
+                  background: skillData.sweep?.running ? theme.field : theme.accent,
                   color: skillData.sweep?.running ? theme.textMuted : theme.brandInk,
                   cursor: skillData.sweep?.running ? "default" : "pointer",
                   fontSize: 12,
-                  fontWeight: 900,
+                  fontWeight: 720,
                   display: "flex",
                   alignItems: "center",
                   gap: 7,
-                  boxShadow: skillData.sweep?.running ? "none" : `0 0 24px ${theme.accentGlow}`,
                   transition: "transform 0.15s ease, box-shadow 0.15s ease",
                 }}
               >
@@ -6563,19 +6446,18 @@ export default function App() {
                   activeView === "tasks" ? setShowNew(true) : setShowNewHeartbeat(true)
                 }
                 style={{
-                  height: 34,
-                  padding: "0 14px",
-                  borderRadius: 8,
+                  height: 32,
+                  padding: "0 12px",
+                  borderRadius: 6,
                   border: `1px solid ${theme.accent}`,
                   background: theme.accent,
                   color: theme.brandInk,
                   cursor: "pointer",
                   fontSize: 12,
-                  fontWeight: 900,
+                  fontWeight: 720,
                   display: "flex",
                   alignItems: "center",
                   gap: 7,
-                  boxShadow: `0 0 24px ${theme.accentGlow}`,
                   transition: "transform 0.15s ease, box-shadow 0.15s ease",
                 }}
               >
@@ -6586,7 +6468,7 @@ export default function App() {
           </div>
         </div>
 
-        <div style={{ display: "flex", gap: 10, marginTop: 14, overflowX: "auto" }}>
+        <div style={{ display: "flex", gap: 8, marginTop: 10, overflowX: "auto" }}>
           {activeSummary.metrics.map((metric) => (
             <MetricTile
               key={metric.label}
@@ -6601,15 +6483,16 @@ export default function App() {
       {activeView === "tasks" ? (
         <div
           style={{
-            padding: 24,
+            padding: "20px",
             minHeight: "calc(100vh - 148px)",
           }}
         >
           <div
+            className="board-grid"
             style={{
               display: "grid",
               gridTemplateColumns: "repeat(3, minmax(0, 1fr))",
-              gap: 16,
+              gap: 12,
               alignItems: "start",
             }}
           >
@@ -6625,12 +6508,12 @@ export default function App() {
           </div>
         </div>
       ) : activeView === "heartbeats" ? (
-        <div style={{ padding: 28, minHeight: "calc(100vh - 148px)" }}>
+        <div style={{ padding: 20, minHeight: "calc(100vh - 148px)" }}>
           <div
             style={{
               display: "grid",
               gridTemplateColumns: "repeat(auto-fit, minmax(360px, 1fr))",
-              gap: 14,
+              gap: 12,
             }}
           >
             {(filter

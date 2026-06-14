@@ -9,9 +9,11 @@ import os from "node:os";
 import path from "node:path";
 
 import {
+  InboundMessageType,
   makeOutboundMessage,
   MessageBus,
   OutboundMessageType,
+  type InboundMessage,
 } from "../src/bus.ts";
 import { _hooks as dirHooks } from "../src/channels/dir_utils.ts";
 import {
@@ -32,6 +34,32 @@ class StubDB implements WeixinTaskDB {
   updated: Array<[number, Row]> = [];
   runs: unknown = [];
   events: unknown = [];
+  runbooks: Row[] = [
+    {
+      name: "看-pr",
+      aliases: [],
+      description: "看 PR",
+      source_type: "template",
+      source_id: null,
+      command_schema: { args: ["url"] },
+      prompt_template: "Review this pull request:\n{{raw_args}}",
+      default_agent: null,
+      confirmation_policy: "auto",
+      enabled: true,
+    },
+    {
+      name: "检查发布",
+      aliases: [],
+      description: "检查发布",
+      source_type: "template",
+      source_id: null,
+      command_schema: { args: [] },
+      prompt_template: "检查发布风险",
+      default_agent: null,
+      confirmation_policy: "required",
+      enabled: true,
+    },
+  ];
 
   get_task(task_id: number): Row | null {
     return this.tasks.get(task_id) ?? null;
@@ -60,14 +88,69 @@ class StubDB implements WeixinTaskDB {
   get_run_output_events(_run_id: number, _limit?: number): unknown {
     return this.events;
   }
+
+  get_im_runbooks(enabled_only: boolean = false): Row[] {
+    return enabled_only
+      ? this.runbooks.filter((runbook) => runbook["enabled"] !== false)
+      : this.runbooks;
+  }
 }
 
 class StubScheduler implements WeixinScheduler {
   submitted: Task[] = [];
+  inbound: InboundMessage[] = [];
+  nextBriefId = 1;
 
   submit_task(task: Task): number {
     this.submitted.push(task);
     return this.submitted.length;
+  }
+
+  handle_inbound_message(msg: InboundMessage): Row {
+    this.inbound.push(msg);
+    if (msg.type === InboundMessageType.CREATE_BRIEF) {
+      return { brief_id: this.nextBriefId++, status: "draft" };
+    }
+    if (msg.type === InboundMessageType.CONFIRM_BRIEF) {
+      return { task_id: this.submitted.length + 1, status: "created" };
+    }
+    if (msg.type === InboundMessageType.DISCARD_BRIEF) {
+      return { brief_id: msg.payload["brief_id"], status: "discarded" };
+    }
+    if (msg.type === InboundMessageType.RUN_RUNBOOK) {
+      if (msg.payload["name"] === "检查发布") {
+        return {
+          brief_id: this.nextBriefId++,
+          runbook: msg.payload["name"],
+          status: "draft",
+        };
+      }
+      return {
+        runbook: msg.payload["name"],
+        status: "created",
+        task_id: this.submitted.length + 1,
+      };
+    }
+    if (msg.type === InboundMessageType.SKILL_SUGGESTION_ACTION) {
+      const action = String(msg.payload["action"]);
+      if (action === "show") {
+        return {
+          pattern_id: msg.payload["pattern_id"],
+          status: "ready",
+          text: "Skill suggestion: fix-ci-investigation\n\nDraft preview:\n# Fix CI",
+        };
+      }
+      return {
+        pattern_id: msg.payload["pattern_id"],
+        status:
+          action === "draft"
+            ? "drafting"
+            : action === "approve"
+              ? "approved"
+              : "dismissed",
+      };
+    }
+    return { status: "ignored" };
   }
 }
 
@@ -589,6 +672,171 @@ describe("Weixin inbound messages", () => {
     expect(replies[0]).not.toContain("Task #");
     expect(replies[1]).not.toContain("Task #");
     expect(replies[1]).not.toContain("▶️");
+  });
+
+  test("brief command is not the draft entrypoint", async () => {
+    const proc = fakeBridgeProcess();
+    const { channel, db, scheduler } = makeChannel();
+    channel._running = true;
+    channel._bridge_proc = proc;
+    db.settings["default_agent"] = "codex";
+
+    await withResolvedDir("/tmp/repo", async () => {
+      await channel._handle_message_event({
+        text: "/brief fix the login redirect",
+        account_id: "acct",
+        peer_id: "peer",
+        context_token: "ctx",
+        message_id: "msg-brief",
+      });
+    });
+
+    expect(scheduler.submitted).toHaveLength(1);
+    expect(scheduler.submitted[0]!.prompt).toBe(
+      "/brief fix the login redirect",
+    );
+    expect(scheduler.inbound).toHaveLength(0);
+    expect(channel._get_peer_current_task("acct:peer")).toBe(1);
+  });
+
+  test("confirm and discard brief commands use text fallback", async () => {
+    const proc = fakeBridgeProcess();
+    const { channel, bus, scheduler } = makeChannel();
+    channel._running = true;
+    channel._bridge_proc = proc;
+
+    await channel._handle_message_event({
+      text: "/run-draft 4",
+      account_id: "acct",
+      peer_id: "peer",
+      context_token: "ctx",
+      message_id: "msg-confirm",
+    });
+
+    expect(scheduler.inbound[0]!.type).toBe(InboundMessageType.CONFIRM_BRIEF);
+    expect(scheduler.inbound[0]!.payload["brief_id"]).toBe(4);
+    expect(channel._task_origin.get(1)).toEqual({
+      account_id: "acct",
+      peer_id: "peer",
+      context_token: "ctx",
+      message_id: "msg-confirm",
+    });
+    expect(channel._get_peer_current_task("acct:peer")).toBe(1);
+    expect(bus.get_task_source(1)).toBe("weixin");
+    expect(writtenCommands(proc).at(-1)!["text"]).toContain("Task #1");
+
+    await channel._handle_message_event({
+      text: "/cancel-draft #4",
+      account_id: "acct",
+      peer_id: "peer",
+      context_token: "ctx",
+      message_id: "msg-discard",
+    });
+
+    expect(scheduler.inbound[1]!.type).toBe(InboundMessageType.DISCARD_BRIEF);
+    expect(scheduler.inbound[1]!.payload["brief_id"]).toBe(4);
+    expect(writtenCommands(proc).at(-1)!["text"]).toContain("discarded");
+  });
+
+  test("runbook commands use text fallback", async () => {
+    const proc = fakeBridgeProcess();
+    const { channel, bus, scheduler } = makeChannel();
+    channel._running = true;
+    channel._bridge_proc = proc;
+
+    await withResolvedDir("/tmp/repo", async () => {
+      await channel._handle_message_event({
+        text: "/看-pr https://github.com/acme/app/pull/42",
+        account_id: "acct",
+        peer_id: "peer",
+        context_token: "ctx",
+        message_id: "msg-runbook",
+      });
+    });
+
+    expect(scheduler.inbound[0]!.type).toBe(InboundMessageType.RUN_RUNBOOK);
+    expect(scheduler.inbound[0]!.payload["name"]).toBe("看-pr");
+    expect(scheduler.inbound[0]!.payload["raw_args"]).toBe(
+      "https://github.com/acme/app/pull/42",
+    );
+    expect(scheduler.inbound[0]!.payload["working_dir"]).toBe("/tmp/repo");
+    expect(channel._task_origin.get(1)).toEqual({
+      account_id: "acct",
+      peer_id: "peer",
+      context_token: "ctx",
+      message_id: "msg-runbook",
+    });
+    expect(channel._get_peer_current_task("acct:peer")).toBe(1);
+    expect(bus.get_task_source(1)).toBe("weixin");
+    expect(writtenCommands(proc).at(-1)!["text"]).toContain("Command /看-pr");
+    expect(writtenCommands(proc).at(-1)!["text"]).toContain("Task #1");
+
+    await channel._handle_message_event({
+      text: "/检查发布",
+      account_id: "acct",
+      peer_id: "peer",
+      context_token: "ctx",
+      message_id: "msg-release",
+    });
+
+    expect(scheduler.inbound[1]!.type).toBe(InboundMessageType.RUN_RUNBOOK);
+    expect(scheduler.inbound[1]!.payload["name"]).toBe("检查发布");
+    expect(writtenCommands(proc).at(-1)!["text"]).toContain("Draft task #1");
+    expect(writtenCommands(proc).at(-1)!["text"]).toContain("/run-draft 1");
+  });
+
+  test("skill suggestion commands use text fallback", async () => {
+    const proc = fakeBridgeProcess();
+    const { channel, scheduler } = makeChannel();
+    channel._running = true;
+    channel._bridge_proc = proc;
+
+    await channel._handle_message_event({
+      text: "/draft-skill 4",
+      account_id: "acct",
+      peer_id: "peer",
+      context_token: "ctx",
+      message_id: "msg-draft-skill",
+    });
+
+    expect(scheduler.inbound[0]!.type).toBe(
+      InboundMessageType.SKILL_SUGGESTION_ACTION,
+    );
+    expect(scheduler.inbound[0]!.payload["action"]).toBe("draft");
+    expect(scheduler.inbound[0]!.payload["pattern_id"]).toBe(4);
+    expect(scheduler.inbound[0]!.payload["source_channel"]).toBe("weixin");
+    expect(scheduler.inbound[0]!.payload["target"]).toBe("peer");
+    expect(writtenCommands(proc).at(-1)!["text"]).toContain("Skill draft");
+
+    await channel._handle_message_event({
+      text: "/show-skill #4",
+      account_id: "acct",
+      peer_id: "peer",
+      context_token: "ctx",
+      message_id: "msg-show-skill",
+    });
+    expect(scheduler.inbound[1]!.payload["action"]).toBe("show");
+    expect(writtenCommands(proc).at(-1)!["text"]).toContain("Draft preview");
+
+    await channel._handle_message_event({
+      text: "/approve-skill 4",
+      account_id: "acct",
+      peer_id: "peer",
+      context_token: "ctx",
+      message_id: "msg-approve-skill",
+    });
+    expect(scheduler.inbound[2]!.payload["action"]).toBe("approve");
+    expect(writtenCommands(proc).at(-1)!["text"]).toContain("approved");
+
+    await channel._handle_message_event({
+      text: "/dismiss-skill 4",
+      account_id: "acct",
+      peer_id: "peer",
+      context_token: "ctx",
+      message_id: "msg-dismiss-skill",
+    });
+    expect(scheduler.inbound[3]!.payload["action"]).toBe("dismiss");
+    expect(writtenCommands(proc).at(-1)!["text"]).toContain("dismissed");
   });
 
   test("room-session resume survives channel restart", async () => {

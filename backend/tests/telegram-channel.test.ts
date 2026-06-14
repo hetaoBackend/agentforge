@@ -14,9 +14,11 @@ import os from "node:os";
 import path from "node:path";
 
 import {
+  InboundMessageType,
   MessageBus,
   makeOutboundMessage,
   OutboundMessageType,
+  type InboundMessage,
 } from "../src/bus.ts";
 import { _hooks } from "../src/channels/dir_utils.ts";
 import {
@@ -39,6 +41,32 @@ class StubDB {
   updated: Array<[number, Record<string, unknown>]> = [];
   runs: unknown = [];
   events: unknown = [];
+  runbooks: Record<string, unknown>[] = [
+    {
+      name: "看-pr",
+      aliases: [],
+      description: "看 PR",
+      source_type: "template",
+      source_id: null,
+      command_schema: { args: ["url"] },
+      prompt_template: "Review this pull request:\n{{raw_args}}",
+      default_agent: null,
+      confirmation_policy: "auto",
+      enabled: true,
+    },
+    {
+      name: "检查发布",
+      aliases: [],
+      description: "检查发布",
+      source_type: "template",
+      source_id: null,
+      command_schema: { args: [] },
+      prompt_template: "检查发布风险",
+      default_agent: null,
+      confirmation_policy: "required",
+      enabled: true,
+    },
+  ];
 
   get_setting(key: string, defaultValue: string | null = null): string | null {
     return this.settings.get(key) ?? defaultValue;
@@ -66,14 +94,69 @@ class StubDB {
   get_run_output_events(_run_id: number, _limit?: number): unknown {
     return this.events;
   }
+
+  get_im_runbooks(enabled_only: boolean = false): Record<string, unknown>[] {
+    return enabled_only
+      ? this.runbooks.filter((runbook) => runbook["enabled"] !== false)
+      : this.runbooks;
+  }
 }
 
 class StubScheduler {
   submitted: Task[] = [];
+  inbound: InboundMessage[] = [];
+  nextBriefId = 1;
 
   submit_task(task: Task): number {
     this.submitted.push(task);
     return this.submitted.length;
+  }
+
+  handle_inbound_message(msg: InboundMessage): Record<string, unknown> {
+    this.inbound.push(msg);
+    if (msg.type === InboundMessageType.CREATE_BRIEF) {
+      return { brief_id: this.nextBriefId++, status: "draft" };
+    }
+    if (msg.type === InboundMessageType.CONFIRM_BRIEF) {
+      return { task_id: this.submitted.length + 1, status: "created" };
+    }
+    if (msg.type === InboundMessageType.DISCARD_BRIEF) {
+      return { brief_id: msg.payload["brief_id"], status: "discarded" };
+    }
+    if (msg.type === InboundMessageType.RUN_RUNBOOK) {
+      if (msg.payload["name"] === "检查发布") {
+        return {
+          brief_id: this.nextBriefId++,
+          runbook: msg.payload["name"],
+          status: "draft",
+        };
+      }
+      return {
+        runbook: msg.payload["name"],
+        status: "created",
+        task_id: this.submitted.length + 1,
+      };
+    }
+    if (msg.type === InboundMessageType.SKILL_SUGGESTION_ACTION) {
+      const action = String(msg.payload["action"]);
+      if (action === "show") {
+        return {
+          pattern_id: msg.payload["pattern_id"],
+          status: "ready",
+          text: "Skill suggestion: fix-ci-investigation\n\nDraft preview:\n# Fix CI",
+        };
+      }
+      return {
+        pattern_id: msg.payload["pattern_id"],
+        status:
+          action === "draft"
+            ? "drafting"
+            : action === "approve"
+              ? "approved"
+              : "dismissed",
+      };
+    }
+    return { status: "ignored" };
   }
 }
 
@@ -95,6 +178,9 @@ class FakeApi {
     if (err) throw err;
     if (this.results.has(method)) return this.results.get(method);
     if (method === "getUpdates") return [];
+    if (method === "sendMessage") {
+      return { message_id: 1000 + this.calls.length };
+    }
     return null;
   };
 
@@ -418,6 +504,150 @@ test("test_handle_text_message_creates_task", async () => {
   expect(api.callsFor("sendMessage").length).toBe(0);
 });
 
+test("test_brief_command_is_not_the_draft_entrypoint", async () => {
+  const { channel, api, db, scheduler } = _make_channel();
+  _hooks.extract_working_dir_with_claude = async () => "~/repo";
+  db.settings.set("default_agent", "codex");
+
+  await channel._handle_text_message(
+    _fake_update({
+      text: "/brief fix the login redirect",
+      chat_id: 10,
+      message_id: 222,
+      user_id: 7,
+    }),
+    _ctx(),
+  );
+
+  expect(scheduler.submitted).toHaveLength(1);
+  expect(scheduler.submitted[0]!.prompt).toBe("/brief fix the login redirect");
+  expect(db.updated).toEqual([]);
+  expect(scheduler.inbound).toHaveLength(0);
+  expect(api.callsFor("sendMessage")).toHaveLength(0);
+});
+
+test("test_confirm_and_discard_brief_commands_use_text_fallback", async () => {
+  const { channel, api, scheduler } = _make_channel();
+
+  await channel._handle_text_message(
+    _fake_update({
+      text: "/run-draft 4",
+      chat_id: 10,
+      message_id: 333,
+      user_id: 7,
+    }),
+    _ctx(),
+  );
+
+  expect(scheduler.inbound[0]!.type).toBe(InboundMessageType.CONFIRM_BRIEF);
+  expect(scheduler.inbound[0]!.payload["brief_id"]).toBe(4);
+  expect(channel._task_origin.get(1)).toEqual([10, 333, 333]);
+  expect(channel._get_chat_current_task(10)).toBe(1);
+  expect(channel.bus.get_task_source(1)).toBe("telegram");
+  expect(api.lastText()).toContain("Task #1");
+  expect(api.lastText()).toContain("Thinking");
+
+  await channel._handle_text_message(
+    _fake_update({
+      text: "/cancel-draft #4",
+      chat_id: 10,
+      message_id: 334,
+      user_id: 7,
+    }),
+    _ctx(),
+  );
+
+  expect(scheduler.inbound[1]!.type).toBe(InboundMessageType.DISCARD_BRIEF);
+  expect(scheduler.inbound[1]!.payload["brief_id"]).toBe(4);
+  expect(api.lastText()).toContain("discarded");
+});
+
+test("test_runbook_commands_use_text_fallback", async () => {
+  const { channel, api, scheduler } = _make_channel();
+  _hooks.extract_working_dir_with_claude = async () => "~/repo";
+
+  await channel._handle_text_message(
+    _fake_update({
+      text: "/看-pr https://github.com/acme/app/pull/42",
+      chat_id: 10,
+      message_id: 335,
+      user_id: 7,
+    }),
+    _ctx(),
+  );
+
+  expect(scheduler.inbound[0]!.type).toBe(InboundMessageType.RUN_RUNBOOK);
+  expect(scheduler.inbound[0]!.payload["name"]).toBe("看-pr");
+  expect(scheduler.inbound[0]!.payload["raw_args"]).toBe(
+    "https://github.com/acme/app/pull/42",
+  );
+  expect(scheduler.inbound[0]!.payload["working_dir"]).toBe("~/repo");
+  expect(channel._task_origin.get(1)).toEqual([10, 335, 335]);
+  expect(channel._get_chat_current_task(10)).toBe(1);
+  expect(channel.bus.get_task_source(1)).toBe("telegram");
+  expect(api.lastText()).toContain("Command /看-pr");
+  expect(api.lastText()).toContain("Task #1");
+
+  await channel._handle_text_message(
+    _fake_update({
+      text: "/检查发布",
+      chat_id: 10,
+      message_id: 336,
+      user_id: 7,
+    }),
+    _ctx(),
+  );
+
+  expect(scheduler.inbound[1]!.type).toBe(InboundMessageType.RUN_RUNBOOK);
+  expect(scheduler.inbound[1]!.payload["name"]).toBe("检查发布");
+  expect(api.lastText()).toContain("Draft task #1");
+  expect(api.lastText()).toContain("/run-draft 1");
+});
+
+test("test_skill_suggestion_commands_use_text_fallback", async () => {
+  const { channel, api, scheduler } = _make_channel();
+
+  await channel._handle_text_message(
+    _fake_update({
+      text: "/draft-skill 4",
+      chat_id: 10,
+      message_id: 337,
+      user_id: 7,
+    }),
+    _ctx(),
+  );
+
+  expect(scheduler.inbound[0]!.type).toBe(
+    InboundMessageType.SKILL_SUGGESTION_ACTION,
+  );
+  expect(scheduler.inbound[0]!.payload["action"]).toBe("draft");
+  expect(scheduler.inbound[0]!.payload["pattern_id"]).toBe(4);
+  expect(scheduler.inbound[0]!.payload["source_channel"]).toBe("telegram");
+  expect(scheduler.inbound[0]!.payload["target"]).toBe("10");
+  expect(api.lastText()).toContain("Skill draft");
+
+  await channel._handle_text_message(
+    _fake_update({ text: "/show-skill #4", chat_id: 10, message_id: 338 }),
+    _ctx(),
+  );
+  expect(scheduler.inbound[1]!.payload["action"]).toBe("show");
+  expect(api.lastText()).toContain("Draft preview");
+
+  await channel._handle_text_message(
+    _fake_update({ text: "/approve-skill 4", chat_id: 10, message_id: 339 }),
+    _ctx(),
+  );
+  expect(scheduler.inbound[2]!.payload["action"]).toBe("approve");
+  expect(api.lastText()).toContain("approved");
+
+  await channel._handle_text_message(
+    _fake_update({ text: "/dismiss-skill 4", chat_id: 10, message_id: 340 }),
+    _ctx(),
+  );
+  expect(scheduler.inbound[3]!.payload["action"]).toBe("dismiss");
+  expect(api.lastText()).toContain("dismissed");
+});
+
 test("test_handle_text_message_resumes_current_chat_session", async () => {
   const { channel, api, db, scheduler } = _make_channel();
 
@@ -555,10 +785,13 @@ test("test_cmd_help_authorised_and_not", async () => {
   const { channel, api } = _make_channel({ allowed_users: [1] });
   const ok = _fake_update({ user_id: 1 });
   await channel._cmd_help(ok, _ctx());
-  expect(api.lastText()).not.toContain("task");
   expect(api.lastText()).toContain("/new");
   expect(api.lastText()).not.toContain("\\.");
   expect(api.lastText()).toContain("current session");
+  expect(api.lastText()).toContain("/看报错");
+  expect(api.lastText()).toContain("custom command");
+  expect(api.lastText()).toContain("/run-draft");
+  expect(api.lastText()).toContain("/cancel-draft");
   expect(api.callsFor("sendMessage").length).toBe(1);
   expect(api.callsFor("sendMessage")[0]!.params).not.toHaveProperty(
     "parse_mode",
@@ -877,7 +1110,6 @@ test("test_send_truncates_long_result", async () => {
   const { channel, api } = _make_channel();
   _patch_loop(channel);
   channel._task_origin.set(10, [10, 100, 100]);
-  api.results.set("sendMessage", { message_id: 3 });
   const long = "x".repeat(20000);
 
   await channel.send(
@@ -888,7 +1120,9 @@ test("test_send_truncates_long_result", async () => {
     }),
   );
 
-  expect(api.lastText()).toContain("(truncated)");
+  const sends = api.callsFor("sendMessage");
+  expect(sends.length).toBe(1);
+  expect(String(sends[0]!.params["text"])).toContain("truncated");
 });
 
 // ── lifecycle ────────────────────────────────────────────────────

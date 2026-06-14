@@ -8,6 +8,7 @@ import { TaskDB } from "../src/db.ts";
 import { TaskScheduler } from "../src/scheduler.ts";
 import { handleApiRequest, type ApiContext } from "../src/api.ts";
 import { FeishuChannel } from "../src/channels/feishu.ts";
+import { makeTask } from "../src/types.ts";
 
 describe("api handler", () => {
   let tmpDir: string;
@@ -39,6 +40,52 @@ describe("api handler", () => {
   async function json(req: Request): Promise<any> {
     const res = await handleApiRequest(ctx, req);
     return (await res.json()) as Record<string, any>;
+  }
+
+  function createSkillCandidate(channel: string = "slack"): number {
+    const taskId = db.add_task(
+      makeTask({
+        title: "Fix frontend CI",
+        prompt: "Investigate the failed build.",
+        tags: `runbook,fix-ci,${channel}`,
+      }),
+    );
+    const patternId = db.upsert_skill_pattern(
+      "fix-ci-investigation",
+      "recipe",
+      "Investigate a failed CI run and patch the minimal issue.",
+      taskId,
+      100,
+    )!;
+    db.upsert_skill_pattern(
+      "fix-ci-investigation",
+      "recipe",
+      "Investigate a failed CI run and patch the minimal issue.",
+      taskId,
+      101,
+    );
+    db.upsert_skill_pattern(
+      "fix-ci-investigation",
+      "recipe",
+      "Investigate a failed CI run and patch the minimal issue.",
+      taskId,
+      102,
+    );
+    db.set_skill_pattern_status(patternId, "candidate");
+    return patternId;
+  }
+
+  function createReadySkillDraft(): number {
+    const patternId = createSkillCandidate();
+    db.upsert_skill_draft(
+      patternId,
+      "ready",
+      "fix-ci-investigation",
+      "Reusable CI investigation workflow.",
+      "recipe",
+      "---\nname: fix-ci-investigation\ndescription: Reusable CI investigation workflow.\n---\n# Fix CI\n",
+    );
+    return patternId;
   }
 
   test("GET /api/health returns ok and task count", async () => {
@@ -118,6 +165,396 @@ describe("api handler", () => {
       new Request(`http://127.0.0.1:9712/api/tasks/${taskId}/output`),
     );
     expect(output).toEqual({ output: "raw output", is_running: false });
+  });
+
+  test("task brief API creates lists updates reads and discards drafts", async () => {
+    const createdRes = await handleApiRequest(
+      ctx,
+      new Request("http://127.0.0.1:9712/api/task-briefs", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title: "Fix auth",
+          goal: "Fix login redirect",
+          context_summary: "Forwarded QA report",
+          acceptance_criteria: ["Identify cause", "Patch minimal code"],
+          working_dir: ".",
+          working_dir_confidence: "high",
+          agent: "codex",
+          source_channel: "telegram",
+          source_ref: "chat-1:msg-2",
+          source_metadata: { chat_id: "chat-1" },
+        }),
+      }),
+    );
+    expect(createdRes.status).toBe(201);
+    const created = (await createdRes.json()) as Record<string, any>;
+    const id = Number(created["id"]);
+    expect(created["status"]).toBe("draft");
+
+    const listed = await json(
+      new Request("http://127.0.0.1:9712/api/task-briefs"),
+    );
+    expect(listed["briefs"]).toHaveLength(1);
+    expect(listed["briefs"][0]["source_metadata"]).toEqual({
+      chat_id: "chat-1",
+    });
+
+    const loaded = await json(
+      new Request(`http://127.0.0.1:9712/api/task-briefs/${id}`),
+    );
+    expect(loaded["title"]).toBe("Fix auth");
+    expect(loaded["acceptance_criteria"]).toEqual([
+      "Identify cause",
+      "Patch minimal code",
+    ]);
+
+    const patched = await handleApiRequest(
+      ctx,
+      new Request(`http://127.0.0.1:9712/api/task-briefs/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title: "Fix auth v2",
+          acceptance_criteria: ["Patch", "Test"],
+        }),
+      }),
+    );
+    expect(patched.status).toBe(200);
+    const patchedBody = (await patched.json()) as Record<string, any>;
+    expect(patchedBody["title"]).toBe("Fix auth v2");
+    expect(patchedBody["acceptance_criteria"]).toEqual(["Patch", "Test"]);
+
+    const discarded = await handleApiRequest(
+      ctx,
+      new Request(`http://127.0.0.1:9712/api/task-briefs/${id}/discard`, {
+        method: "POST",
+      }),
+    );
+    expect(discarded.status).toBe(200);
+    const discardedBody = (await discarded.json()) as Record<string, any>;
+    expect(discardedBody["status"]).toBe("discarded");
+  });
+
+  test("confirming a task brief creates a normal task", async () => {
+    const created = await json(
+      new Request("http://127.0.0.1:9712/api/task-briefs", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title: "Fix auth",
+          goal: "Fix login redirect",
+          context_summary: "Forwarded QA report",
+          acceptance_criteria: ["Identify cause", "Patch minimal code"],
+          working_dir: ".",
+          working_dir_confidence: "high",
+          agent: "codex",
+          source_channel: "telegram",
+          source_ref: "chat-1:msg-2",
+          source_metadata: { chat_id: "chat-1" },
+        }),
+      }),
+    );
+
+    const confirmedRes = await handleApiRequest(
+      ctx,
+      new Request(
+        `http://127.0.0.1:9712/api/task-briefs/${created["id"]}/confirm`,
+        { method: "POST" },
+      ),
+    );
+    expect(confirmedRes.status).toBe(201);
+    const confirmed = (await confirmedRes.json()) as Record<string, any>;
+    expect(confirmed["status"]).toBe("created");
+
+    const task = db.get_task(Number(confirmed["task_id"]))!;
+    expect(task["title"]).toContain("Fix auth");
+    expect(task["working_dir"]).toBe(".");
+    expect(task["agent"]).toBe("codex");
+    expect(task["tags"]).toContain("im-inbox");
+    expect(task["tags"]).toContain("telegram");
+    expect(task["prompt"]).toContain("Goal:");
+    expect(task["prompt"]).toContain("Fix login redirect");
+    expect(task["prompt"]).toContain("Context:");
+    expect(task["prompt"]).toContain("Forwarded QA report");
+    expect(task["prompt"]).toContain("Acceptance criteria:");
+    expect(task["prompt"]).toContain("1. Identify cause");
+
+    const brief = db.get_task_brief(Number(created["id"]))!;
+    expect(brief["status"]).toBe("converted");
+    expect(brief["created_task_id"]).toBe(Number(confirmed["task_id"]));
+  });
+
+  test("IM runbook API starts empty and supports user command CRUD", async () => {
+    const initial = await json(
+      new Request("http://127.0.0.1:9712/api/im-runbooks"),
+    );
+    expect(initial["runbooks"]).toEqual([]);
+
+    const createdRes = await handleApiRequest(
+      ctx,
+      new Request("http://127.0.0.1:9712/api/im-runbooks", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: "看报错",
+          aliases: ["issue-triage"],
+          description: "分析报错",
+          command_schema: { args: ["内容"] },
+          prompt_template: "分析这段报错：{{raw_args}}",
+          default_agent: "codex",
+          confirmation_policy: "required",
+          enabled: true,
+        }),
+      }),
+    );
+    expect(createdRes.status).toBe(201);
+    const created = (await createdRes.json()) as Record<string, any>;
+    expect(created["name"]).toBe("看报错");
+    expect(created["aliases"]).toEqual(["issue-triage"]);
+
+    const patchedRes = await handleApiRequest(
+      ctx,
+      new Request(`http://127.0.0.1:9712/api/im-runbooks/${created["id"]}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          description: "分析线上报错",
+          enabled: false,
+        }),
+      }),
+    );
+    expect(patchedRes.status).toBe(200);
+    const patched = (await patchedRes.json()) as Record<string, any>;
+    expect(patched["description"]).toBe("分析线上报错");
+    expect(patched["enabled"]).toBe(false);
+
+    const deleted = await handleApiRequest(
+      ctx,
+      new Request(`http://127.0.0.1:9712/api/im-runbooks/${created["id"]}`, {
+        method: "DELETE",
+      }),
+    );
+    expect(deleted.status).toBe(200);
+    expect(await deleted.json()).toEqual({ status: "deleted" });
+    expect(db.get_im_runbook(Number(created["id"]))).toBeNull();
+  });
+
+  test("IM runbook API creates a custom command from a previous task", async () => {
+    const taskId = db.add_task(
+      makeTask({
+        title: "整理客户反馈",
+        prompt: "请把下面的客户反馈整理成产品需求、风险和下一步行动。",
+        result: "done",
+        status: "completed",
+        working_dir: "~/agentforge",
+        agent: "codex",
+      }),
+    );
+
+    const createdRes = await handleApiRequest(
+      ctx,
+      new Request("http://127.0.0.1:9712/api/im-runbooks/from-task", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          task_id: taskId,
+          name: "整理反馈",
+          description: "把客户反馈整理成行动项",
+          confirmation_policy: "auto",
+        }),
+      }),
+    );
+
+    expect(createdRes.status).toBe(201);
+    const created = (await createdRes.json()) as Record<string, any>;
+    expect(created["name"]).toBe("整理反馈");
+    expect(created["source_type"]).toBe("task");
+    expect(created["source_id"]).toBe(String(taskId));
+    expect(created["prompt_template"]).toContain(
+      "请把下面的客户反馈整理成产品需求、风险和下一步行动。",
+    );
+    expect(created["prompt_template"]).toContain("{{raw_args}}");
+    expect(created["default_agent"]).toBe("codex");
+    expect(created["confirmation_policy"]).toBe("auto");
+  });
+
+  test("IM runbook API previews a user runbook as a task brief", async () => {
+    const created = await json(
+      new Request("http://127.0.0.1:9712/api/im-runbooks", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: "triage-issue",
+          description: "Triage an issue",
+          prompt_template: "Triage this issue: {{raw_args}}",
+          confirmation_policy: "required",
+        }),
+      }),
+    );
+    expect(created["id"]).toBeTruthy();
+
+    const previewRes = await handleApiRequest(
+      ctx,
+      new Request(
+        "http://127.0.0.1:9712/api/im-runbooks/triage-issue/preview",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            raw_args: "https://github.com/acme/app/issues/12",
+            source_channel: "api",
+            source_ref: "api:test",
+            working_dir: ".",
+          }),
+        },
+      ),
+    );
+    expect(previewRes.status).toBe(201);
+    const preview = (await previewRes.json()) as Record<string, any>;
+    expect(preview).toEqual({
+      brief_id: 1,
+      runbook: "triage-issue",
+      status: "draft",
+    });
+    expect(db.get_task_brief(1)!["goal"]).toContain(
+      "https://github.com/acme/app/issues/12",
+    );
+    expect(db.get_all_tasks()).toHaveLength(0);
+  });
+
+  test("IM runbook API only runs user-created commands", async () => {
+    const missing = await handleApiRequest(
+      ctx,
+      new Request("http://127.0.0.1:9712/api/im-runbooks/review-pr/run", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          raw_args: "https://github.com/acme/app/pull/42",
+          source_channel: "api",
+          source_ref: "api:test",
+          working_dir: ".",
+          agent: "codex",
+        }),
+      }),
+    );
+    expect(missing.status).toBe(400);
+    expect(await missing.json()).toEqual({
+      error: "Unknown command: review-pr",
+    });
+
+    await json(
+      new Request("http://127.0.0.1:9712/api/im-runbooks", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: "看-pr",
+          description: "Review a pull request",
+          prompt_template: "Review this pull request:\n{{raw_args}}",
+          confirmation_policy: "auto",
+        }),
+      }),
+    );
+
+    const runRes = await handleApiRequest(
+      ctx,
+      new Request("http://127.0.0.1:9712/api/im-runbooks/%E7%9C%8B-pr/run", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          raw_args: "https://github.com/acme/app/pull/42",
+          source_channel: "api",
+          source_ref: "api:test",
+          working_dir: ".",
+          agent: "codex",
+        }),
+      }),
+    );
+    expect(runRes.status).toBe(201);
+    const run = (await runRes.json()) as Record<string, any>;
+    expect(run).toEqual({
+      runbook: "看-pr",
+      status: "created",
+      task_id: 1,
+    });
+    expect(db.get_task(1)!["prompt"]).toContain(
+      "https://github.com/acme/app/pull/42",
+    );
+  });
+
+  test("IM digest API previews recent activity", async () => {
+    db.add_task(
+      makeTask({
+        title: "Ship auth fix",
+        prompt: "fix auth",
+        status: "completed",
+      }),
+    );
+
+    const previewRes = await handleApiRequest(
+      ctx,
+      new Request("http://127.0.0.1:9712/api/im-digests/preview", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ include_empty: false }),
+      }),
+    );
+
+    expect(previewRes.status).toBe(200);
+    const preview = (await previewRes.json()) as Record<string, any>;
+    expect(preview["status"]).toBe("ready");
+    expect(preview["text"]).toContain("AgentForge Standup");
+    expect(preview["text"]).toContain("Ship auth fix");
+    expect(preview["digest"]["sections"][0]["key"]).toBe("completed");
+  });
+
+  test("IM digest API sends to explicit Slack recipients", async () => {
+    db.add_task(
+      makeTask({
+        title: "Ship auth fix",
+        prompt: "fix auth",
+        status: "completed",
+      }),
+    );
+    const reply = mock(async () => undefined);
+    ctx.slack_channel = { _reply: reply } as any;
+
+    const sendRes = await handleApiRequest(
+      ctx,
+      new Request("http://127.0.0.1:9712/api/im-digests/send", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          recipients: [{ channel: "slack", target: "C1" }],
+        }),
+      }),
+    );
+
+    expect(sendRes.status).toBe(200);
+    const sent = (await sendRes.json()) as Record<string, any>;
+    expect(sent["status"]).toBe("sent");
+    expect(sent["sent"]).toBe(1);
+    expect(reply).toHaveBeenCalledWith(
+      "C1",
+      null,
+      expect.stringContaining("Ship auth fix"),
+    );
+  });
+
+  test("IM digest API returns conflict when send has no recipients", async () => {
+    const sendRes = await handleApiRequest(
+      ctx,
+      new Request("http://127.0.0.1:9712/api/im-digests/send", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ include_empty: true }),
+      }),
+    );
+
+    expect(sendRes.status).toBe(409);
+    expect(await sendRes.json()).toEqual({
+      error: "no digest recipients configured",
+    });
   });
 
   test("POST /api/feishu/settings restarts the Feishu channel", async () => {
@@ -377,6 +814,18 @@ describe("api handler", () => {
     db.set_setting("skill_library_enabled", "1");
     db.set_setting("skill_sweep_agent", "claude");
     db.set_setting("skill_sweep_cron", "5 4 * * *");
+    db.set_setting("im_digest_enabled", "1");
+    db.set_setting("im_digest_cron", "0 8 * * 1-5");
+    db.set_setting(
+      "im_digest_channels",
+      JSON.stringify([{ channel: "slack", target: "C1" }]),
+    );
+    db.set_setting("im_attention_digest_minutes", "15");
+    db.set_setting("im_skill_suggestions_enabled", "1");
+    db.set_setting(
+      "im_skill_suggestion_channels",
+      JSON.stringify([{ channel: "slack", target: "C2" }]),
+    );
     db.set_setting("telegram_enabled", "true");
     db.set_setting("telegram_bot_token", "tg-secret");
     db.set_setting("telegram_allowed_users", "42");
@@ -408,6 +857,12 @@ describe("api handler", () => {
       skill_library_enabled: true,
       skill_sweep_agent: "claude",
       skill_sweep_cron: "5 4 * * *",
+      im_digest_enabled: true,
+      im_digest_cron: "0 8 * * 1-5",
+      im_digest_channels: [{ channel: "slack", target: "C1" }],
+      im_attention_digest_minutes: 15,
+      im_skill_suggestions_enabled: true,
+      im_skill_suggestion_channels: [{ channel: "slack", target: "C2" }],
     });
 
     const status = await json(
@@ -967,6 +1422,98 @@ describe("api handler", () => {
     );
     expect(deleted.status).toBe(200);
     expect(db.get_skill(skillId)).toBeNull();
+  });
+
+  test("IM skill suggestion API previews sends and gates approval", async () => {
+    const patternId = createReadySkillDraft();
+    const preview = await json(
+      new Request("http://127.0.0.1:9712/api/im-skill-suggestions/preview", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ channel: "slack" }),
+      }),
+    );
+    expect(preview.suggestions).toHaveLength(1);
+    expect(preview.suggestions[0].pattern_id).toBe(patternId);
+    expect(preview.texts[0]).toContain("/draft-skill");
+
+    const reply = mock(
+      async (_channel: string, _thread: string | null, _text: string) => {},
+    );
+    ctx.slack_channel = { _reply: reply } as any;
+    const sent = await json(
+      new Request("http://127.0.0.1:9712/api/im-skill-suggestions/send", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          recipients: [{ channel: "slack", target: "C1" }],
+        }),
+      }),
+    );
+    expect(sent.status).toBe("sent");
+    expect(sent.sent).toBe(1);
+    expect(reply.mock.calls[0]![0]).toBe("C1");
+    expect(db.should_send_im_skill_suggestion(patternId, "slack", "C1")).toBe(
+      false,
+    );
+
+    const blocked = await handleApiRequest(
+      ctx,
+      new Request(
+        `http://127.0.0.1:9712/api/im-skill-suggestions/${patternId}/action`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            action: "approve",
+            source_channel: "slack",
+            target: "C1",
+          }),
+        },
+      ),
+    );
+    expect(blocked.status).toBe(400);
+    expect(await blocked.json()).toEqual({
+      error: "draft must be shown before approval",
+    });
+
+    const shown = await json(
+      new Request(
+        `http://127.0.0.1:9712/api/im-skill-suggestions/${patternId}/action`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            action: "show",
+            source_channel: "slack",
+            target: "C1",
+          }),
+        },
+      ),
+    );
+    expect(shown.status).toBe("ready");
+    expect(shown.text).toContain("# Fix CI");
+
+    (scheduler as any).approve_skill = mock(() => ({ id: 9, name: "ok" }));
+    const approved = await json(
+      new Request(
+        `http://127.0.0.1:9712/api/im-skill-suggestions/${patternId}/action`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            action: "approve",
+            source_channel: "slack",
+            target: "C1",
+          }),
+        },
+      ),
+    );
+    expect(approved).toEqual({
+      pattern_id: patternId,
+      skill: { id: 9, name: "ok" },
+      status: "approved",
+    });
   });
 
   test("settings, skill workflow, and delete error routes cover edge cases", async () => {

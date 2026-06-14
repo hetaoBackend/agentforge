@@ -3,18 +3,34 @@ import fs from "node:fs";
 import os from "node:os";
 import { CronExpressionParser } from "cron-parser";
 
-import { MessageBus } from "./bus.ts";
+import { InboundMessageType, MessageBus, makeInboundMessage } from "./bus.ts";
+import {
+  parse_im_digest_recipients,
+  type IMDigestRecipient,
+} from "./digests.ts";
+import {
+  collect_im_skill_suggestions,
+  render_im_skill_suggestion_text,
+} from "./skill_suggestions.ts";
 import type { TaskDB } from "./db.ts";
 import type { TaskScheduler } from "./scheduler.ts";
+import { runbook_from_row, type RunbookDefinition } from "./runbooks.ts";
 import {
   DEFAULT_AGENT,
   DEFAULT_TIMEOUT_SECONDS,
   HeartbeatScheduleType,
+  RunbookConfirmationPolicy,
+  RunbookSourceType,
   ScheduleType,
+  TaskBriefStatus,
   makeHeartbeat,
+  makeIMRunbook,
   makeTask,
+  makeTaskBrief,
   type Heartbeat,
+  type IMRunbook,
   type Task,
+  type TaskBrief,
 } from "./types.ts";
 import { dateToLocalIso } from "./util.ts";
 import { FeishuChannel } from "./channels/feishu.ts";
@@ -50,7 +66,7 @@ function isAllowedOrigin(origin: string): boolean {
 
 function corsHeaders(origin: string): Headers {
   const headers = new Headers({
-    "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
+    "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
     "Access-Control-Allow-Headers": "Content-Type, X-CSRF-Token",
   });
   if (isAllowedOrigin(origin)) {
@@ -118,6 +134,16 @@ function asString(value: unknown, fallback = ""): string {
   return String(value);
 }
 
+function slugifyCommandName(value: string): string {
+  const compact = value.trim().replace(/\s+/g, "-").replace(/^\/+/, "");
+  const ascii = compact
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "");
+  return ascii || compact || "custom-command";
+}
+
 function parseJsonList(value: unknown): any[] {
   if (Array.isArray(value)) return value;
   if (typeof value === "string") {
@@ -129,6 +155,29 @@ function parseJsonList(value: unknown): any[] {
     }
   }
   return [];
+}
+
+function asStringList(value: unknown): string[] {
+  return parseJsonList(value)
+    .map((item) => String(item).trim())
+    .filter(Boolean);
+}
+
+function parseJsonObject(value: unknown): Row {
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    return value as Row;
+  }
+  if (typeof value === "string") {
+    try {
+      const parsed = JSON.parse(value);
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        return parsed as Row;
+      }
+    } catch {
+      return {};
+    }
+  }
+  return {};
 }
 
 function cronValid(expr: string): boolean {
@@ -186,6 +235,429 @@ function attachDependencyMetadata(db: TaskDB, task: Row): Row {
     dependencies: db.get_dependencies(tid),
     dependents: db.get_dependents(tid).map((d) => d["task_id"]),
   };
+}
+
+function validateTaskBriefPayload(
+  body: Row,
+  existing: Row | null = null,
+): { brief?: TaskBrief; response?: ResponseData } {
+  const title = asString(body["title"] ?? existing?.["title"]).trim();
+  if (!title) {
+    return {
+      response: [{ error: "title cannot be empty", field: "title" }, 400],
+    };
+  }
+  const goal = asString(body["goal"] ?? existing?.["goal"]).trim();
+  if (!goal) {
+    return {
+      response: [{ error: "goal cannot be empty", field: "goal" }, 400],
+    };
+  }
+  const sourceChannel = asString(
+    body["source_channel"] ?? existing?.["source_channel"],
+  ).trim();
+  if (!sourceChannel) {
+    return {
+      response: [
+        { error: "source_channel cannot be empty", field: "source_channel" },
+        400,
+      ],
+    };
+  }
+  const sourceRef = asString(body["source_ref"] ?? existing?.["source_ref"])
+    .trim()
+    .slice(0, 1000);
+  if (!sourceRef) {
+    return {
+      response: [
+        { error: "source_ref cannot be empty", field: "source_ref" },
+        400,
+      ],
+    };
+  }
+
+  const acceptanceCriteria =
+    "acceptance_criteria" in body
+      ? asStringList(body["acceptance_criteria"])
+      : Array.isArray(existing?.["acceptance_criteria"])
+        ? existing["acceptance_criteria"].map(String)
+        : [];
+  const sourceMetadata =
+    "source_metadata" in body
+      ? parseJsonObject(body["source_metadata"])
+      : parseJsonObject(existing?.["source_metadata"] ?? {});
+
+  const workingDirRaw =
+    body["working_dir"] ?? existing?.["working_dir"] ?? null;
+  const workingDir =
+    workingDirRaw === null || workingDirRaw === undefined
+      ? null
+      : asString(workingDirRaw).trim() || null;
+
+  return {
+    brief: makeTaskBrief({
+      id: existing?.["id"] ?? null,
+      status: asString(
+        body["status"] ?? existing?.["status"] ?? TaskBriefStatus.DRAFT,
+      ) as TaskBrief["status"],
+      title,
+      goal,
+      context_summary: asString(
+        body["context_summary"] ?? existing?.["context_summary"] ?? "",
+      ),
+      acceptance_criteria: acceptanceCriteria,
+      working_dir: workingDir,
+      working_dir_confidence: asString(
+        body["working_dir_confidence"] ??
+          existing?.["working_dir_confidence"] ??
+          "unknown",
+      ),
+      agent:
+        body["agent"] === null
+          ? null
+          : asString(body["agent"] ?? existing?.["agent"] ?? "") || null,
+      risk_level: asString(
+        body["risk_level"] ?? existing?.["risk_level"] ?? "normal",
+      ),
+      needs_confirmation: asBool(
+        body["needs_confirmation"] ?? existing?.["needs_confirmation"] ?? true,
+      ),
+      source_channel: sourceChannel,
+      source_ref: sourceRef,
+      source_metadata: sourceMetadata,
+      created_task_id: existing?.["created_task_id"] ?? null,
+      created_at: existing?.["created_at"] ?? null,
+      updated_at: existing?.["updated_at"] ?? null,
+      expires_at:
+        body["expires_at"] === null
+          ? null
+          : asString(body["expires_at"] ?? existing?.["expires_at"] ?? "") ||
+            null,
+    }),
+  };
+}
+
+function validateIMRunbookPayload(
+  body: Row,
+  existing: Row | null = null,
+): { runbook?: IMRunbook; response?: ResponseData } {
+  const name = asString(body["name"] ?? existing?.["name"])
+    .trim()
+    .toLowerCase();
+  if (!name) {
+    return {
+      response: [{ error: "name cannot be empty", field: "name" }, 400],
+    };
+  }
+  if (!/^[^\s/@]+$/u.test(name)) {
+    return {
+      response: [
+        {
+          error:
+            "name must be a single slash-command word without spaces, slashes, or bot mentions",
+          field: "name",
+        },
+        400,
+      ],
+    };
+  }
+
+  const promptTemplate = asString(
+    body["prompt_template"] ?? existing?.["prompt_template"],
+  );
+  if (!promptTemplate.trim()) {
+    return {
+      response: [
+        { error: "prompt_template cannot be empty", field: "prompt_template" },
+        400,
+      ],
+    };
+  }
+
+  const sourceType = asString(
+    body["source_type"] ??
+      existing?.["source_type"] ??
+      RunbookSourceType.TEMPLATE,
+  );
+  if (!Object.values(RunbookSourceType).includes(sourceType as any)) {
+    return {
+      response: [{ error: "invalid source_type", field: "source_type" }, 400],
+    };
+  }
+
+  const confirmationPolicy = asString(
+    body["confirmation_policy"] ??
+      existing?.["confirmation_policy"] ??
+      RunbookConfirmationPolicy.REQUIRED,
+  );
+  if (
+    !Object.values(RunbookConfirmationPolicy).includes(
+      confirmationPolicy as any,
+    )
+  ) {
+    return {
+      response: [
+        {
+          error: "invalid confirmation_policy",
+          field: "confirmation_policy",
+        },
+        400,
+      ],
+    };
+  }
+
+  return {
+    runbook: makeIMRunbook({
+      id: existing?.["id"] ?? null,
+      name,
+      aliases:
+        "aliases" in body
+          ? asStringList(body["aliases"]).map((alias) => alias.toLowerCase())
+          : Array.isArray(existing?.["aliases"])
+            ? existing["aliases"].map((alias: unknown) =>
+                String(alias).toLowerCase(),
+              )
+            : [],
+      description: asString(
+        body["description"] ?? existing?.["description"] ?? "",
+      ),
+      source_type: sourceType as IMRunbook["source_type"],
+      source_id:
+        body["source_id"] === null
+          ? null
+          : asString(body["source_id"] ?? existing?.["source_id"] ?? "") ||
+            null,
+      command_schema:
+        "command_schema" in body
+          ? parseJsonObject(body["command_schema"])
+          : parseJsonObject(existing?.["command_schema"] ?? {}),
+      prompt_template: promptTemplate,
+      default_agent:
+        body["default_agent"] === null
+          ? null
+          : asString(
+              body["default_agent"] ?? existing?.["default_agent"] ?? "",
+            ) || null,
+      confirmation_policy:
+        confirmationPolicy as IMRunbook["confirmation_policy"],
+      enabled: asBool(body["enabled"] ?? existing?.["enabled"] ?? true),
+      created_at: existing?.["created_at"] ?? null,
+      updated_at: existing?.["updated_at"] ?? null,
+    }),
+  };
+}
+
+function commandFromTaskPayload(
+  ctx: ApiContext,
+  body: Row,
+): { runbook?: IMRunbook; response?: ResponseData } {
+  const taskId = Number(body["task_id"]);
+  if (!Number.isInteger(taskId) || taskId <= 0) {
+    return {
+      response: [{ error: "task_id is required", field: "task_id" }, 400],
+    };
+  }
+  const task = ctx.db.get_task(taskId);
+  if (!task) {
+    return { response: [{ error: "task not found" }, 404] };
+  }
+
+  const title = asString(task["title"] ?? "Custom command").trim();
+  const prompt = asString(task["prompt"] ?? "").trim();
+  const description =
+    asString(body["description"]).trim() ||
+    title.replace(/^\[[^\]]+\]\s*/, "") ||
+    "Custom AgentForge command";
+  const name = asString(body["name"]).trim() || slugifyCommandName(description);
+  const promptTemplate = [
+    "Repeat this AgentForge workflow with the user's latest input.",
+    "",
+    "Original task title:",
+    title,
+    "",
+    "Original task prompt:",
+    prompt || "(no prompt recorded)",
+    "",
+    "Latest input:",
+    "{{raw_args}}",
+  ].join("\n");
+
+  return validateIMRunbookPayload({
+    name,
+    aliases: body["aliases"] ?? [],
+    description,
+    source_type: RunbookSourceType.TASK,
+    source_id: String(taskId),
+    command_schema: body["command_schema"] ?? { args: [] },
+    prompt_template: promptTemplate,
+    default_agent:
+      body["default_agent"] === undefined
+        ? task["agent"]
+        : body["default_agent"],
+    confirmation_policy:
+      body["confirmation_policy"] ?? RunbookConfirmationPolicy.REQUIRED,
+    enabled: body["enabled"] ?? true,
+  });
+}
+
+function runbookResponse(runbook: RunbookDefinition, extras: Row = {}): Row {
+  return {
+    id: null,
+    name: runbook.name,
+    aliases: runbook.aliases,
+    description: runbook.description,
+    source_type: runbook.source_type,
+    source_id: runbook.source_id,
+    command_schema: runbook.command_schema,
+    prompt_template: runbook.prompt_template,
+    default_agent: runbook.default_agent,
+    confirmation_policy: runbook.confirmation_policy,
+    enabled: runbook.enabled,
+    created_at: null,
+    updated_at: null,
+    ...extras,
+  };
+}
+
+function allIMRunbooks(ctx: ApiContext): Row[] {
+  return ctx.db
+    .get_im_runbooks()
+    .map((row) => runbookResponse(runbook_from_row(row), row));
+}
+
+function digestPayload(body: Row): Row {
+  return {
+    include_empty: asBool(body["include_empty"] ?? false),
+    limit:
+      body["limit"] === undefined || body["limit"] === null
+        ? undefined
+        : Number(body["limit"]),
+    since:
+      body["since"] === undefined || body["since"] === null
+        ? null
+        : asString(body["since"]),
+  };
+}
+
+function triggerDigest(ctx: ApiContext, body: Row): Row {
+  return ctx.scheduler.handle_inbound_message(
+    makeInboundMessage({
+      type: InboundMessageType.TRIGGER_DIGEST,
+      source: "api",
+      payload: digestPayload(body),
+    }),
+  );
+}
+
+function digestRecipients(ctx: ApiContext, body: Row): IMDigestRecipient[] {
+  if ("recipients" in body) {
+    return parse_im_digest_recipients(body["recipients"]);
+  }
+  return parse_im_digest_recipients(
+    ctx.db.get_setting("im_digest_channels", "[]"),
+  );
+}
+
+function skillSuggestionRecipients(
+  ctx: ApiContext,
+  body: Row,
+): IMDigestRecipient[] {
+  if ("recipients" in body) {
+    return parse_im_digest_recipients(body["recipients"]);
+  }
+  return parse_im_digest_recipients(
+    ctx.db.get_setting("im_skill_suggestion_channels", "[]"),
+  );
+}
+
+function skillSuggestionPreview(ctx: ApiContext, body: Row): Row {
+  const channel = asString(body["channel"]).trim() || null;
+  const limit =
+    body["limit"] === undefined || body["limit"] === null
+      ? undefined
+      : Number(body["limit"]);
+  const suggestions = collect_im_skill_suggestions(ctx.db, {
+    channel,
+    limit,
+  });
+  return {
+    suggestions,
+    texts: suggestions.map((suggestion) =>
+      render_im_skill_suggestion_text(suggestion),
+    ),
+  };
+}
+
+async function sendIMDigest(
+  ctx: ApiContext,
+  recipient: IMDigestRecipient,
+  text: string,
+): Promise<void> {
+  if (recipient.channel === "slack") {
+    const channel = ctx.slack_channel as any;
+    if (!channel?._reply) throw new Error("slack channel is not running");
+    await channel._reply(recipient.target, null, text);
+    return;
+  }
+  if (recipient.channel === "feishu") {
+    const channel = ctx.feishu_channel as any;
+    if (!channel?._send_message)
+      throw new Error("feishu channel is not running");
+    await channel._send_message(recipient.target, text);
+    return;
+  }
+  if (recipient.channel === "telegram") {
+    const channel = ctx.telegram_channel as any;
+    if (!channel?._api) throw new Error("telegram channel is not running");
+    await channel._api("sendMessage", {
+      chat_id: recipient.target,
+      text,
+    });
+    return;
+  }
+  if (recipient.channel === "weixin") {
+    const channel = ctx.weixin_channel as any;
+    if (!channel?._reply_to_event)
+      throw new Error("weixin channel is not running");
+    channel._reply_to_event({ peer_id: recipient.target }, text);
+    return;
+  }
+  throw new Error(`unsupported digest channel: ${recipient.channel}`);
+}
+
+function taskPromptFromBrief(brief: Row): string {
+  const lines = ["Goal:", String(brief["goal"]).trim()];
+  const context = String(brief["context_summary"] ?? "").trim();
+  if (context) {
+    lines.push("", "Context:", context);
+  }
+  const criteria = Array.isArray(brief["acceptance_criteria"])
+    ? brief["acceptance_criteria"].map(String).filter(Boolean)
+    : [];
+  if (criteria.length) {
+    lines.push("", "Acceptance criteria:");
+    criteria.forEach((criterion, index) => {
+      lines.push(`${index + 1}. ${criterion}`);
+    });
+  }
+  return lines.join("\n");
+}
+
+function taskFromBrief(ctx: ApiContext, brief: Row): Task {
+  const sourceChannel = String(brief["source_channel"] ?? "").trim();
+  const tags = ["im-inbox", sourceChannel].filter(Boolean).join(",");
+  return makeTask({
+    title: String(brief["title"] ?? "Untitled"),
+    prompt: taskPromptFromBrief(brief),
+    working_dir: String(brief["working_dir"] || "."),
+    schedule_type: ScheduleType.IMMEDIATE,
+    tags,
+    agent: String(
+      brief["agent"] ||
+        ctx.db.get_setting("default_agent", DEFAULT_AGENT) ||
+        DEFAULT_AGENT,
+    ),
+  });
 }
 
 function taskOutputPayload(ctx: ApiContext, taskId: number): Row {
@@ -585,6 +1057,26 @@ async function handleGet(
       : jsonResponse({ error: "not found" }, 404, origin);
   }
 
+  if (path === "/api/task-briefs") {
+    const status = url.searchParams.get("status");
+    return jsonResponse(
+      { briefs: ctx.db.get_task_briefs(status || null) },
+      200,
+      origin,
+    );
+  }
+  if (path.startsWith("/api/task-briefs/")) {
+    const bid = idAt(path);
+    const brief = bid === null ? null : ctx.db.get_task_brief(bid);
+    return brief
+      ? jsonResponse(brief, 200, origin)
+      : jsonResponse({ error: "not found" }, 404, origin);
+  }
+
+  if (path === "/api/im-runbooks") {
+    return jsonResponse({ runbooks: allIMRunbooks(ctx) }, 200, origin);
+  }
+
   if (path === "/api/tasks") {
     return jsonResponse(
       ctx.db.get_all_tasks().map((t) => attachDependencyMetadata(ctx.db, t)),
@@ -695,6 +1187,20 @@ async function handleGet(
           DEFAULT_AGENT,
         ),
         skill_sweep_cron: ctx.db.get_setting("skill_sweep_cron", "0 3 * * *"),
+        im_digest_enabled: ctx.db.get_setting("im_digest_enabled", "0") === "1",
+        im_digest_cron: ctx.db.get_setting("im_digest_cron", "0 9 * * 1-5"),
+        im_digest_channels: parse_im_digest_recipients(
+          ctx.db.get_setting("im_digest_channels", "[]"),
+        ),
+        im_attention_digest_minutes: Number.parseInt(
+          ctx.db.get_setting("im_attention_digest_minutes", "20") ?? "20",
+          10,
+        ),
+        im_skill_suggestions_enabled:
+          ctx.db.get_setting("im_skill_suggestions_enabled", "0") === "1",
+        im_skill_suggestion_channels: parse_im_digest_recipients(
+          ctx.db.get_setting("im_skill_suggestion_channels", "[]"),
+        ),
       },
       200,
       origin,
@@ -790,6 +1296,278 @@ async function handlePost(
       );
     }
     return jsonResponse({ status: "resumed" }, 200, origin);
+  }
+
+  if (path === "/api/task-briefs") {
+    const validated = validateTaskBriefPayload(body);
+    if (validated.response) {
+      return jsonResponse(
+        validated.response[0],
+        validated.response[1] ?? 200,
+        origin,
+      );
+    }
+    const id = ctx.db.add_task_brief(validated.brief!);
+    return jsonResponse(ctx.db.get_task_brief(id), 201, origin);
+  }
+  if (path.startsWith("/api/task-briefs/") && path.endsWith("/confirm")) {
+    const bid = idAt(path);
+    const brief = bid === null ? null : ctx.db.get_task_brief(bid);
+    if (!brief || bid === null)
+      return jsonResponse({ error: "not found" }, 404, origin);
+    if (brief["status"] !== TaskBriefStatus.DRAFT) {
+      return jsonResponse(
+        {
+          error: `Cannot confirm draft task with status '${brief["status"]}'.`,
+        },
+        409,
+        origin,
+      );
+    }
+    const task = taskFromBrief(ctx, brief);
+    const dirError = ensureWorkingDir(
+      task.working_dir,
+      `working_dir does not exist or is not a directory: ${task.working_dir}`,
+    );
+    if (dirError) return jsonResponse(dirError, 400, origin);
+    const taskId = ctx.scheduler.submit_task(task);
+    ctx.db.confirm_task_brief(bid, taskId);
+    return jsonResponse(
+      {
+        status: "created",
+        task_id: taskId,
+        brief: ctx.db.get_task_brief(bid),
+      },
+      201,
+      origin,
+    );
+  }
+  if (path.startsWith("/api/task-briefs/") && path.endsWith("/discard")) {
+    const bid = idAt(path);
+    const brief = bid === null ? null : ctx.db.get_task_brief(bid);
+    if (!brief || bid === null)
+      return jsonResponse({ error: "not found" }, 404, origin);
+    if (brief["status"] !== TaskBriefStatus.DRAFT) {
+      return jsonResponse(
+        {
+          error: `Cannot discard draft task with status '${brief["status"]}'.`,
+        },
+        409,
+        origin,
+      );
+    }
+    ctx.db.discard_task_brief(bid);
+    return jsonResponse(ctx.db.get_task_brief(bid), 200, origin);
+  }
+
+  if (path === "/api/im-runbooks") {
+    const validated = validateIMRunbookPayload(body);
+    if (validated.response) {
+      return jsonResponse(
+        validated.response[0],
+        validated.response[1] ?? 200,
+        origin,
+      );
+    }
+    const id = ctx.db.add_im_runbook(validated.runbook!);
+    return jsonResponse(ctx.db.get_im_runbook(id), 201, origin);
+  }
+  if (path === "/api/im-runbooks/from-task") {
+    const validated = commandFromTaskPayload(ctx, body);
+    if (validated.response) {
+      return jsonResponse(
+        validated.response[0],
+        validated.response[1] ?? 200,
+        origin,
+      );
+    }
+    const id = ctx.db.add_im_runbook(validated.runbook!);
+    return jsonResponse(ctx.db.get_im_runbook(id), 201, origin);
+  }
+  {
+    const parts = path.split("/");
+    if (
+      parts.length === 5 &&
+      parts[2] === "im-runbooks" &&
+      (parts[4] === "preview" || parts[4] === "run")
+    ) {
+      const name = decodeURIComponent(parts[3] ?? "");
+      const sourceRef = asString(body["source_ref"] ?? `api:${name}`).trim();
+      try {
+        const result = ctx.scheduler.handle_inbound_message(
+          makeInboundMessage({
+            type:
+              parts[4] === "preview"
+                ? InboundMessageType.PREVIEW_RUNBOOK
+                : InboundMessageType.RUN_RUNBOOK,
+            source: "api",
+            payload: {
+              ...body,
+              name,
+              raw_args: asString(body["raw_args"] ?? ""),
+              source_channel:
+                asString(body["source_channel"] ?? "api").trim() || "api",
+              source_ref: sourceRef || `api:${name}`,
+            },
+            metadata: { source_ref: sourceRef || `api:${name}` },
+          }),
+        );
+        return jsonResponse(result, 201, origin);
+      } catch (e) {
+        return jsonResponse(
+          { error: e instanceof Error ? e.message : String(e) },
+          400,
+          origin,
+        );
+      }
+    }
+  }
+
+  if (path === "/api/im-digests/preview") {
+    return jsonResponse(triggerDigest(ctx, body), 200, origin);
+  }
+  if (path === "/api/im-digests/send") {
+    const recipients = digestRecipients(ctx, body);
+    if (!recipients.length) {
+      return jsonResponse(
+        { error: "no digest recipients configured" },
+        409,
+        origin,
+      );
+    }
+    const result = triggerDigest(ctx, body);
+    if (result["status"] === "quiet") {
+      return jsonResponse(result, 200, origin);
+    }
+    const text = asString(result["text"]);
+    try {
+      for (const recipient of recipients) {
+        await sendIMDigest(ctx, recipient, text);
+      }
+    } catch (e) {
+      return jsonResponse(
+        { error: e instanceof Error ? e.message : String(e) },
+        409,
+        origin,
+      );
+    }
+    return jsonResponse(
+      {
+        status: "sent",
+        sent: recipients.length,
+        digest: result["digest"],
+      },
+      200,
+      origin,
+    );
+  }
+
+  if (path === "/api/im-skill-suggestions/preview") {
+    return jsonResponse(skillSuggestionPreview(ctx, body), 200, origin);
+  }
+  if (path === "/api/im-skill-suggestions/send") {
+    const recipients = skillSuggestionRecipients(ctx, body);
+    if (!recipients.length) {
+      return jsonResponse(
+        { error: "no skill suggestion recipients configured" },
+        409,
+        origin,
+      );
+    }
+    const includeSent = Boolean(body["include_sent"] ?? false);
+    const sentSuggestions: Row[] = [];
+    try {
+      for (const recipient of recipients) {
+        const suggestions = collect_im_skill_suggestions(ctx.db, {
+          channel: recipient.channel,
+          limit:
+            body["limit"] === undefined || body["limit"] === null
+              ? undefined
+              : Number(body["limit"]),
+        });
+        for (const suggestion of suggestions) {
+          if (
+            !includeSent &&
+            !ctx.db.should_send_im_skill_suggestion(
+              suggestion.pattern_id,
+              recipient.channel,
+              recipient.target,
+            )
+          ) {
+            continue;
+          }
+          await sendIMDigest(
+            ctx,
+            recipient,
+            render_im_skill_suggestion_text(suggestion),
+          );
+          ctx.db.upsert_im_skill_suggestion({
+            pattern_id: suggestion.pattern_id,
+            channel: recipient.channel,
+            target: recipient.target,
+            status: "suggested",
+          });
+          sentSuggestions.push({
+            pattern_id: suggestion.pattern_id,
+            channel: recipient.channel,
+            target: recipient.target,
+          });
+        }
+      }
+    } catch (e) {
+      return jsonResponse(
+        { error: e instanceof Error ? e.message : String(e) },
+        409,
+        origin,
+      );
+    }
+    return jsonResponse(
+      {
+        status: "sent",
+        sent: sentSuggestions.length,
+        suggestions: sentSuggestions,
+      },
+      200,
+      origin,
+    );
+  }
+  if (
+    path.startsWith("/api/im-skill-suggestions/") &&
+    path.endsWith("/action")
+  ) {
+    const patternId = idAt(path);
+    if (patternId === null) {
+      return jsonResponse({ error: "pattern not found" }, 404, origin);
+    }
+    try {
+      const result = ctx.scheduler.handle_inbound_message(
+        makeInboundMessage({
+          type: InboundMessageType.SKILL_SUGGESTION_ACTION,
+          source: "api",
+          reply_to:
+            body["target"] === undefined || body["target"] === null
+              ? null
+              : String(body["target"]),
+          payload: {
+            ...body,
+            pattern_id: patternId,
+            source_channel:
+              asString(
+                body["source_channel"] ?? body["channel"] ?? "api",
+              ).trim() || "api",
+            target: asString(body["target"] ?? ""),
+          },
+        }),
+      );
+      return jsonResponse(result, 200, origin);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      return jsonResponse(
+        { error: msg },
+        msg.includes("not found") ? 404 : 400,
+        origin,
+      );
+    }
   }
 
   if (path === "/api/skills/sweep") {
@@ -1118,6 +1896,75 @@ async function handlePut(
       ctx.db.set_setting(key, String(value));
     return jsonResponse({ status: "updated" }, 200, origin);
   }
+  if (path.startsWith("/api/task-briefs/") && path.split("/").length === 4) {
+    const bid = idAt(path);
+    const existing = bid === null ? null : ctx.db.get_task_brief(bid);
+    if (!existing || bid === null)
+      return jsonResponse({ error: "not found" }, 404, origin);
+    if (existing["status"] !== TaskBriefStatus.DRAFT) {
+      return jsonResponse(
+        {
+          error: `Cannot edit draft task with status '${existing["status"]}'.`,
+        },
+        409,
+        origin,
+      );
+    }
+    const validated = validateTaskBriefPayload(body, existing);
+    if (validated.response) {
+      return jsonResponse(
+        validated.response[0],
+        validated.response[1] ?? 200,
+        origin,
+      );
+    }
+    const brief = validated.brief!;
+    ctx.db.update_task_brief(bid, {
+      title: brief.title,
+      goal: brief.goal,
+      context_summary: brief.context_summary,
+      acceptance_criteria: brief.acceptance_criteria,
+      working_dir: brief.working_dir,
+      working_dir_confidence: brief.working_dir_confidence,
+      agent: brief.agent,
+      risk_level: brief.risk_level,
+      needs_confirmation: brief.needs_confirmation,
+      source_channel: brief.source_channel,
+      source_ref: brief.source_ref,
+      source_metadata: brief.source_metadata,
+      expires_at: brief.expires_at,
+    });
+    return jsonResponse(ctx.db.get_task_brief(bid), 200, origin);
+  }
+  if (path.startsWith("/api/im-runbooks/") && path.split("/").length === 4) {
+    const rid = idAt(path);
+    if (rid === null)
+      return jsonResponse({ error: "invalid runbook id" }, 400, origin);
+    const existing = ctx.db.get_im_runbook(rid);
+    if (!existing) return jsonResponse({ error: "not found" }, 404, origin);
+    const validated = validateIMRunbookPayload(body, existing);
+    if (validated.response) {
+      return jsonResponse(
+        validated.response[0],
+        validated.response[1] ?? 200,
+        origin,
+      );
+    }
+    const runbook = validated.runbook!;
+    ctx.db.update_im_runbook(rid, {
+      name: runbook.name,
+      aliases: runbook.aliases,
+      description: runbook.description,
+      source_type: runbook.source_type,
+      source_id: runbook.source_id,
+      command_schema: runbook.command_schema,
+      prompt_template: runbook.prompt_template,
+      default_agent: runbook.default_agent,
+      confirmation_policy: runbook.confirmation_policy,
+      enabled: runbook.enabled,
+    });
+    return jsonResponse(ctx.db.get_im_runbook(rid), 200, origin);
+  }
   if (path.startsWith("/api/skills/")) {
     const sid = idAt(path);
     if (sid === null)
@@ -1325,6 +2172,13 @@ async function handleDelete(
     if (hid !== null) ctx.db.delete_heartbeat(hid);
     return jsonResponse({ status: "deleted" }, 200, origin);
   }
+  if (path.startsWith("/api/im-runbooks/")) {
+    const rid = idAt(path);
+    if (rid === null)
+      return jsonResponse({ error: "invalid runbook id" }, 400, origin);
+    ctx.db.delete_im_runbook(rid);
+    return jsonResponse({ status: "deleted" }, 200, origin);
+  }
   if (path.startsWith("/api/skills/")) {
     const sid = idAt(path);
     if (sid === null)
@@ -1363,7 +2217,18 @@ export async function handleApiRequest(
   if (!url.pathname.startsWith("/api/")) {
     return jsonResponse({ error: "not found" }, 404, origin);
   }
-  if (["POST", "PUT", "DELETE"].includes(req.method) && !checkCsrf(req)) {
+  if (
+    req.method === "PATCH" &&
+    !url.pathname.startsWith("/api/task-briefs/") &&
+    !url.pathname.startsWith("/api/im-runbooks/")
+  ) {
+    void req.body?.cancel();
+    return jsonResponse({ error: "method not allowed" }, 405, origin);
+  }
+  if (
+    ["POST", "PUT", "PATCH", "DELETE"].includes(req.method) &&
+    !checkCsrf(req)
+  ) {
     void req.body?.cancel();
     return jsonResponse(
       { error: "CSRF token missing or invalid" },
@@ -1375,7 +2240,8 @@ export async function handleApiRequest(
   try {
     if (req.method === "GET") return await handleGet(ctx, req, url, origin);
     if (req.method === "POST") return await handlePost(ctx, req, url, origin);
-    if (req.method === "PUT") return await handlePut(ctx, req, url, origin);
+    if (req.method === "PUT" || req.method === "PATCH")
+      return await handlePut(ctx, req, url, origin);
     if (req.method === "DELETE") return await handleDelete(ctx, url, origin);
     return jsonResponse({ error: "method not allowed" }, 405, origin);
   } catch (e) {
