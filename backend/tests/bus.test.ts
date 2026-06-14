@@ -126,6 +126,19 @@ test("test_message_bus_round_trips_runbook_inbound_messages", async () => {
   expect((await bus.get_inbound())!.type).toBe("run_runbook");
 });
 
+test("test_message_bus_round_trips_digest_inbound_messages", async () => {
+  const bus = new MessageBus();
+  const channel = new RecordingChannel(bus, new StubDB());
+
+  const digest = channel._make_inbound(InboundMessageType.TRIGGER_DIGEST, {
+    include_empty: true,
+  });
+
+  bus.publish_inbound(digest);
+
+  expect((await bus.get_inbound())!.type).toBe("trigger_digest");
+});
+
 test("test_message_bus_returns_none_when_queue_is_empty", async () => {
   const bus = new MessageBus();
 

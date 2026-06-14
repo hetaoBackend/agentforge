@@ -30,6 +30,7 @@ import {
   type PopenLike,
 } from "./executor.ts";
 import { logger } from "./log.ts";
+import { compose_im_digest, render_im_digest_text } from "./digests.ts";
 import {
   RunbookConfirmationPolicy,
   expand_runbook,
@@ -284,6 +285,9 @@ export class TaskScheduler extends BusAwareSchedulerMixin {
     if (msg.type === InboundMessageType.RUN_RUNBOOK) {
       return this._handle_run_runbook(msg);
     }
+    if (msg.type === InboundMessageType.TRIGGER_DIGEST) {
+      return this._handle_trigger_digest(msg);
+    }
     return { status: "ignored" };
   }
 
@@ -455,6 +459,29 @@ export class TaskScheduler extends BusAwareSchedulerMixin {
       brief_id,
       runbook: expansion.runbook.name,
       status: TaskBriefStatus.DRAFT,
+    };
+  }
+
+  _handle_trigger_digest(msg: InboundMessage): Row {
+    const payload = msg.payload;
+    const digest = compose_im_digest(this.db, {
+      include_empty: Boolean(payload["include_empty"] ?? false),
+      limit:
+        payload["limit"] === undefined
+          ? undefined
+          : Number(payload["limit"]),
+      since:
+        payload["since"] === null || payload["since"] === undefined
+          ? null
+          : String(payload["since"]),
+    });
+    if (!digest.has_content) {
+      return { status: "quiet", digest };
+    }
+    return {
+      status: "ready",
+      digest,
+      text: render_im_digest_text(digest),
     };
   }
 
