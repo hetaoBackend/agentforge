@@ -102,6 +102,30 @@ test("test_message_bus_round_trips_task_brief_inbound_messages", async () => {
   expect((await bus.get_inbound())!.type).toBe("discard_brief");
 });
 
+test("test_message_bus_round_trips_runbook_inbound_messages", async () => {
+  const bus = new MessageBus();
+  const channel = new RecordingChannel(bus, new StubDB());
+
+  const preview = channel._make_inbound(InboundMessageType.PREVIEW_RUNBOOK, {
+    name: "release-check",
+    raw_args: "",
+    source_channel: "slack",
+    source_ref: "C1:1.0",
+  });
+  const run = channel._make_inbound(InboundMessageType.RUN_RUNBOOK, {
+    name: "review-pr",
+    raw_args: "https://github.com/acme/app/pull/42",
+    source_channel: "slack",
+    source_ref: "C1:1.0",
+  });
+
+  bus.publish_inbound(preview);
+  bus.publish_inbound(run);
+
+  expect((await bus.get_inbound())!.type).toBe("preview_runbook");
+  expect((await bus.get_inbound())!.type).toBe("run_runbook");
+});
+
 test("test_message_bus_returns_none_when_queue_is_empty", async () => {
   const bus = new MessageBus();
 

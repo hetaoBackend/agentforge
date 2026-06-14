@@ -34,6 +34,8 @@ export const InboundMessageType = {
   CREATE_BRIEF: "create_brief", // create a draft task brief
   CONFIRM_BRIEF: "confirm_brief", // convert a draft brief into a task
   DISCARD_BRIEF: "discard_brief", // discard a draft brief
+  PREVIEW_RUNBOOK: "preview_runbook", // create a draft preview from an IM runbook
+  RUN_RUNBOOK: "run_runbook", // run an IM runbook or create a confirmation draft
 } as const;
 export type InboundMessageType =
   (typeof InboundMessageType)[keyof typeof InboundMessageType];
@@ -71,6 +73,8 @@ function utcNowIso(): string {
  *   CREATE_BRIEF -> {"title", "goal", "source_channel", "source_ref", ...}
  *   CONFIRM_BRIEF -> {"brief_id"}
  *   DISCARD_BRIEF -> {"brief_id"}
+ *   PREVIEW_RUNBOOK -> {"name", "raw_args", "source_channel", "source_ref", ...}
+ *   RUN_RUNBOOK -> {"name", "raw_args", "source_channel", "source_ref", ...}
  * reply_to: optional reply target (e.g. Feishu chat_id / open_id).
  * metadata: channel-specific context (e.g. Feishu message_id).
  */

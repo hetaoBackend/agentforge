@@ -31,6 +31,11 @@ import {
 } from "./executor.ts";
 import { logger } from "./log.ts";
 import {
+  RunbookConfirmationPolicy,
+  expand_runbook,
+  type RunbookExpansion,
+} from "./runbooks.ts";
+import {
   _skill_creator_dir,
   _sanitize_skill_name,
   _compose_skill_md,
@@ -272,6 +277,12 @@ export class TaskScheduler extends BusAwareSchedulerMixin {
     if (msg.type === InboundMessageType.DISCARD_BRIEF) {
       return this._handle_discard_brief(msg);
     }
+    if (msg.type === InboundMessageType.PREVIEW_RUNBOOK) {
+      return this._handle_preview_runbook(msg);
+    }
+    if (msg.type === InboundMessageType.RUN_RUNBOOK) {
+      return this._handle_run_runbook(msg);
+    }
     return { status: "ignored" };
   }
 
@@ -377,6 +388,71 @@ export class TaskScheduler extends BusAwareSchedulerMixin {
     }
     this.db.discard_task_brief(brief_id);
     return { brief_id, status: TaskBriefStatus.DISCARDED };
+  }
+
+  private _expand_runbook_message(msg: InboundMessage): RunbookExpansion {
+    const payload = msg.payload;
+    const source_channel = String(
+      payload["source_channel"] ?? msg.source ?? "",
+    ).trim();
+    const source_ref = String(
+      payload["source_ref"] ??
+        msg.metadata["source_ref"] ??
+        msg.metadata["message_id"] ??
+        msg.reply_to ??
+        "",
+    ).trim();
+    const result = expand_runbook({
+      name: String(payload["name"] ?? "").trim(),
+      raw_args: String(payload["raw_args"] ?? ""),
+      source_channel,
+      source_ref,
+      source_metadata: _plain_object(payload["source_metadata"]),
+      working_dir:
+        payload["working_dir"] === null ||
+        payload["working_dir"] === undefined
+          ? null
+          : String(payload["working_dir"]),
+      agent:
+        payload["agent"] === null || payload["agent"] === undefined
+          ? null
+          : String(payload["agent"]),
+    });
+    if (!result.ok || !result.expansion) {
+      throw new Error(result.error ?? "invalid runbook");
+    }
+    return result.expansion;
+  }
+
+  _handle_preview_runbook(msg: InboundMessage): Row {
+    const expansion = this._expand_runbook_message(msg);
+    const id = this.db.add_task_brief({
+      ...expansion.brief,
+      needs_confirmation: true,
+    });
+    return {
+      brief_id: id,
+      runbook: expansion.runbook.name,
+      status: TaskBriefStatus.DRAFT,
+    };
+  }
+
+  _handle_run_runbook(msg: InboundMessage): Row {
+    const expansion = this._expand_runbook_message(msg);
+    if (expansion.confirmation_policy === RunbookConfirmationPolicy.AUTO) {
+      const task_id = this.submit_task(expansion.task);
+      return {
+        runbook: expansion.runbook.name,
+        status: "created",
+        task_id,
+      };
+    }
+    const brief_id = this.db.add_task_brief(expansion.brief);
+    return {
+      brief_id,
+      runbook: expansion.runbook.name,
+      status: TaskBriefStatus.DRAFT,
+    };
   }
 
   start(): void {
