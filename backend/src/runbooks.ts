@@ -1,36 +1,27 @@
 import {
+  RunbookConfirmationPolicy,
+  RunbookSourceType,
   ScheduleType,
   makeTask,
   makeTaskBrief,
+  type RunbookConfirmationPolicy as RunbookConfirmationPolicyValue,
+  type RunbookSourceType as RunbookSourceTypeValue,
   type Task,
   type TaskBrief,
 } from "./types.ts";
 
-export const RunbookConfirmationPolicy = {
-  AUTO: "auto",
-  REQUIRED: "required",
-} as const;
-export type RunbookConfirmationPolicy =
-  (typeof RunbookConfirmationPolicy)[keyof typeof RunbookConfirmationPolicy];
-
-export const RunbookSourceType = {
-  BUILTIN: "builtin",
-  TEMPLATE: "template",
-  SKILL: "skill",
-} as const;
-export type RunbookSourceType =
-  (typeof RunbookSourceType)[keyof typeof RunbookSourceType];
+export { RunbookConfirmationPolicy, RunbookSourceType } from "./types.ts";
 
 export interface RunbookDefinition {
   name: string;
   aliases: string[];
   description: string;
-  source_type: RunbookSourceType;
+  source_type: RunbookSourceTypeValue;
   source_id: string | null;
   command_schema: Record<string, unknown>;
   prompt_template: string;
   default_agent: string | null;
-  confirmation_policy: RunbookConfirmationPolicy;
+  confirmation_policy: RunbookConfirmationPolicyValue;
   enabled: boolean;
 }
 
@@ -42,7 +33,7 @@ export interface ParsedRunbookCommand {
 
 export interface RunbookExpansion {
   runbook: RunbookDefinition;
-  confirmation_policy: RunbookConfirmationPolicy;
+  confirmation_policy: RunbookConfirmationPolicyValue;
   task: Task;
   brief: TaskBrief;
 }

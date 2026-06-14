@@ -62,6 +62,21 @@ export const ScheduleType = {
 } as const;
 export type ScheduleType = (typeof ScheduleType)[keyof typeof ScheduleType];
 
+export const RunbookConfirmationPolicy = {
+  AUTO: "auto",
+  REQUIRED: "required",
+} as const;
+export type RunbookConfirmationPolicy =
+  (typeof RunbookConfirmationPolicy)[keyof typeof RunbookConfirmationPolicy];
+
+export const RunbookSourceType = {
+  BUILTIN: "builtin",
+  TEMPLATE: "template",
+  SKILL: "skill",
+} as const;
+export type RunbookSourceType =
+  (typeof RunbookSourceType)[keyof typeof RunbookSourceType];
+
 export const HeartbeatScheduleType = {
   CRON: "cron",
   INTERVAL: "interval",
@@ -194,6 +209,41 @@ export function makeTaskBrief(partial: Partial<TaskBrief> = {}): TaskBrief {
     created_at: null,
     updated_at: null,
     expires_at: null,
+    ...partial,
+  };
+}
+
+export interface IMRunbook {
+  id: number | null;
+  name: string;
+  aliases: string[];
+  description: string;
+  source_type: RunbookSourceType;
+  source_id: string | null;
+  command_schema: Record<string, unknown>;
+  prompt_template: string;
+  default_agent: string | null;
+  confirmation_policy: RunbookConfirmationPolicy;
+  enabled: boolean;
+  created_at: string | null;
+  updated_at: string | null;
+}
+
+export function makeIMRunbook(partial: Partial<IMRunbook> = {}): IMRunbook {
+  return {
+    id: null,
+    name: "",
+    aliases: [],
+    description: "",
+    source_type: RunbookSourceType.TEMPLATE,
+    source_id: null,
+    command_schema: {},
+    prompt_template: "",
+    default_agent: null,
+    confirmation_policy: RunbookConfirmationPolicy.REQUIRED,
+    enabled: true,
+    created_at: null,
+    updated_at: null,
     ...partial,
   };
 }
