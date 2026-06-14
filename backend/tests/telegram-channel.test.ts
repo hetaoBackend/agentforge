@@ -26,7 +26,6 @@ import {
   _set_telegram_available,
   create_telegram_channel,
   TelegramChannel,
-  type OutputListener,
   type TelegramApi,
   type TgContext,
   type TgMessage,
@@ -74,8 +73,6 @@ class StubDB {
 class StubScheduler {
   submitted: Task[] = [];
   inbound: InboundMessage[] = [];
-  listeners: OutputListener[] = [];
-  removed: OutputListener[] = [];
   nextBriefId = 1;
 
   submit_task(task: Task): number {
@@ -128,15 +125,6 @@ class StubScheduler {
       };
     }
     return { status: "ignored" };
-  }
-
-  add_output_listener(cb: OutputListener): void {
-    this.listeners.push(cb);
-  }
-
-  remove_output_listener(cb: OutputListener): void {
-    this.removed.push(cb);
-    this.listeners = this.listeners.filter((listener) => listener !== cb);
   }
 }
 
@@ -481,13 +469,7 @@ test("test_handle_text_message_creates_task", async () => {
   expect(task.tags).toBe("telegram");
   expect(task.working_dir).toBe("~/app");
   expect(channel._task_origin.get(1)).toEqual([10, 100, 100]);
-  expect(api.callsFor("sendMessage").length).toBe(1);
-  expect(api.callsFor("sendMessage")[0]!.params["chat_id"]).toBe(10);
-  expect(api.callsFor("sendMessage")[0]!.params).not.toHaveProperty(
-    "reply_to_message_id",
-  );
-  expect(api.lastText()).toContain("Thinking");
-  expect(scheduler.listeners).toHaveLength(1);
+  expect(api.callsFor("sendMessage").length).toBe(0);
 });
 
 test("test_brief_command_creates_draft_without_submitting_task", async () => {
@@ -521,7 +503,6 @@ test("test_brief_command_creates_draft_without_submitting_task", async () => {
   });
   expect(api.lastText()).toContain("Draft task brief #1");
   expect(api.lastText()).toContain("/confirm-brief 1");
-  expect(scheduler.listeners).toHaveLength(0);
 });
 
 test("test_confirm_and_discard_brief_commands_use_text_fallback", async () => {
@@ -544,7 +525,6 @@ test("test_confirm_and_discard_brief_commands_use_text_fallback", async () => {
   expect(channel.bus.get_task_source(1)).toBe("telegram");
   expect(api.lastText()).toContain("Task #1");
   expect(api.lastText()).toContain("Thinking");
-  expect(scheduler.listeners).toHaveLength(1);
 
   await channel._handle_text_message(
     _fake_update({
@@ -586,7 +566,6 @@ test("test_runbook_commands_use_text_fallback", async () => {
   expect(channel.bus.get_task_source(1)).toBe("telegram");
   expect(api.lastText()).toContain("Runbook /review-pr");
   expect(api.lastText()).toContain("Task #1");
-  expect(scheduler.listeners).toHaveLength(1);
 
   await channel._handle_text_message(
     _fake_update({
@@ -673,11 +652,7 @@ test("test_handle_text_message_resumes_current_chat_session", async () => {
     },
   ]);
   expect(channel._task_origin.get(1)).toEqual([10, 101, 101]);
-  expect(api.callsFor("sendMessage").length).toBe(2);
-  expect(api.callsFor("sendMessage")[1]!.params["chat_id"]).toBe(10);
-  expect(api.callsFor("sendMessage")[1]!.params).not.toHaveProperty(
-    "reply_to_message_id",
-  );
+  expect(api.callsFor("sendMessage").length).toBe(0);
 });
 
 test("test_handle_text_message_resumes_persisted_chat_session_after_restart", async () => {
@@ -713,7 +688,6 @@ test("test_handle_text_message_resumes_persisted_chat_session_after_restart", as
     },
   ]);
   expect(restarted._task_origin.get(1)).toEqual([10, 101, 101]);
-  expect(restartedScheduler.listeners).toHaveLength(1);
 });
 
 test("test_handle_text_message_new_command_starts_new_chat_session", async () => {
@@ -749,7 +723,7 @@ test("test_handle_text_message_reply_does_not_switch_chat_session", async () => 
   expect(db.updated[db.updated.length - 1]![1]["prompt"]).toBe("continue");
   expect(channel._task_origin.get(1)).toEqual([10, 300, 300]);
   expect(api.callsFor("setMessageReaction").length).toBeGreaterThan(0);
-  expect(api.callsFor("sendMessage").length).toBe(1);
+  expect(api.callsFor("sendMessage").length).toBe(0);
 });
 
 test("test_handle_text_message_reply_without_current_session_creates_task", async () => {
@@ -761,7 +735,7 @@ test("test_handle_text_message_reply_without_current_session_creates_task", asyn
   expect(scheduler.submitted).toHaveLength(1);
   expect(scheduler.submitted[0]!.prompt).toBe("continue");
   expect(api.callsFor("setMessageReaction").length).toBe(1);
-  expect(api.callsFor("sendMessage").length).toBe(1);
+  expect(api.callsFor("sendMessage").length).toBe(0);
 });
 
 test("test_handle_text_message_reply_unknown_notification_creates_task", async () => {
@@ -782,53 +756,6 @@ test("test_create_task_forwarded_tags", async () => {
   const task = scheduler.submitted[0]!;
   expect(task.tags).toContain("forwarded");
   expect(task.title.startsWith("[Telegram] 📨")).toBe(true);
-});
-
-test("test_streams_only_assistant_text_into_thinking_message", async () => {
-  const { channel, api, scheduler } = _make_channel();
-  _patch_loop(channel);
-  api.results.set("sendMessage", { message_id: 700 });
-
-  await channel._handle_text_message(
-    _fake_update({ text: "stream this", chat_id: 10, message_id: 100 }),
-    _ctx(),
-  );
-
-  const runningMessage = api.callsFor("sendMessage")[0]!;
-  expect(runningMessage.params).not.toHaveProperty("reply_to_message_id");
-  expect(scheduler.listeners).toHaveLength(1);
-  expect(api.callsFor("editMessageText")).toHaveLength(0);
-
-  scheduler.listeners[0]!(1, 9, "tool_call", JSON.stringify({ name: "rg" }));
-  expect(api.callsFor("editMessageText")).toHaveLength(0);
-
-  scheduler.listeners[0]!(1, 9, "assistant", "hello");
-  await new Promise((resolve) => setTimeout(resolve, 0));
-
-  let edits = api.callsFor("editMessageText");
-  expect(edits).toHaveLength(1);
-  expect(edits[0]!.params["chat_id"]).toBe(10);
-  expect(edits[0]!.params["message_id"]).toBe(700);
-  expect(edits[0]!.params["text"]).toBe("hello");
-  expect(edits[0]!.params["parse_mode"]).toBe("HTML");
-
-  await channel.send(
-    makeOutboundMessage({
-      type: OutboundMessageType.TASK_COMPLETED,
-      task_id: 1,
-      payload: { title: "stream this", result: "done" },
-    }),
-  );
-
-  edits = api.callsFor("editMessageText");
-  const finalEdits = edits;
-  expect(finalEdits).toHaveLength(2);
-  expect(finalEdits.at(-1)!.params["message_id"]).toBe(700);
-  expect(finalEdits.at(-1)!.params["text"]).toBe("done");
-  expect(finalEdits.at(-1)!.params["parse_mode"]).toBe("HTML");
-  expect(api.callsFor("sendMessage")).toHaveLength(1);
-  expect(scheduler.removed).toHaveLength(1);
-  expect(channel._task_origin.has(1)).toBe(false);
 });
 
 // ── command handlers ─────────────────────────────────────────────
@@ -932,7 +859,7 @@ test("test_cmd_resume_paths", async () => {
   expect(db.updated[db.updated.length - 1]![0]).toBe(1);
   expect(db.updated[db.updated.length - 1]![1]["prompt"]).toBe("keep going");
   expect(channel._task_origin.get(1)).toEqual([10, 555, 555]);
-  expect(api.callsFor("sendMessage").length).toBe(replies_before_success + 1);
+  expect(api.callsFor("sendMessage").length).toBe(replies_before_success);
 });
 
 test("test_cmd_resume_unauthorised", async () => {
@@ -1155,11 +1082,11 @@ test("test_send_no_origin_no_default_skips", async () => {
   expect(api.calls.length).toBe(0);
 });
 
-test("test_send_splits_long_result", async () => {
+test("test_send_truncates_long_result", async () => {
   const { channel, api } = _make_channel();
   _patch_loop(channel);
   channel._task_origin.set(10, [10, 100, 100]);
-  const long = "x".repeat(8500);
+  const long = "x".repeat(20000);
 
   await channel.send(
     makeOutboundMessage({
@@ -1170,11 +1097,8 @@ test("test_send_splits_long_result", async () => {
   );
 
   const sends = api.callsFor("sendMessage");
-  expect(sends.length).toBeGreaterThan(1);
-  for (const send of sends) {
-    expect(String(send.params["text"]).length).toBeLessThanOrEqual(4096);
-  }
-  expect(sends.map((send) => send.params["text"]).join("")).toBe(long);
+  expect(sends.length).toBe(1);
+  expect(String(sends[0]!.params["text"])).toContain("truncated");
 });
 
 // ── lifecycle ────────────────────────────────────────────────────

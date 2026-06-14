@@ -13,7 +13,6 @@ import { MessageBus } from "../src/bus.ts";
 import { _hooks } from "../src/channels/dir_utils.ts";
 import {
   TelegramChannel,
-  type OutputListener,
   type TelegramApi,
   type TgChat,
   type TgMessage,
@@ -56,21 +55,10 @@ class StubDB {
 
 class StubScheduler {
   submitted: Task[] = [];
-  listeners: OutputListener[] = [];
-  removed: OutputListener[] = [];
 
   submit_task(task: Task): number {
     this.submitted.push(task);
     return this.submitted.length;
-  }
-
-  add_output_listener(cb: OutputListener): void {
-    this.listeners.push(cb);
-  }
-
-  remove_output_listener(cb: OutputListener): void {
-    this.removed.push(cb);
-    this.listeners = this.listeners.filter((listener) => listener !== cb);
   }
 }
 

@@ -147,13 +147,6 @@ export interface TelegramDB extends TaskDBLike, SettingsDB {
   get_run_output_events(run_id: number, limit?: number): unknown;
 }
 
-export type OutputListener = (
-  task_id: number,
-  run_id: number,
-  event_type: string,
-  content: string,
-) => void;
-
 /**
  * Minimal structural view of TaskScheduler (do NOT import scheduler.ts —
  * keep the channel coupled only to the scheduler methods it uses).
@@ -161,8 +154,6 @@ export type OutputListener = (
 export interface TelegramScheduler {
   submit_task(task: Task): number;
   handle_inbound_message?(msg: InboundMessage): Record<string, unknown>;
-  add_output_listener(cb: OutputListener): void;
-  remove_output_listener(cb: OutputListener): void;
 }
 
 // ── injectable HTTP seam ──────────────────────────────────────────
@@ -237,17 +228,7 @@ export const TELEGRAM_UPLOADABLE_IMAGE_SUFFIXES = new Set([
   ".gif",
   ".webp",
 ]);
-export const TELEGRAM_MESSAGE_TEXT_LIMIT = 4096;
-export const TELEGRAM_THINKING_PREFIX = "[thinking] ";
 const TELEGRAM_MARKDOWN_IMAGE_RE = /!\[[^\]]*]\(([^)]+)\)/g;
-
-interface TelegramStreamState {
-  chat_id: number | string;
-  message_id: number;
-  run_id: number | null;
-  parts: string[];
-  listener: OutputListener;
-}
 
 // ── TelegramChannel ───────────────────────────────────────────────
 
@@ -274,8 +255,6 @@ export class TelegramChannel extends Channel {
   // Telegram has no first-class thread/session primitive for ordinary chats.
   // Treat each chat as one active agent session until /new starts another.
   _chat_current_task: Map<string, number> = new Map();
-
-  _streaming: Map<number, TelegramStreamState> = new Map();
 
   /** Slash-command routing table (≙ the CommandHandler registrations). */
   readonly _command_handlers: Record<
@@ -326,9 +305,6 @@ export class TelegramChannel extends Channel {
     console.log("[Telegram] Stopping bot…");
     this._running = false;
     this.bus.unsubscribe_outbound(this._on_outbound);
-    for (const task_id of [...this._streaming.keys()]) {
-      this._stop_streaming(task_id);
-    }
     console.log("[Telegram] Bot stopped");
   }
 
@@ -370,9 +346,12 @@ export class TelegramChannel extends Channel {
     let image_paths: string[] = [];
     let body: string;
     if (is_completed) {
-      const result_text = (
+      let result_text = (
         (msg.payload["result"] as string | null | undefined) || ""
       ).trim();
+      if (result_text.length > 10000) {
+        result_text = result_text.slice(0, 10000) + "\n…(truncated)";
+      }
       body = result_text || "Done.";
       const task = this.db.get_task(task_id) ?? null;
       image_paths = this._collect_generated_image_paths(task_id, body, task);
@@ -388,11 +367,12 @@ export class TelegramChannel extends Channel {
       let error_text = (
         (msg.payload["error"] as string | null | undefined) || "Unknown error"
       ).trim();
+      // Smart truncation: keep beginning (most informative) and signal cut
+      if (error_text.length > 800) {
+        error_text = error_text.slice(0, 800) + "\n…(truncated)";
+      }
       body = error_text;
     }
-
-    const streaming_msg_id = this._streaming.get(task_id)?.message_id ?? null;
-    this._stop_streaming(task_id);
 
     let chat_id: number | string;
     let orig_message_id: number | null = null;
@@ -444,7 +424,12 @@ export class TelegramChannel extends Channel {
         }
       }
 
-      await this._send_terminal_text(chat_id, text, streaming_msg_id);
+      const params: Record<string, unknown> = {
+        chat_id,
+        text: _telegram_markdown_to_html(text),
+        parse_mode: "HTML",
+      };
+      await api("sendMessage", params);
       await this._send_generated_images(chat_id, image_paths);
     } catch (e) {
       console.log(`[Telegram] Failed to send notification to ${chat_id}: ${e}`);
@@ -554,205 +539,6 @@ export class TelegramChannel extends Channel {
       await this._api!("sendMessage", { chat_id, text });
     } catch (e) {
       console.log(`[Telegram] Failed to send message to ${chat_id}: ${e}`);
-    }
-  }
-
-  async _send_running_message(
-    chat_id: number | string,
-    text = "Thinking ▌",
-  ): Promise<number | null> {
-    if (!this._api) return null;
-    try {
-      const result = await this._api("sendMessage", {
-        chat_id,
-        text,
-      });
-      return _telegram_message_id(result);
-    } catch (e) {
-      console.log(`[Telegram] Failed to send streaming message: ${e}`);
-      return null;
-    }
-  }
-
-  async _edit_message_text(
-    chat_id: number | string,
-    message_id: number,
-    text: string,
-  ): Promise<boolean> {
-    const parts = this._telegram_message_html_parts(text);
-    return this._edit_message_html(chat_id, message_id, parts[0] ?? "");
-  }
-
-  async _edit_message_html(
-    chat_id: number | string,
-    message_id: number,
-    html_text: string,
-  ): Promise<boolean> {
-    if (!this._api) return false;
-    try {
-      await this._api("editMessageText", {
-        chat_id,
-        message_id,
-        text: html_text,
-        parse_mode: "HTML",
-      });
-      return true;
-    } catch (e) {
-      const message = e instanceof Error ? e.message : String(e);
-      if (message.includes("message is not modified")) {
-        return true;
-      }
-      console.log(
-        `[Telegram] Failed to edit streaming message ${message_id}: ${e}`,
-      );
-      return false;
-    }
-  }
-
-  async _send_terminal_text(
-    chat_id: number | string,
-    text: string,
-    edit_message_id: number | null = null,
-  ): Promise<void> {
-    if (!this._api) return;
-    const parts = this._telegram_message_html_parts(text);
-    let start_index = 0;
-    if (edit_message_id !== null && parts.length > 0) {
-      const edited = await this._edit_message_html(
-        chat_id,
-        edit_message_id,
-        parts[0]!,
-      );
-      if (edited) start_index = 1;
-    }
-    for (let i = start_index; i < parts.length; i++) {
-      await this._api("sendMessage", {
-        chat_id,
-        text: parts[i],
-        parse_mode: "HTML",
-      });
-    }
-  }
-
-  _telegram_message_html_parts(
-    text: string,
-    limit = TELEGRAM_MESSAGE_TEXT_LIMIT,
-  ): string[] {
-    if (!text) return [""];
-    const parts: string[] = [];
-    let rest = text;
-    while (rest.length > 0) {
-      const full_html = _telegram_markdown_to_html(rest);
-      if (full_html.length <= limit) {
-        parts.push(full_html);
-        break;
-      }
-      const split = this._telegram_raw_split_for_html_limit(rest, limit);
-      const raw_part = rest.slice(0, split);
-      parts.push(_telegram_markdown_to_html(raw_part));
-      rest = rest.slice(split);
-    }
-    return parts;
-  }
-
-  _telegram_raw_split_for_html_limit(text: string, limit: number): number {
-    let lo = 1;
-    let hi = text.length;
-    let best = 1;
-    while (lo <= hi) {
-      const mid = Math.floor((lo + hi) / 2);
-      const html = _telegram_markdown_to_html(text.slice(0, mid));
-      if (html.length <= limit) {
-        best = mid;
-        lo = mid + 1;
-      } else {
-        hi = mid - 1;
-      }
-    }
-    if (best < text.length) {
-      const floor = Math.max(1, Math.floor(best * 0.6));
-      const newline = text.lastIndexOf("\n", best - 1);
-      const space = text.lastIndexOf(" ", best - 1);
-      const soft = Math.max(newline, space);
-      if (soft >= floor) {
-        return soft + 1;
-      }
-    }
-    return Math.max(1, best);
-  }
-
-  async _start_streaming(
-    task_id: number,
-    chat_id: number | string,
-    _origin_message_id: number,
-    initial_text = "Thinking ▌",
-  ): Promise<void> {
-    this._stop_streaming(task_id);
-    const running_msg_id = await this._send_running_message(
-      chat_id,
-      initial_text,
-    );
-    if (!running_msg_id) return;
-
-    const listener: OutputListener = (
-      event_task_id,
-      run_id,
-      event_type,
-      content,
-    ) => {
-      this._on_streaming_output(
-        task_id,
-        event_task_id,
-        run_id,
-        event_type,
-        content,
-      );
-    };
-    this._streaming.set(task_id, {
-      chat_id,
-      message_id: running_msg_id,
-      run_id: null,
-      parts: [],
-      listener,
-    });
-    this.scheduler.add_output_listener(listener);
-  }
-
-  _on_streaming_output(
-    task_id: number,
-    event_task_id: number,
-    run_id: number,
-    event_type: string,
-    content: string,
-  ): void {
-    if (event_task_id !== task_id || event_type !== "assistant" || !content) {
-      return;
-    }
-    const state = this._streaming.get(task_id);
-    if (!state) return;
-    if (state.run_id !== null && state.run_id !== run_id) {
-      state.parts = [];
-    }
-    state.run_id = run_id;
-
-    const display = content.startsWith(TELEGRAM_THINKING_PREFIX)
-      ? content.slice(TELEGRAM_THINKING_PREFIX.length)
-      : content;
-    if (!display) return;
-
-    state.parts.push(display);
-    void this._edit_message_text(
-      state.chat_id,
-      state.message_id,
-      state.parts.join(""),
-    );
-  }
-
-  _stop_streaming(task_id: number): void {
-    const state = this._streaming.get(task_id);
-    if (state) {
-      this.scheduler.remove_output_listener(state.listener);
-      this._streaming.delete(task_id);
     }
   }
 
@@ -943,11 +729,6 @@ export class TelegramChannel extends Channel {
         console.log(
           `[Telegram] Auto-resuming task ${current_task_id} from chat session`,
         );
-        await this._start_streaming(
-          current_task_id,
-          chat_id,
-          update.message!.message_id,
-        );
         return;
       }
     }
@@ -1033,10 +814,8 @@ export class TelegramChannel extends Channel {
         } catch (e) {
           console.log(`[Telegram] Failed to set brief reaction: ${e}`);
         }
-        await this._start_streaming(
-          task_id,
-          chat_id,
-          message_id,
+        await this._reply_text(
+          update,
           format_brief_started_reply(command.brief_id, task_id),
         );
         return;
@@ -1113,10 +892,8 @@ export class TelegramChannel extends Channel {
         } catch (e) {
           console.log(`[Telegram] Failed to set runbook reaction: ${e}`);
         }
-        await this._start_streaming(
-          task_id,
-          chat_id,
-          message_id,
+        await this._reply_text(
+          update,
           format_runbook_created_reply(task_id, command.name),
         );
         return;
@@ -1239,7 +1016,6 @@ export class TelegramChannel extends Channel {
     } catch (e) {
       console.log(`[Telegram] Failed to set reaction: ${e}`);
     }
-    await this._start_streaming(task_id, chat_id, message_id);
   }
 
   // ── command handlers ──────────────────────────────────────────
@@ -1394,7 +1170,6 @@ export class TelegramChannel extends Channel {
     } catch (e) {
       console.log(`[Telegram] Failed to set resume reaction: ${e}`);
     }
-    await this._start_streaming(tid, chat_id, update.message!.message_id);
   }
 
   _chat_key(chat_id: number | string): string {
@@ -1710,18 +1485,6 @@ function _expanduser(p: string): string {
 
 function _is_plain_object(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function _telegram_message_id(value: unknown): number | null {
-  if (!_is_plain_object(value)) return null;
-  const message_id = value["message_id"];
-  if (typeof message_id === "number" && Number.isFinite(message_id)) {
-    return message_id;
-  }
-  if (typeof message_id === "string" && /^\d+$/.test(message_id)) {
-    return parseInt(message_id, 10);
-  }
-  return null;
 }
 
 /** Escape special MarkdownV2 characters. */
