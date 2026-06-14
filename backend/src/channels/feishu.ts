@@ -66,6 +66,13 @@ export const HELP_TEXT = `**AgentForge Bot** 👋
 • \`/ccu\` — 查看 Claude Code 当前用量（ccu-blocks）
 • \`/help\` — 显示此帮助
 
+**自定义命令：**
+• 先在 AgentForge 里创建自定义命令，或从已用过的任务生成命令。
+• 然后在聊天里输入：\`/看报错 TypeError: Cannot read properties of undefined\`
+• 命令可以是中文，也可以配置 alias，例如：\`/err ...\`
+• 如果命令需要确认，Bot 会返回 Draft task。
+　用 \`/run-draft <id>\` 开始执行，用 \`/cancel-draft <id>\` 取消。
+
 **小技巧：**
 • 消息中直接提到路径，Bot 会自动识别并使用。
 　例如：_在 ~/myapp 里帮我修复登录 bug_

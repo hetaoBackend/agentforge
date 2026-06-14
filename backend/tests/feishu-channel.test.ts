@@ -1208,6 +1208,10 @@ describe("Feishu forwarded, media, and command handling", () => {
     expect(sent.some((text: string) => text.includes("AgentForge Bot"))).toBe(
       true,
     );
+    expect(HELP_TEXT).toContain("/看报错");
+    expect(HELP_TEXT).toContain("自定义命令");
+    expect(HELP_TEXT).toContain("/run-draft");
+    expect(HELP_TEXT).toContain("/cancel-draft");
     expect(
       sent.some((text: string) => text.includes("Working directory")),
     ).toBe(true);

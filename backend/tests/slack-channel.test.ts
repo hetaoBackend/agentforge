@@ -321,6 +321,10 @@ test("test_help_command_and_word", async () => {
   expect(texts.length).toBe(2);
   for (const t of texts) {
     expect(t).toContain("AgentForge Bot");
+    expect(t).toContain("/看报错");
+    expect(t).toContain("custom command");
+    expect(t).toContain("/run-draft");
+    expect(t).toContain("/cancel-draft");
   }
 });
 

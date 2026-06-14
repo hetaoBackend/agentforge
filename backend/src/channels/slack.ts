@@ -227,7 +227,7 @@ export async function _require_slack(): Promise<SlackSDK> {
   }
 }
 
-// ── help text (byte-identical to Python) ──────────────────────────────────
+// ── help text ─────────────────────────────────────────────────────────────
 
 export const HELP_TEXT = `*AgentForge Bot* 👋
 Send me any message and I'll create a task from it.
@@ -241,6 +241,13 @@ Reply to a completion/failure notification to resume that task.
 　　e.g. \`/dir ~/workspace/myproject\`
 • \`/agent <name>\` — switch coding agent (\`claude\` / \`codex\`)
 • \`/help\` — show this message
+
+*Custom commands:*
+• Create a custom command in AgentForge, or generate one from a past task, then use it here:
+　\`/看报错 TypeError: Cannot read properties of undefined\`
+• Custom commands can use Chinese names or aliases.
+• If a command needs confirmation, I'll create a Draft task.
+　Run it with \`/run-draft <id>\`, or cancel it with \`/cancel-draft <id>\`.
 
 *Tips:*
 • You can also mention a path in your message and it will be used automatically.

@@ -97,6 +97,12 @@ export const HELP_TEXT =
   "　　　　e.g. /dir ~/workspace/myproject\n" +
   "/agent <name> — switch coding agent (claude / codex)\n" +
   "/help — show this message\n\n" +
+  "Custom commands:\n" +
+  "Create a custom command in AgentForge, or generate one from a past task, then use it here:\n" +
+  "/看报错 TypeError: Cannot read properties of undefined\n" +
+  "Custom commands can use Chinese names or aliases.\n" +
+  "If a command needs confirmation, I'll create a Draft task.\n" +
+  "Run it with /run-draft <id>, or cancel it with /cancel-draft <id>.\n\n" +
   "Tips:\n" +
   "• You can also mention a path in your message and it will be used automatically.\n" +
   "　e.g. 在 ~/myapp 里帮我修复登录 bug";

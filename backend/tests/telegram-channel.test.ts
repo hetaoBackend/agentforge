@@ -785,10 +785,13 @@ test("test_cmd_help_authorised_and_not", async () => {
   const { channel, api } = _make_channel({ allowed_users: [1] });
   const ok = _fake_update({ user_id: 1 });
   await channel._cmd_help(ok, _ctx());
-  expect(api.lastText()).not.toContain("task");
   expect(api.lastText()).toContain("/new");
   expect(api.lastText()).not.toContain("\\.");
   expect(api.lastText()).toContain("current session");
+  expect(api.lastText()).toContain("/看报错");
+  expect(api.lastText()).toContain("custom command");
+  expect(api.lastText()).toContain("/run-draft");
+  expect(api.lastText()).toContain("/cancel-draft");
   expect(api.callsFor("sendMessage").length).toBe(1);
   expect(api.callsFor("sendMessage")[0]!.params).not.toHaveProperty(
     "parse_mode",
