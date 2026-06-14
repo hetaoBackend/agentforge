@@ -155,6 +155,10 @@ export function render_im_skill_suggestion_text(
     lines.push(
       "",
       "Draft is ready for review.",
+      "",
+      "Draft preview:",
+      suggestion.draft_body.trim().slice(0, 4000),
+      "",
       "Approving installs a SKILL.md under ~/.agentforge/skills and links it into ~/.claude/skills and ~/.agents/skills.",
     );
   }

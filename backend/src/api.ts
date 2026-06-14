@@ -8,6 +8,10 @@ import {
   parse_im_digest_recipients,
   type IMDigestRecipient,
 } from "./digests.ts";
+import {
+  collect_im_skill_suggestions,
+  render_im_skill_suggestion_text,
+} from "./skill_suggestions.ts";
 import type { TaskDB } from "./db.ts";
 import type { TaskScheduler } from "./scheduler.ts";
 import {
@@ -498,6 +502,36 @@ function digestRecipients(ctx: ApiContext, body: Row): IMDigestRecipient[] {
   return parse_im_digest_recipients(
     ctx.db.get_setting("im_digest_channels", "[]"),
   );
+}
+
+function skillSuggestionRecipients(
+  ctx: ApiContext,
+  body: Row,
+): IMDigestRecipient[] {
+  if ("recipients" in body) {
+    return parse_im_digest_recipients(body["recipients"]);
+  }
+  return parse_im_digest_recipients(
+    ctx.db.get_setting("im_skill_suggestion_channels", "[]"),
+  );
+}
+
+function skillSuggestionPreview(ctx: ApiContext, body: Row): Row {
+  const channel = asString(body["channel"]).trim() || null;
+  const limit =
+    body["limit"] === undefined || body["limit"] === null
+      ? undefined
+      : Number(body["limit"]);
+  const suggestions = collect_im_skill_suggestions(ctx.db, {
+    channel,
+    limit,
+  });
+  return {
+    suggestions,
+    texts: suggestions.map((suggestion) =>
+      render_im_skill_suggestion_text(suggestion),
+    ),
+  };
 }
 
 async function sendIMDigest(
@@ -1108,6 +1142,11 @@ async function handleGet(
           ctx.db.get_setting("im_attention_digest_minutes", "20") ?? "20",
           10,
         ),
+        im_skill_suggestions_enabled:
+          ctx.db.get_setting("im_skill_suggestions_enabled", "0") === "1",
+        im_skill_suggestion_channels: parse_im_digest_recipients(
+          ctx.db.get_setting("im_skill_suggestion_channels", "[]"),
+        ),
       },
       200,
       origin,
@@ -1355,6 +1394,113 @@ async function handlePost(
       200,
       origin,
     );
+  }
+
+  if (path === "/api/im-skill-suggestions/preview") {
+    return jsonResponse(skillSuggestionPreview(ctx, body), 200, origin);
+  }
+  if (path === "/api/im-skill-suggestions/send") {
+    const recipients = skillSuggestionRecipients(ctx, body);
+    if (!recipients.length) {
+      return jsonResponse(
+        { error: "no skill suggestion recipients configured" },
+        409,
+        origin,
+      );
+    }
+    const includeSent = Boolean(body["include_sent"] ?? false);
+    const sentSuggestions: Row[] = [];
+    try {
+      for (const recipient of recipients) {
+        const suggestions = collect_im_skill_suggestions(ctx.db, {
+          channel: recipient.channel,
+          limit:
+            body["limit"] === undefined || body["limit"] === null
+              ? undefined
+              : Number(body["limit"]),
+        });
+        for (const suggestion of suggestions) {
+          if (
+            !includeSent &&
+            !ctx.db.should_send_im_skill_suggestion(
+              suggestion.pattern_id,
+              recipient.channel,
+              recipient.target,
+            )
+          ) {
+            continue;
+          }
+          await sendIMDigest(
+            ctx,
+            recipient,
+            render_im_skill_suggestion_text(suggestion),
+          );
+          ctx.db.upsert_im_skill_suggestion({
+            pattern_id: suggestion.pattern_id,
+            channel: recipient.channel,
+            target: recipient.target,
+            status: "suggested",
+          });
+          sentSuggestions.push({
+            pattern_id: suggestion.pattern_id,
+            channel: recipient.channel,
+            target: recipient.target,
+          });
+        }
+      }
+    } catch (e) {
+      return jsonResponse(
+        { error: e instanceof Error ? e.message : String(e) },
+        409,
+        origin,
+      );
+    }
+    return jsonResponse(
+      {
+        status: "sent",
+        sent: sentSuggestions.length,
+        suggestions: sentSuggestions,
+      },
+      200,
+      origin,
+    );
+  }
+  if (
+    path.startsWith("/api/im-skill-suggestions/") &&
+    path.endsWith("/action")
+  ) {
+    const patternId = idAt(path);
+    if (patternId === null) {
+      return jsonResponse({ error: "pattern not found" }, 404, origin);
+    }
+    try {
+      const result = ctx.scheduler.handle_inbound_message(
+        makeInboundMessage({
+          type: InboundMessageType.SKILL_SUGGESTION_ACTION,
+          source: "api",
+          reply_to:
+            body["target"] === undefined || body["target"] === null
+              ? null
+              : String(body["target"]),
+          payload: {
+            ...body,
+            pattern_id: patternId,
+            source_channel:
+              asString(body["source_channel"] ?? body["channel"] ?? "api")
+                .trim() || "api",
+            target: asString(body["target"] ?? ""),
+          },
+        }),
+      );
+      return jsonResponse(result, 200, origin);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      return jsonResponse(
+        { error: msg },
+        msg.includes("not found") ? 404 : 400,
+        origin,
+      );
+    }
   }
 
   if (path === "/api/skills/sweep") {

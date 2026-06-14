@@ -139,6 +139,25 @@ test("test_message_bus_round_trips_digest_inbound_messages", async () => {
   expect((await bus.get_inbound())!.type).toBe("trigger_digest");
 });
 
+test("test_message_bus_round_trips_skill_suggestion_inbound_messages", async () => {
+  const bus = new MessageBus();
+  const channel = new RecordingChannel(bus, new StubDB());
+
+  const action = channel._make_inbound(
+    InboundMessageType.SKILL_SUGGESTION_ACTION,
+    {
+      action: "draft",
+      pattern_id: 1,
+      source_channel: "slack",
+      target: "C1",
+    },
+  );
+
+  bus.publish_inbound(action);
+
+  expect((await bus.get_inbound())!.type).toBe("skill_suggestion_action");
+});
+
 test("test_message_bus_returns_none_when_queue_is_empty", async () => {
   const bus = new MessageBus();
 

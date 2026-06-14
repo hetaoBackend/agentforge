@@ -42,6 +42,52 @@ describe("api handler", () => {
     return (await res.json()) as Record<string, any>;
   }
 
+  function createSkillCandidate(channel: string = "slack"): number {
+    const taskId = db.add_task(
+      makeTask({
+        title: "Fix frontend CI",
+        prompt: "Investigate the failed build.",
+        tags: `runbook,fix-ci,${channel}`,
+      }),
+    );
+    const patternId = db.upsert_skill_pattern(
+      "fix-ci-investigation",
+      "recipe",
+      "Investigate a failed CI run and patch the minimal issue.",
+      taskId,
+      100,
+    )!;
+    db.upsert_skill_pattern(
+      "fix-ci-investigation",
+      "recipe",
+      "Investigate a failed CI run and patch the minimal issue.",
+      taskId,
+      101,
+    );
+    db.upsert_skill_pattern(
+      "fix-ci-investigation",
+      "recipe",
+      "Investigate a failed CI run and patch the minimal issue.",
+      taskId,
+      102,
+    );
+    db.set_skill_pattern_status(patternId, "candidate");
+    return patternId;
+  }
+
+  function createReadySkillDraft(): number {
+    const patternId = createSkillCandidate();
+    db.upsert_skill_draft(
+      patternId,
+      "ready",
+      "fix-ci-investigation",
+      "Reusable CI investigation workflow.",
+      "recipe",
+      "---\nname: fix-ci-investigation\ndescription: Reusable CI investigation workflow.\n---\n# Fix CI\n",
+    );
+    return patternId;
+  }
+
   test("GET /api/health returns ok and task count", async () => {
     const res = await handleApiRequest(
       ctx,
@@ -706,6 +752,11 @@ describe("api handler", () => {
       JSON.stringify([{ channel: "slack", target: "C1" }]),
     );
     db.set_setting("im_attention_digest_minutes", "15");
+    db.set_setting("im_skill_suggestions_enabled", "1");
+    db.set_setting(
+      "im_skill_suggestion_channels",
+      JSON.stringify([{ channel: "slack", target: "C2" }]),
+    );
     db.set_setting("telegram_enabled", "true");
     db.set_setting("telegram_bot_token", "tg-secret");
     db.set_setting("telegram_allowed_users", "42");
@@ -741,6 +792,8 @@ describe("api handler", () => {
       im_digest_cron: "0 8 * * 1-5",
       im_digest_channels: [{ channel: "slack", target: "C1" }],
       im_attention_digest_minutes: 15,
+      im_skill_suggestions_enabled: true,
+      im_skill_suggestion_channels: [{ channel: "slack", target: "C2" }],
     });
 
     const status = await json(
@@ -1300,6 +1353,96 @@ describe("api handler", () => {
     );
     expect(deleted.status).toBe(200);
     expect(db.get_skill(skillId)).toBeNull();
+  });
+
+  test("IM skill suggestion API previews sends and gates approval", async () => {
+    const patternId = createReadySkillDraft();
+    const preview = await json(
+      new Request("http://127.0.0.1:9712/api/im-skill-suggestions/preview", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ channel: "slack" }),
+      }),
+    );
+    expect(preview.suggestions).toHaveLength(1);
+    expect(preview.suggestions[0].pattern_id).toBe(patternId);
+    expect(preview.texts[0]).toContain("/draft-skill");
+
+    const reply = mock(async (_channel: string, _thread: string | null, _text: string) => {});
+    ctx.slack_channel = { _reply: reply } as any;
+    const sent = await json(
+      new Request("http://127.0.0.1:9712/api/im-skill-suggestions/send", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          recipients: [{ channel: "slack", target: "C1" }],
+        }),
+      }),
+    );
+    expect(sent.status).toBe("sent");
+    expect(sent.sent).toBe(1);
+    expect(reply.mock.calls[0]![0]).toBe("C1");
+    expect(db.should_send_im_skill_suggestion(patternId, "slack", "C1")).toBe(
+      false,
+    );
+
+    const blocked = await handleApiRequest(
+      ctx,
+      new Request(
+        `http://127.0.0.1:9712/api/im-skill-suggestions/${patternId}/action`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            action: "approve",
+            source_channel: "slack",
+            target: "C1",
+          }),
+        },
+      ),
+    );
+    expect(blocked.status).toBe(400);
+    expect(await blocked.json()).toEqual({
+      error: "draft must be shown before approval",
+    });
+
+    const shown = await json(
+      new Request(
+        `http://127.0.0.1:9712/api/im-skill-suggestions/${patternId}/action`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            action: "show",
+            source_channel: "slack",
+            target: "C1",
+          }),
+        },
+      ),
+    );
+    expect(shown.status).toBe("ready");
+    expect(shown.text).toContain("# Fix CI");
+
+    (scheduler as any).approve_skill = mock(() => ({ id: 9, name: "ok" }));
+    const approved = await json(
+      new Request(
+        `http://127.0.0.1:9712/api/im-skill-suggestions/${patternId}/action`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            action: "approve",
+            source_channel: "slack",
+            target: "C1",
+          }),
+        },
+      ),
+    );
+    expect(approved).toEqual({
+      pattern_id: patternId,
+      skill: { id: 9, name: "ok" },
+      status: "approved",
+    });
   });
 
   test("settings, skill workflow, and delete error routes cover edge cases", async () => {

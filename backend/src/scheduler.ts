@@ -32,6 +32,10 @@ import {
 import { logger } from "./log.ts";
 import { compose_im_digest, render_im_digest_text } from "./digests.ts";
 import {
+  collect_im_skill_suggestions,
+  render_im_skill_suggestion_text,
+} from "./skill_suggestions.ts";
+import {
   RunbookConfirmationPolicy,
   expand_runbook,
   runbook_from_row,
@@ -288,6 +292,9 @@ export class TaskScheduler extends BusAwareSchedulerMixin {
     if (msg.type === InboundMessageType.TRIGGER_DIGEST) {
       return this._handle_trigger_digest(msg);
     }
+    if (msg.type === InboundMessageType.SKILL_SUGGESTION_ACTION) {
+      return this._handle_skill_suggestion_action(msg);
+    }
     return { status: "ignored" };
   }
 
@@ -481,6 +488,116 @@ export class TaskScheduler extends BusAwareSchedulerMixin {
       digest,
       text: render_im_digest_text(digest),
     };
+  }
+
+  private _skill_suggestion_target(msg: InboundMessage): {
+    channel: string;
+    target: string;
+  } {
+    const channel = String(
+      msg.payload["source_channel"] ?? msg.source ?? "",
+    ).trim();
+    const target = String(msg.payload["target"] ?? msg.reply_to ?? "").trim();
+    if (!channel) {
+      throw new Error("source_channel is required");
+    }
+    return { channel, target };
+  }
+
+  private _ready_skill_draft(pattern_id: number): Row {
+    const draft = this.db.get_skill_draft(pattern_id);
+    if (!draft || draft["status"] !== "ready" || !String(draft["body"] ?? "").trim()) {
+      throw new Error("skill draft is not ready");
+    }
+    return draft;
+  }
+
+  _handle_skill_suggestion_action(msg: InboundMessage): Row {
+    const action = String(msg.payload["action"] ?? "").trim().toLowerCase();
+    const pattern_id = _int(msg.payload["pattern_id"]);
+    if (pattern_id === null) {
+      throw new Error("pattern_id is required");
+    }
+    const { channel, target } = this._skill_suggestion_target(msg);
+
+    if (action === "draft") {
+      const started = this.trigger_skill_draft(
+        pattern_id,
+        msg.payload["agent"] === undefined || msg.payload["agent"] === null
+          ? null
+          : String(msg.payload["agent"]),
+      );
+      if (!started) {
+        throw new Error("pattern not found");
+      }
+      this.db.upsert_im_skill_suggestion({
+        pattern_id,
+        channel,
+        target,
+        status: "suggested",
+        metadata: _plain_object(msg.payload["source_metadata"]),
+      });
+      return { pattern_id, status: "drafting" };
+    }
+
+    if (action === "show") {
+      this._ready_skill_draft(pattern_id);
+      const suggestion = collect_im_skill_suggestions(this.db, {
+        limit: 200,
+      }).find((item) => item.pattern_id === pattern_id);
+      if (!suggestion) {
+        throw new Error("pattern not found");
+      }
+      this.db.mark_im_skill_suggestion_draft_shown(
+        pattern_id,
+        channel,
+        target,
+      );
+      return {
+        pattern_id,
+        status: "ready",
+        suggestion,
+        text: render_im_skill_suggestion_text(suggestion),
+      };
+    }
+
+    if (action === "approve") {
+      const state = this.db.get_im_skill_suggestion(
+        pattern_id,
+        channel,
+        target,
+      );
+      if (!state?.["draft_shown_at"]) {
+        throw new Error("draft must be shown before approval");
+      }
+      const draft = this._ready_skill_draft(pattern_id);
+      const skill = this.approve_skill(
+        pattern_id,
+        String(draft["name"] ?? ""),
+        String(draft["description"] ?? ""),
+        String(draft["body"] ?? ""),
+      );
+      this.db.mark_im_skill_suggestion_status(
+        pattern_id,
+        channel,
+        target,
+        "approved",
+      );
+      return { pattern_id, skill, status: "approved" };
+    }
+
+    if (action === "dismiss") {
+      this.dismiss_skill_pattern(pattern_id);
+      this.db.mark_im_skill_suggestion_status(
+        pattern_id,
+        channel,
+        target,
+        "dismissed",
+      );
+      return { pattern_id, status: "dismissed" };
+    }
+
+    throw new Error("unsupported skill suggestion action");
   }
 
   start(): void {
