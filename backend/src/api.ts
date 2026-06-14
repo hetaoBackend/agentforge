@@ -1099,12 +1099,8 @@ async function handleGet(
           DEFAULT_AGENT,
         ),
         skill_sweep_cron: ctx.db.get_setting("skill_sweep_cron", "0 3 * * *"),
-        im_digest_enabled:
-          ctx.db.get_setting("im_digest_enabled", "0") === "1",
-        im_digest_cron: ctx.db.get_setting(
-          "im_digest_cron",
-          "0 9 * * 1-5",
-        ),
+        im_digest_enabled: ctx.db.get_setting("im_digest_enabled", "0") === "1",
+        im_digest_cron: ctx.db.get_setting("im_digest_cron", "0 9 * * 1-5"),
         im_digest_channels: parse_im_digest_recipients(
           ctx.db.get_setting("im_digest_channels", "[]"),
         ),

@@ -467,9 +467,7 @@ export class TaskScheduler extends BusAwareSchedulerMixin {
     const digest = compose_im_digest(this.db, {
       include_empty: Boolean(payload["include_empty"] ?? false),
       limit:
-        payload["limit"] === undefined
-          ? undefined
-          : Number(payload["limit"]),
+        payload["limit"] === undefined ? undefined : Number(payload["limit"]),
       since:
         payload["since"] === null || payload["since"] === undefined
           ? null

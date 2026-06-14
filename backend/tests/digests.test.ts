@@ -30,7 +30,9 @@ describe("im digests", () => {
 
     expect(digest.has_content).toBe(false);
     expect(digest.sections).toEqual([]);
-    expect(render_im_digest_text(digest)).toContain("No notable AgentForge activity");
+    expect(render_im_digest_text(digest)).toContain(
+      "No notable AgentForge activity",
+    );
   });
 
   test("digest separates completed failed and needs-you tasks", () => {
@@ -136,8 +138,8 @@ describe("im digests", () => {
     ]);
 
     expect(parse_im_digest_recipients("not json")).toEqual([]);
-    expect(parse_im_digest_recipients([{ channel: "weixin", target: "peer" }])).toEqual([
-      { channel: "weixin", target: "peer" },
-    ]);
+    expect(
+      parse_im_digest_recipients([{ channel: "weixin", target: "peer" }]),
+    ).toEqual([{ channel: "weixin", target: "peer" }]);
   });
 });
