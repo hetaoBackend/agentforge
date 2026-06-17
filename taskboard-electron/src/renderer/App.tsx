@@ -4185,10 +4185,18 @@ function SettingsModal({
                               telegram: { ...c.telegram, bot_token: e.target.value },
                             }))
                           }
-                          placeholder="123456:ABC-DEF..."
+                          placeholder={
+                            ch.configured && !ch.bot_token
+                              ? "Token saved – enter new token to replace"
+                              : "123456:ABC-DEF..."
+                          }
                           style={fieldStyle}
                         />
-                        <div style={hintStyle}>Token from @BotFather</div>
+                        <div style={hintStyle}>
+                          {ch.configured && !ch.bot_token
+                            ? "Token is saved. Leave blank to keep the current token."
+                            : "Token from @BotFather"}
+                        </div>
                       </div>
 
                       <div style={{ marginBottom: 12 }}>
@@ -4432,10 +4440,18 @@ function SettingsModal({
                               slack: { ...c.slack, bot_token: e.target.value },
                             }))
                           }
-                          placeholder="xoxb-..."
+                          placeholder={
+                            ch.configured && !ch.bot_token
+                              ? "Token saved – enter new token to replace"
+                              : "xoxb-..."
+                          }
                           style={fieldStyle}
                         />
-                        <div style={hintStyle}>Bot token from OAuth & Permissions</div>
+                        <div style={hintStyle}>
+                          {ch.configured && !ch.bot_token
+                            ? "Token is saved. Leave blank to keep the current token."
+                            : "Bot token from OAuth & Permissions"}
+                        </div>
                       </div>
 
                       <div style={{ marginBottom: 12 }}>
@@ -4449,10 +4465,18 @@ function SettingsModal({
                               slack: { ...c.slack, app_token: e.target.value },
                             }))
                           }
-                          placeholder="xapp-..."
+                          placeholder={
+                            ch.configured && !ch.app_token
+                              ? "Token saved – enter new token to replace"
+                              : "xapp-..."
+                          }
                           style={fieldStyle}
                         />
-                        <div style={hintStyle}>App-level token for Socket Mode</div>
+                        <div style={hintStyle}>
+                          {ch.configured && !ch.app_token
+                            ? "Token is saved. Leave blank to keep the current token."
+                            : "App-level token for Socket Mode"}
+                        </div>
                       </div>
 
                       <div style={{ marginBottom: 12 }}>

@@ -17917,12 +17917,12 @@ function SettingsModal({
                               ...c,
                               telegram: { ...c.telegram, bot_token: e.target.value }
                             })),
-                            placeholder: "123456:ABC-DEF...",
+                            placeholder: ch.configured && !ch.bot_token ? "Token saved – enter new token to replace" : "123456:ABC-DEF...",
                             style: fieldStyle
                           }),
                           /* @__PURE__ */ jsx_runtime.jsx("div", {
                             style: hintStyle,
-                            children: "Token from @BotFather"
+                            children: ch.configured && !ch.bot_token ? "Token is saved. Leave blank to keep the current token." : "Token from @BotFather"
                           })
                         ]
                       }),
@@ -18189,12 +18189,12 @@ function SettingsModal({
                               ...c,
                               slack: { ...c.slack, bot_token: e.target.value }
                             })),
-                            placeholder: "xoxb-...",
+                            placeholder: ch.configured && !ch.bot_token ? "Token saved – enter new token to replace" : "xoxb-...",
                             style: fieldStyle
                           }),
                           /* @__PURE__ */ jsx_runtime.jsx("div", {
                             style: hintStyle,
-                            children: "Bot token from OAuth & Permissions"
+                            children: ch.configured && !ch.bot_token ? "Token is saved. Leave blank to keep the current token." : "Bot token from OAuth & Permissions"
                           })
                         ]
                       }),
@@ -18212,12 +18212,12 @@ function SettingsModal({
                               ...c,
                               slack: { ...c.slack, app_token: e.target.value }
                             })),
-                            placeholder: "xapp-...",
+                            placeholder: ch.configured && !ch.app_token ? "Token saved – enter new token to replace" : "xapp-...",
                             style: fieldStyle
                           }),
                           /* @__PURE__ */ jsx_runtime.jsx("div", {
                             style: hintStyle,
-                            children: "App-level token for Socket Mode"
+                            children: ch.configured && !ch.app_token ? "Token is saved. Leave blank to keep the current token." : "App-level token for Socket Mode"
                           })
                         ]
                       }),
@@ -20565,5 +20565,5 @@ import_client.createRoot(document.getElementById("root")).render(/* @__PURE__ */
   children: /* @__PURE__ */ jsx_runtime2.jsx(App, {})
 }));
 
-//# debugId=AD506498201C93FE64756E2164756E21
-//# sourceMappingURL=chunk-mvevhae2.js.map
+//# debugId=26E154197C6D4A4864756E2164756E21
+//# sourceMappingURL=chunk-53wppy34.js.map
