@@ -452,7 +452,7 @@ var require_react = __commonJS((exports, module) => {
   init_react_production();
   if (true) {
     module.exports = exports_react_production;
-  }
+  } else {}
 });
 
 // node_modules/scheduler/cjs/scheduler.production.js
@@ -720,7 +720,7 @@ var require_scheduler = __commonJS((exports, module) => {
   init_scheduler_production();
   if (true) {
     module.exports = exports_scheduler_production;
-  }
+  } else {}
 });
 
 // node_modules/react-dom/cjs/react-dom.production.js
@@ -887,7 +887,7 @@ var require_react_dom = __commonJS((exports, module) => {
   if (true) {
     checkDCE();
     module.exports = exports_react_dom_production;
-  }
+  } else {}
 });
 
 // node_modules/react-dom/cjs/react-dom-client.production.js
@@ -10934,7 +10934,7 @@ var require_client = __commonJS((exports, module) => {
   if (true) {
     checkDCE();
     module.exports = exports_react_dom_client_production;
-  }
+  } else {}
 });
 
 // node_modules/qrcode/lib/can-promise.js
@@ -13013,8 +13013,9 @@ var require_jsx_runtime = __commonJS((exports, module) => {
   init_react_jsx_runtime_production();
   if (true) {
     module.exports = exports_react_jsx_runtime_production;
-  }
+  } else {}
 });
+
 // src/renderer/main.tsx
 var import_react5 = __toESM(require_react(), 1);
 var import_client = __toESM(require_client(), 1);
@@ -20564,5 +20565,5 @@ import_client.createRoot(document.getElementById("root")).render(/* @__PURE__ */
   children: /* @__PURE__ */ jsx_runtime2.jsx(App, {})
 }));
 
-//# debugId=4BA23EF813E45A2F64756E2164756E21
-//# sourceMappingURL=chunk-cs88ar74.js.map
+//# debugId=AD506498201C93FE64756E2164756E21
+//# sourceMappingURL=chunk-mvevhae2.js.map
