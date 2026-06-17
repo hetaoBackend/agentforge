@@ -177,26 +177,45 @@ export type TelegramApi = (
 export function make_fetch_api(token: string): TelegramApi {
   return async (method: string, params: Record<string, unknown> = {}) => {
     const body = _telegram_api_body(params);
-    const resp = await fetch(`https://api.telegram.org/bot${token}/${method}`, {
-      method: "POST",
-      ...(body instanceof FormData
-        ? { body }
-        : {
-            headers: { "content-type": "application/json" },
-            body,
-          }),
-    });
-    const data = (await resp.json()) as {
-      ok?: boolean;
-      result?: unknown;
-      description?: string;
-    };
-    if (!data.ok) {
-      throw new Error(
-        `Telegram API ${method} failed: ${data.description ?? `HTTP ${resp.status}`}`,
+    // For getUpdates long-polls, Telegram holds the connection for `timeout`
+    // seconds. We set a client-side AbortController deadline slightly longer so
+    // Bun's side closes cleanly rather than Telegram/NAT closing it abruptly
+    // (which would surface as "socket connection closed unexpectedly").
+    const longPollTimeout =
+      typeof params["timeout"] === "number" ? params["timeout"] : null;
+    const controller = longPollTimeout !== null ? new AbortController() : null;
+    const timer =
+      controller && longPollTimeout !== null
+        ? setTimeout(() => controller.abort(), (longPollTimeout + 10) * 1000)
+        : null;
+    try {
+      const resp = await fetch(
+        `https://api.telegram.org/bot${token}/${method}`,
+        {
+          method: "POST",
+          signal: controller?.signal ?? null,
+          ...(body instanceof FormData
+            ? { body }
+            : {
+                headers: { "content-type": "application/json" },
+                body,
+              }),
+        },
       );
+      const data = (await resp.json()) as {
+        ok?: boolean;
+        result?: unknown;
+        description?: string;
+      };
+      if (!data.ok) {
+        throw new Error(
+          `Telegram API ${method} failed: ${data.description ?? `HTTP ${resp.status}`}`,
+        );
+      }
+      return data.result;
+    } finally {
+      if (timer !== null) clearTimeout(timer);
     }
-    return data.result;
   };
 }
 
@@ -501,7 +520,14 @@ export class TelegramChannel extends Channel {
         }
       }
     } catch (e) {
-      console.log(`[Telegram] Polling error: ${e}`);
+      const msg = String(e);
+      // Transient: Telegram or a NAT/proxy closed the long-poll connection, or
+      // our AbortController fired. Both are normal; just retry quietly.
+      const isTransient =
+        msg.includes("socket connection was closed") ||
+        msg.includes("AbortError") ||
+        msg.includes("The operation was aborted");
+      if (!isTransient) console.log(`[Telegram] Polling error: ${e}`);
       await sleep(1000);
     }
   }
