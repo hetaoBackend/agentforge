@@ -177,16 +177,19 @@ export type TelegramApi = (
 export function make_fetch_api(token: string): TelegramApi {
   return async (method: string, params: Record<string, unknown> = {}) => {
     const body = _telegram_api_body(params);
-    // For getUpdates long-polls, Telegram holds the connection for `timeout`
-    // seconds. We set a client-side AbortController deadline slightly longer so
-    // Bun's side closes cleanly rather than Telegram/NAT closing it abruptly
-    // (which would surface as "socket connection closed unexpectedly").
+    // For getUpdates long-polls (timeout > 0), Telegram holds the connection
+    // for `timeout` seconds. We set a client-side AbortController deadline
+    // slightly longer so Bun closes cleanly rather than Telegram/NAT closing
+    // it abruptly (which surfaces as "socket connection closed unexpectedly").
+    // Skip the controller for timeout=0 (instant poll) to avoid aborting it.
     const longPollTimeout =
-      typeof params["timeout"] === "number" ? params["timeout"] : null;
+      typeof params["timeout"] === "number" && params["timeout"] > 0
+        ? params["timeout"]
+        : null;
     const controller = longPollTimeout !== null ? new AbortController() : null;
     const timer =
-      controller && longPollTimeout !== null
-        ? setTimeout(() => controller.abort(), (longPollTimeout + 10) * 1000)
+      controller !== null
+        ? setTimeout(() => controller.abort(), (longPollTimeout! + 10) * 1000)
         : null;
     try {
       const resp = await fetch(
