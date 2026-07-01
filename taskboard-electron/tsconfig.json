@@ -12,7 +12,12 @@
     "allowImportingTsExtensions": true,
     "esModuleInterop": true,
     "isolatedModules": true,
+    "ignoreDeprecations": "6.0",
+    "baseUrl": ".",
+    "paths": {
+      "electrobun/view": ["src/types/electrobun-view.d.ts"]
+    },
     "types": ["bun"]
   },
-  "include": ["src/renderer/**/*"]
+  "include": ["src/renderer/**/*", "src/types/**/*.d.ts"]
 }

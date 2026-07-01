@@ -3,6 +3,8 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { shouldGenerateIcns } from "./icon-platform.ts";
+
 const require = createRequire(import.meta.url);
 const { PNG } = require("pngjs");
 
@@ -113,6 +115,16 @@ for (const [name, size] of iconSpecs) {
   const png = renderIcon(source, size);
   await writeFile(path.join(iconsetDir, name), png);
   if (size === 1024) await writeFile(pngPath, png);
+}
+
+if (!shouldGenerateIcns()) {
+  await rm(iconsetDir, { recursive: true, force: true });
+  console.log(
+    `[icon] wrote ${path.relative(appRoot, pngPath)}; skipped icns generation on ${
+      process.env.AGENTFORGE_ICON_PLATFORM || process.platform
+    }`,
+  );
+  process.exit(0);
 }
 
 const result = Bun.spawnSync(["iconutil", "-c", "icns", iconsetDir, "-o", icnsPath], {

@@ -41,10 +41,14 @@ export function _skill_library_dirs(): [string, string, string] {
  *
  * In the dev tree this file lives at backend/src/, so the repo root is two
  * levels up. Inside a Bun-compiled binary, import.meta.dir is a virtual bunfs
- * path, so we resolve relative to dirname(process.execPath); the Electron
- * packager ships skill-creator as an extra resource beside the binary.
+ * path, so packaged desktop hosts can set AGENTFORGE_SKILL_CREATOR_DIR to the
+ * copied resource path. The Bun-compiled backend fallback resolves relative to
+ * dirname(process.execPath).
  */
 export function _skill_creator_dir(): string {
+  const override = process.env.AGENTFORGE_SKILL_CREATOR_DIR;
+  if (override) return override;
+
   const here = import.meta.dir;
   const isCompiled = here.includes("$bunfs") || here.includes("~BUN");
   if (!isCompiled) {

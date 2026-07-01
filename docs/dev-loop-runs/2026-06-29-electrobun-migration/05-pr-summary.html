@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Electrobun Migration Summary</title>
+    <style>
+      body {
+        font-family:
+          -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        margin: 0;
+        padding: 32px;
+        color: #17202a;
+        background: #f7f8fa;
+      }
+      main {
+        max-width: 960px;
+        margin: 0 auto;
+        background: white;
+        border: 1px solid #d8dee6;
+        padding: 28px;
+      }
+      h1 {
+        margin-top: 0;
+      }
+      .status {
+        display: inline-block;
+        padding: 4px 8px;
+        border-radius: 4px;
+        background: #dff3e4;
+        color: #155724;
+        font-weight: 600;
+      }
+      details {
+        margin: 16px 0;
+      }
+      summary {
+        cursor: pointer;
+        font-weight: 600;
+      }
+      code {
+        background: #eef1f5;
+        padding: 1px 4px;
+        border-radius: 3px;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Electrobun Migration Summary</h1>
+      <p><span class="status">READY FOR REVIEW</span></p>
+      <p>
+        This run migrates AgentForge's desktop shell from Electron/electron-forge
+        to Electrobun while preserving the Bun backend, React renderer, and
+        loopback REST API.
+      </p>
+      <h2>Current State</h2>
+      <p>
+        The Electron main/preload layer, electron-forge config, and Electron
+        build scripts have been replaced with an Electrobun shell. The renderer
+        keeps its existing desktop bridge surface through a compatibility alias,
+        and the backend still serves the same REST API on <code>127.0.0.1:9712</code>.
+      </p>
+      <details open>
+        <summary>Implemented Changes</summary>
+        <ul>
+          <li>Added an Electrobun Bun main process that starts <code>runServer(9712)</code>.</li>
+          <li>Added Electrobun config, view HTML, and resource packaging for the Weixin bridge and Skill Library vendor assets.</li>
+          <li>Exposed directory selection through Electrobun RPC behind the current renderer facade.</li>
+          <li>Replaced Electron package scripts, dependencies, and documentation with Electrobun equivalents.</li>
+          <li>Added focused tests for native bridge behavior and packaged resource path resolution.</li>
+          <li>Updated a stale architecture comparison report that still described the old Electron/Python packaging model.</li>
+          <li>Aligned Electrobun Bun/view entrypoint filenames with the launcher's <code>index.js</code> contract.</li>
+          <li>Allowed Electrobun <code>views://</code> renderer origins through backend CORS.</li>
+        </ul>
+      </details>
+      <details>
+        <summary>Verification</summary>
+        <ul>
+          <li><code>cd taskboard-electron && bun run typecheck && bun run lint && bun run format:check && bun run test && bun run build:check</code></li>
+          <li><code>cd backend && bun test tests/scheduler-more.test.ts --test-name-pattern skill_creator_dir</code></li>
+          <li><code>cd backend && bun test tests/executor-wrappers.test.ts --test-name-pattern "default_popen exposes line iterables and waits for exit"</code></li>
+          <li><code>make check</code></li>
+          <li>Follow-up audit reran the frontend gate and <code>make check</code> after documentation cleanup.</li>
+          <li><code>curl -sS http://127.0.0.1:9712/api/health</code> returned healthy JSON from the existing backend listener.</li>
+          <li>Final startup smoke launched <code>bun run start</code>, loaded the task board, and captured <code>/tmp/agentforge-working.png</code>.</li>
+          <li>Final backend gate passed with 488 tests; final frontend/Electrobun gate passed with 23 tests.</li>
+        </ul>
+      </details>
+      <details>
+        <summary>Residual Risk</summary>
+        <p>
+          A packaged <code>.app</code> or DMG smoke test should still be part of
+          release QA, especially for native directory selection and long-running
+          backend lifecycle.
+        </p>
+      </details>
+    </main>
+  </body>
+</html>

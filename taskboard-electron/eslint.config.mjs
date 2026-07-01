@@ -9,6 +9,9 @@ export default tseslint.config(
   {
     ignores: [
       ".bun/**",
+      ".vite/**",
+      "build/**",
+      "artifacts/**",
       "out/**",
       "node_modules/**",
       "resources/**",
@@ -19,10 +22,10 @@ export default tseslint.config(
 
   js.configs.recommended,
 
-  // TypeScript sources (main, preload, renderer, tests, build scripts).
+  // TypeScript sources (desktop host, renderer, tests, build scripts, config).
   ...tseslint.configs.recommended.map((config) => ({
     ...config,
-    files: ["src/**/*.{ts,tsx}", "scripts/**/*.ts"],
+    files: ["src/**/*.{ts,tsx}", "scripts/**/*.ts", "*.config.ts"],
   })),
 
   // Project-wide tweaks: allow `_`-prefixed throwaways and intentional empty
@@ -63,9 +66,9 @@ export default tseslint.config(
     },
   },
 
-  // Node-side code: Electron main/preload, build scripts, Forge config.
+  // Bun-side desktop host code, build scripts, and config.
   {
-    files: ["src/main.ts", "src/preload.ts", "scripts/**/*.ts", "forge.config.js", "*.config.js"],
+    files: ["src/electrobun/**/*.ts", "scripts/**/*.ts", "*.config.{js,ts}"],
     languageOptions: {
       ecmaVersion: 2024,
       globals: {
@@ -73,15 +76,6 @@ export default tseslint.config(
         // Bun runtime globals used by the build scripts (run with `bun`).
         Bun: "readonly",
       },
-    },
-  },
-
-  // The preload script intentionally uses CommonJS `require` (Electron preload
-  // context); main.ts keeps a lazy `require` for a synchronous child_process call.
-  {
-    files: ["src/main.ts", "src/preload.ts"],
-    rules: {
-      "@typescript-eslint/no-require-imports": "off",
     },
   },
 
@@ -109,7 +103,7 @@ export default tseslint.config(
 
   // Renderer unit tests run under `bun test`, so they need Node globals too.
   {
-    files: ["src/renderer/**/*.test.ts"],
+    files: ["src/**/*.test.ts"],
     languageOptions: {
       globals: { ...globals.node },
     },

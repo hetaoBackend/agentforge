@@ -51,11 +51,7 @@ describe("executor subprocess wrappers", () => {
 
   test("default_popen exposes line iterables and waits for exit", async () => {
     const proc = await default_popen(
-      [
-        process.execPath,
-        "-e",
-        "console.log('line1'); console.log('line2'); console.error('errline')",
-      ],
+      ["/bin/sh", "-c", "printf 'line1\\nline2\\n'; printf 'errline\\n' >&2"],
       { cwd: ".", env: getEnv() },
     );
 

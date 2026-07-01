@@ -59,6 +59,7 @@ const MAX_BODY_SIZE = 10 * 1024 * 1024;
 function isAllowedOrigin(origin: string): boolean {
   if (origin === "null") return true;
   if (!origin) return true;
+  if (origin.startsWith("views://")) return true;
   return (
     origin === "http://localhost" || origin.startsWith("http://localhost:")
   );

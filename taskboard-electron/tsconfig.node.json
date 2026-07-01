@@ -10,7 +10,18 @@
     "noEmit": true,
     "allowImportingTsExtensions": true,
     "esModuleInterop": true,
-    "types": ["node"]
+    "ignoreDeprecations": "6.0",
+    "baseUrl": ".",
+    "paths": {
+      "electrobun": ["src/types/electrobun.d.ts"],
+      "electrobun/bun": ["src/types/electrobun-bun.d.ts"]
+    },
+    "types": ["bun", "node"]
   },
-  "include": ["src/main.ts", "src/preload.ts"]
+  "include": [
+    "src/electrobun/**/*.ts",
+    "src/types/**/*.d.ts",
+    "scripts/**/*.ts",
+    "electrobun.config.ts"
+  ]
 }

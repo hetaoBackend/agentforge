@@ -38,7 +38,7 @@ bun install --ignore-scripts
 bun run start
 ```
 
-开发命令会构建 Electron/React 前端、启动 Bun 后端，并在改动后自动刷新。
+开发命令会构建 Electrobun/React 前端，在桌面宿主进程中启动 Bun 后端，并在改动后重新启动 App。
 
 ### 构建 DMG
 
@@ -47,7 +47,7 @@ cd taskboard-electron
 bun run make
 ```
 
-产物位于 `taskboard-electron/out/make/AgentForge-1.0.0-arm64.dmg`。
+稳定版 macOS DMG 产物位于 `taskboard-electron/build/stable-macos-arm64/`。
 
 ## 核心能力
 
@@ -82,7 +82,7 @@ Skill Library 会把你反复做的工作沉淀成智能体可复用技能。
 
 ```text
 ┌─────────────────────┐        HTTP/JSON        ┌─────────────────────┐
-│ Electron + React UI │  <--------------------> │ Bun TypeScript API  │
+│ Electrobun + React  │  <--------------------> │ Bun TypeScript API  │
 │ Task board renderer │      127.0.0.1:9712     │ Scheduler + runner  │
 └─────────────────────┘                         └──────────┬──────────┘
                                                             │
@@ -92,7 +92,7 @@ Skill Library 会把你反复做的工作沉淀成智能体可复用技能。
                               ~/.agentforge           cron + delayed       claude / codex
 ```
 
-- `taskboard-electron/src/main.ts` 随桌面 App 启停后端。
+- `taskboard-electron/src/electrobun/main.ts` 随桌面 App 启停后端。
 - `taskboard-electron/src/renderer/App.tsx` 渲染任务看板、心跳、设置和技能库。
 - `backend/taskboard.ts` 通过 `Bun.serve` 暴露 REST API。
 - `backend/src/db.ts` 用 SQLite 存储任务、运行记录、输出事件、设置、心跳和技能。
@@ -172,7 +172,7 @@ cd backend
 bun taskboard.ts
 ```
 
-前端和 Electron App:
+桌面 App:
 
 ```bash
 cd taskboard-electron
@@ -196,12 +196,11 @@ bun run build:check
 
 ## 常见问题
 
-如果 `bun install` 下载 Electron 时卡住，可以使用镜像:
+如果 `bun install` 或 `bun run build:check` 下载 Electrobun artifact 时卡住，可以使用 npm 镜像:
 
 ```bash
-export ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/
 cd taskboard-electron
-bun install --registry https://registry.npmmirror.com --ignore-scripts
+bun install --registry https://registry.npmmirror.com
 ```
 
 更多说明见 [docs/installation-troubleshooting.md](docs/installation-troubleshooting.md)。
@@ -215,7 +214,7 @@ bun install --registry https://registry.npmmirror.com --ignore-scripts
 关键文件:
 
 - `backend/` - Bun/TypeScript 后端、调度器、执行器、API 和渠道。
-- `taskboard-electron/src/main.ts` - Electron 主进程。
+- `taskboard-electron/src/electrobun/main.ts` - Electrobun Bun 主进程。
 - `taskboard-electron/src/renderer/App.tsx` - React 渲染进程。
 - `skills/agentforge/` - 智能体委派任务的内置技能。
 

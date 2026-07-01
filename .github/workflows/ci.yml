@@ -50,7 +50,11 @@ jobs:
         with:
           bun-version: latest
 
-      - name: Install dependencies
+      - name: Install backend dependencies
+        working-directory: backend
+        run: bun install --frozen-lockfile
+
+      - name: Install frontend dependencies
         run: bun install --frozen-lockfile
 
       - name: Typecheck (tsc)

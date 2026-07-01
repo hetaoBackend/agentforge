@@ -13,8 +13,8 @@
 | 一句话定位 | 本地 macOS 桌面 App，kanban 式编排 AI coding agent | 开源 managed-agents 平台，"把 coding agent 变成真正的队友" |
 | 核心隐喻 | 看板/流水线 (Queue→Running→Done) | 队友/雇员 ("Your next 10 hires won't be human") |
 | 目标用户 | macOS 上的个人开发者 / 技术 power user | 开发团队 / 技术组织 (多人多机协作) |
-| 部署形态 | macOS DMG 桌面 App (Electron+Python) | 自托管 (Docker Compose / 单 Go 二进制 / K8s Helm) + 托管云 |
-| 后端语言/栈 | Python (单文件 `http.server`) + Electron | Go (Chi + sqlc + gorilla/websocket) + Next.js 16 |
+| 部署形态 | macOS DMG 桌面 App (Electrobun+Bun/TypeScript) | 自托管 (Docker Compose / 单 Go 二进制 / K8s Helm) + 托管云 |
+| 后端语言/栈 | Bun/TypeScript (`Bun.serve` + `bun:sqlite`) + Electrobun | Go (Chi + sqlc + gorilla/websocket) + Next.js 16 |
 | 数据库 | SQLite (`~/.agentforge/tasks.db`) | PostgreSQL 17 + pgvector |
 | 实时传输 | HTTP 轮询 (无 WebSocket) | WebSocket (gorilla/websocket) |
 | 网络监听 | 仅本地回环 `127.0.0.1:9712` | 后端 8080 / 前端 3000 (可远程访问) |
@@ -33,7 +33,7 @@
 
 ### 3.1 产品定位与目标用户
 
-**AgentForge** 定位为"本地优先的 agent 编排层":把 AI coding agent 变成一支"可管理、可调度的劳动力",但其使用单位是**单个开发者在自己 Mac 上**。README 标语是"Orchestrate AI coding agents from your Mac — schedule, monitor, and chain Claude Code tasks on a kanban board"。它的隐喻是**看板/流水线**,差异化卖点是"agents that spawn agents"(运行中的任务通过本地 REST API 创建子任务、搭建 DAG)。目标用户明确要求 macOS 12.0+、Python 3.12+、Node 18+、PATH 上有 Claude Code CLI。聊天频道(Telegram/Slack/Feishu/WeChat)服务的是"想从手机或团队群里触发/监控任务"的同一个个人用户。
+**AgentForge** 定位为"本地优先的 agent 编排层":把 AI coding agent 变成一支"可管理、可调度的劳动力",但其使用单位是**单个开发者在自己 Mac 上**。README 标语是"Orchestrate AI coding agents from your Mac — schedule, monitor, and chain Claude Code tasks on a kanban board"。它的隐喻是**看板/流水线**,差异化卖点是"agents that spawn agents"(运行中的任务通过本地 REST API 创建子任务、搭建 DAG)。源码开发与打包使用 Bun/TypeScript,桌面壳为 Electrobun,运行任务需要 PATH 上有 Claude Code 或 OpenAI Codex CLI。聊天频道(Telegram/Slack/Feishu/WeChat)服务的是"想从手机或团队群里触发/监控任务"的同一个个人用户。
 
 **Multica** 定位为"开源 managed-agents 平台",隐喻是**队友/雇员**:你像给人类同事派活一样把 issue 指派给 agent,agent 有 profile、出现在 assignee 下拉里、在看板上、会评论、会创建 issue、会主动上报 blocker。其官方标语极具攻击性:"Your next 10 hires won't be human",落地页副标题是"Project Management for Human + Agent Teams"。目标用户是**有多 agent 协作痛点的开发团队/技术组织**(agent 跑在不同机器、不同 runtime,队友不知道哪些已被自动化),并强调自托管与数据主权。第三方分析明确指出"solo developers running occasional tasks may not need it yet"。
 
@@ -41,10 +41,10 @@
 
 ### 3.2 架构与技术实现
 
-**AgentForge** 是经典的两进程 Electron + Python 模型:
-- Electron 主进程 (`main.js`) 启动时 spawn Python 后端、退出时 kill;dev 下跑 `uv run taskboard.py`,打包后跑 PyInstaller 单文件二进制 `taskboard`;spawn 前用 lsof 杀掉 9712 端口的残留进程;轮询 `/api/health` (15s 超时);调 `powerSaveBlocker` 防止长任务期间 Mac 休眠。
-- Python 后端 (`taskboard.py`,约 4093 行) 是单文件 `http.server.BaseHTTPRequestHandler` REST API,**仅绑定 `127.0.0.1:9712`(回环,非 0.0.0.0)**。核心类:`TaskDB`(SQLite + `threading.RLock` + 启动恢复,把孤儿"running"任务标记为 failed)、`AgentExecutor`(跑 `claude -p` 或 `codex exec --json`)、`TaskScheduler`(每 2 秒轮询的守护线程,跟踪 process group,SIGTERM→SIGKILL 优雅关闭)。
-- `MessageBus` (`taskboard_bus.py`) 用线程安全队列解耦聊天频道与调度器。React 19 渲染层**只通过 `fetch()` 轮询**,无 WebSocket。
+**AgentForge** 是 Electrobun 桌面壳 + Bun/TypeScript 后端模型:
+- Electrobun Bun 主进程 (`taskboard-electron/src/electrobun/main.ts`) 启动时在宿主进程内调用 `runServer(9712)`,退出时停止后端;React 视图由 Electrobun 构建,原生目录选择通过 Electrobun RPC 暴露给渲染层。
+- Bun 后端 (`backend/taskboard.ts` + `backend/src/`) 使用 `Bun.serve` 提供 REST API,**仅绑定 `127.0.0.1:9712`(回环,非 0.0.0.0)**。核心类:`TaskDB`(`bun:sqlite` + 启动恢复,把孤儿"running"任务标记为 failed)、`AgentExecutor`(跑 `claude -p` 或 `codex exec --json`)、`TaskScheduler`(每 2 秒轮询,跟踪 process group,SIGTERM→SIGKILL 优雅关闭)。
+- `MessageBus` (`backend/src/bus.ts`) 解耦聊天频道与调度器。React 19 渲染层**只通过 `fetch()` 轮询**,无 WebSocket。
 
 **Multica** 是三层架构,作为已有 CLI 之上的**控制层**(非自身计算引擎):
 - 前端 Next.js 16 (App Router);后端 **单个 Go 二进制**(Chi router + sqlc + gorilla/websocket),暴露 REST + WebSocket,自托管端口 8080;持久层 **PostgreSQL 17 + pgvector**。
@@ -72,7 +72,7 @@
 
 ### 3.4 商业模式与生态
 
-**AgentForge**:纯开源 **MIT** 许可。以**自建/可下载的 macOS DMG** 形式分发,**无支付、无 license key、无遥测、无账号/认证代码**(后端回环 only,远程仅 CSRF)。打包用 electron-forge(maker-dmg ULFO + maker-zip),ad-hoc 代码签名,Electron fuses 加固;Python 后端打成 PyInstaller 单文件二进制嵌入 `.app`。有一个营销落地页 (vercel)。仓库内无任何闭源组件或商业层级。
+**AgentForge**:纯开源 **MIT** 许可。以**自建/可下载的 macOS DMG** 形式分发,**无支付、无 license key、无遥测、无账号/认证代码**(后端回环 only,远程仅 CSRF)。桌面壳使用 Electrobun 打包,后端保持 Bun/TypeScript 并随桌面应用在宿主进程中启停。有一个营销落地页 (vercel)。仓库内无任何闭源组件或商业层级。
 
 **Multica**:**开源核心(open-core)混合模式**。全栈 source-available 在 GitHub(约 35k stars / 4.3k forks),可免费自托管(Docker Compose / 单 Go 二进制 / K8s Helm);另有托管云 multica.ai,**定价未公开**(仅"Start free trial"和"Talk to sales" CTA)。许可证是**修改版 Apache 2.0**:组织内部使用免费,但未经授权**不得作为托管服务转售给第三方或嵌入商业分发产品**——因此是 source-available open-core,而非纯 OSI Apache。核心隐私卖点:"Code never passes through Multica servers",本地 daemon 执行、服务器只协调任务状态和广播事件。最新 release v0.3.15 (2026-06-03)。
 
@@ -130,7 +130,7 @@
 
 5. **许可证与商业模式:纯 MIT 个人工具 vs open-core 商业平台。** AgentForge 是 MIT、零商业化痕迹;Multica 是修改版 Apache 2.0(限制 SaaS 转售)+ 托管云 + sales 通道,带明确商业意图。
 
-6. **技术现代度与实时性:HTTP 轮询/SQLite/Python 单文件 vs WebSocket/PostgreSQL+pgvector/Go 单二进制。** Multica 的栈在实时性与水平扩展上更现代;AgentForge 的栈更轻、更易在单机本地跑起来。
+6. **技术现代度与实时性:HTTP 轮询/SQLite/Bun TypeScript vs WebSocket/PostgreSQL+pgvector/Go 单二进制。** Multica 的栈在实时性与水平扩展上更现代;AgentForge 的栈更轻、更易在单机本地跑起来。
 
 ---
 
@@ -156,7 +156,7 @@
 
 ## 7. 证据可信度说明
 
-**AgentForge(高可信度):** 本报告中所有 AgentForge 事实均来自**对其源代码的直接核验**(`taskboard.py` ~4093 行、`App.jsx` ~3605 行、`main.js`、`pyproject.toml`、`package.json`、`LICENSE` 等),可信度高。需特别注意:其 `CLAUDE.md` 文档已**过时/失真**——文档称后端监听 `0.0.0.0` 实际为 `127.0.0.1` 回环;文档称 `--permission-mode acceptEdits` 实际代码用 `bypassPermissions`;文档称"无自动化测试"实际有完整 pytest 套件。本报告采信**代码**而非该文档。
+**AgentForge(高可信度):** 本报告中所有 AgentForge 事实均来自**对其源代码的直接核验**(`backend/taskboard.ts`、`backend/src/`、`taskboard-electron/src/electrobun/main.ts`、`taskboard-electron/src/renderer/App.tsx`、`package.json`、`LICENSE` 等),可信度高。需特别注意:旧版文档和历史计划可能保留 Electron/Python 迁移前描述;本报告采信**当前代码**而非历史记录。
 
 **Multica(中/低可信度,以下逐条标注):** Multica 事实主要来自其 GitHub 仓库 README、官方文档、官网营销文案,以及部分源码文件(`go.mod`、`docker-compose.yml`、migrations、`LICENSE`),可信度低于源码级核验。需明确标注的核验问题:
 

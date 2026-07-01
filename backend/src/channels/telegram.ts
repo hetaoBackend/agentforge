@@ -481,8 +481,21 @@ export class TelegramChannel extends Channel {
     await this._drop_pending_updates();
     console.log("[Telegram] Bot polling started");
 
+    let consecutiveErrors = 0;
     while (this._running) {
-      await this._poll_once();
+      const ok = await this._poll_once(consecutiveErrors);
+      if (ok) {
+        consecutiveErrors = 0;
+      } else {
+        consecutiveErrors++;
+        // Exponential backoff: 1s, 2s, 4s, 8s … capped at 60s.
+        // _poll_once already slept 1s; we add extra delay here.
+        if (consecutiveErrors > 3) {
+          const extraMs =
+            Math.min(Math.pow(2, consecutiveErrors - 3), 60) * 1000;
+          await sleep(extraMs);
+        }
+      }
     }
   }
 
@@ -503,9 +516,10 @@ export class TelegramChannel extends Channel {
     }
   }
 
-  /** One getUpdates long-poll iteration; routes each update to the handlers. */
-  async _poll_once(): Promise<void> {
-    if (!this._api) return;
+  /** One getUpdates long-poll iteration; routes each update to the handlers.
+   *  Returns true on success, false on error. */
+  async _poll_once(consecutiveErrors = 0): Promise<boolean> {
+    if (!this._api) return true;
     try {
       const updates = (await this._api("getUpdates", {
         offset: this._offset,
@@ -522,16 +536,38 @@ export class TelegramChannel extends Channel {
           console.log(`[Telegram] Error handling update: ${e}`);
         }
       }
+      return true;
     } catch (e) {
       const msg = String(e);
-      // Transient: Telegram or a NAT/proxy closed the long-poll connection, or
-      // our AbortController fired. Both are normal; just retry quietly.
-      const isTransient =
+      // Silent: expected connection resets on a 30s long-poll.
+      const isSilent =
         msg.includes("socket connection was closed") ||
         msg.includes("AbortError") ||
         msg.includes("The operation was aborted");
-      if (!isTransient) console.log(`[Telegram] Polling error: ${e}`);
+      // Connectivity failures (Telegram unreachable): log only on the first
+      // occurrence and every 10th after that to avoid log spam.
+      const isConnectivity =
+        msg.includes("typo in the url") ||
+        msg.includes("ECONNREFUSED") ||
+        msg.includes("connect failed") ||
+        msg.includes("ENOTFOUND") ||
+        msg.includes("fetch failed");
+      if (!isSilent) {
+        if (isConnectivity) {
+          if (consecutiveErrors === 0)
+            console.log(
+              `[Telegram] Polling error (will retry with backoff): ${e}`,
+            );
+          else if (consecutiveErrors % 10 === 9)
+            console.log(
+              `[Telegram] Still unreachable after ${consecutiveErrors + 1} attempts`,
+            );
+        } else {
+          console.log(`[Telegram] Polling error: ${e}`);
+        }
+      }
       await sleep(1000);
+      return false;
     }
   }
 

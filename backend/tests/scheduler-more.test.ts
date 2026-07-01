@@ -25,6 +25,7 @@ import {
   _compose_skill_md,
   _parse_skill_frontmatter,
   _sanitize_skill_name,
+  _skill_creator_dir,
   expanduser,
   link_skill,
   remove_skill_from_disk,
@@ -99,12 +100,15 @@ describe("scheduler more", () => {
   let db: TaskDB;
   let sched: TaskScheduler;
   let savedHome: string | undefined;
+  let savedSkillCreatorDir: string | undefined;
 
   beforeEach(() => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "agentforge-test-"));
     // Sandbox $HOME so the on-disk skill helpers never touch the real home dir.
     savedHome = process.env.HOME;
+    savedSkillCreatorDir = process.env.AGENTFORGE_SKILL_CREATOR_DIR;
     process.env.HOME = tmpDir;
+    delete process.env.AGENTFORGE_SKILL_CREATOR_DIR;
     db = new TaskDB(path.join(tmpDir, "t.db"));
     sched = new TaskScheduler(db);
   });
@@ -113,6 +117,9 @@ describe("scheduler more", () => {
     AgentExecutor.subprocess_run = default_subprocess_run;
     if (savedHome === undefined) delete process.env.HOME;
     else process.env.HOME = savedHome;
+    if (savedSkillCreatorDir === undefined)
+      delete process.env.AGENTFORGE_SKILL_CREATOR_DIR;
+    else process.env.AGENTFORGE_SKILL_CREATOR_DIR = savedSkillCreatorDir;
     db.conn.close();
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
@@ -206,6 +213,13 @@ describe("scheduler more", () => {
       "leading-and-trailing",
     );
     expect(_sanitize_skill_name(null)).toBe("");
+  });
+
+  test("test_skill_creator_dir_honors_packaged_resource_override", () => {
+    const packaged = path.join(tmpDir, "Resources", "vendor", "skill-creator");
+    process.env.AGENTFORGE_SKILL_CREATOR_DIR = packaged;
+
+    expect(_skill_creator_dir()).toBe(packaged);
   });
 
   // ── AgentExecutor.run (subprocess mocked — not the _execute_task path) ───

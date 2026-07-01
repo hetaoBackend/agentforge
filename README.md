@@ -38,7 +38,7 @@ bun install --ignore-scripts
 bun run start
 ```
 
-The Electron dev command builds the renderer, starts the Bun backend, and reloads the app while you work.
+The Electrobun dev command builds the renderer, starts the Bun backend in the desktop host, and relaunches the app while you work.
 
 ### Build A DMG
 
@@ -47,7 +47,7 @@ cd taskboard-electron
 bun run make
 ```
 
-The packaged app bundles the compiled Bun backend at `taskboard-electron/out/make/AgentForge-1.0.0-arm64.dmg`.
+The packaged app is built by Electrobun. Stable macOS builds write the DMG under `taskboard-electron/build/stable-macos-arm64/`.
 
 ## What You Can Do
 
@@ -82,7 +82,7 @@ The automatic sweep is off by default because it spends tokens. Enable it in Set
 
 ```text
 ┌─────────────────────┐        HTTP/JSON        ┌─────────────────────┐
-│ Electron + React UI │  <--------------------> │ Bun TypeScript API  │
+│ Electrobun + React  │  <--------------------> │ Bun TypeScript API  │
 │ Task board renderer │      127.0.0.1:9712     │ Scheduler + runner  │
 └─────────────────────┘                         └──────────┬──────────┘
                                                             │
@@ -92,7 +92,7 @@ The automatic sweep is off by default because it spends tokens. Enable it in Set
                               ~/.agentforge           cron + delayed       claude / codex
 ```
 
-- `taskboard-electron/src/main.ts` starts and stops the backend with the desktop app.
+- `taskboard-electron/src/electrobun/main.ts` starts and stops the backend with the desktop app.
 - `taskboard-electron/src/renderer/App.tsx` renders the task board, heartbeats, settings, and skills.
 - `backend/taskboard.ts` serves the REST API through `Bun.serve`.
 - `backend/src/db.ts` stores tasks, runs, output events, settings, heartbeats, and skills in SQLite.
@@ -172,7 +172,7 @@ cd backend
 bun taskboard.ts
 ```
 
-Frontend and Electron app:
+Desktop app:
 
 ```bash
 cd taskboard-electron
@@ -196,12 +196,11 @@ bun run build:check
 
 ## Troubleshooting
 
-If `bun install` stalls while downloading Electron, use a mirror:
+If `bun install` or `bun run build:check` stalls while downloading Electrobun artifacts, use the npm registry mirror:
 
 ```bash
-export ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/
 cd taskboard-electron
-bun install --registry https://registry.npmmirror.com --ignore-scripts
+bun install --registry https://registry.npmmirror.com
 ```
 
 More setup notes live in [docs/installation-troubleshooting.md](docs/installation-troubleshooting.md).
@@ -215,7 +214,7 @@ More setup notes live in [docs/installation-troubleshooting.md](docs/installatio
 Key files:
 
 - `backend/` - Bun/TypeScript backend, scheduler, executor, API, and channels.
-- `taskboard-electron/src/main.ts` - Electron main process.
+- `taskboard-electron/src/electrobun/main.ts` - Electrobun Bun main process.
 - `taskboard-electron/src/renderer/App.tsx` - React renderer.
 - `skills/agentforge/` - bundled skill for agent-to-agent delegation.
 

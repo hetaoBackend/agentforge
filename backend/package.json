@@ -11,7 +11,7 @@
     "typecheck": "bunx tsc --noEmit",
     "format": "prettier --write \"taskboard.ts\" \"src/**/*.ts\" \"tests/**/*.ts\"",
     "format:check": "prettier --check \"taskboard.ts\" \"src/**/*.ts\" \"tests/**/*.ts\"",
-    "compile": "bun build --compile taskboard.ts --outfile ../taskboard-electron/resources/taskboard"
+    "compile": "mkdir -p ../dist && bun build --compile taskboard.ts --outfile ../dist/taskboard"
   },
   "dependencies": {
     "@larksuiteoapi/node-sdk": "^1.55.0",

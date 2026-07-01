@@ -5,7 +5,7 @@ import os from "node:os";
 
 /**
  * Return process.env augmented with common macOS tool install paths.
- * Electron (and other GUI launchers) inherit a stripped PATH that often
+ * Desktop GUI launchers inherit a stripped PATH that often
  * misses npm globals, Homebrew, and ~/.local/bin.
  */
 export function getEnv(): Record<string, string> {
@@ -53,7 +53,7 @@ export function nowIso(): string {
 /**
  * Parse ISO datetimes and collapse aware values into local naive datetimes.
  *
- * The app historically stored naive local timestamps, but the Electron UI can
+ * The app historically stored naive local timestamps, but the desktop UI can
  * submit offset-aware ISO strings for `scheduled_at`. JS Dates are epoch-based,
  * so "aware → local naive" simply means: parse, and later re-serialize with
  * dateToLocalIso(). Date-only strings are pinned to local midnight to match
