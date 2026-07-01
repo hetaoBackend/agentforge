@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
 import electrobunConfig from "../../electrobun.config.ts";
+import { shouldGenerateIcns } from "../../scripts/icon-platform.ts";
 import {
   applyBackendResourceEnv,
   resolveElectrobunResourceDir,
@@ -35,6 +36,12 @@ describe("Electrobun runtime paths", () => {
     expect(packageJson.scripts.build).toBe("bun scripts/electrobun-build.ts");
     expect(packageJson.scripts.build).toBe(packageJson.scripts["build:check"]);
     expect(packageJson.scripts.make).toBe("bun scripts/electrobun-build.ts --env=stable");
+  });
+
+  test("app icon generation only uses icns tooling on macOS", () => {
+    expect(shouldGenerateIcns("darwin")).toBe(true);
+    expect(shouldGenerateIcns("linux")).toBe(false);
+    expect(shouldGenerateIcns("win32")).toBe(false);
   });
 
   test("resolveElectrobunResourceDir resolves beside the executable directory", () => {
