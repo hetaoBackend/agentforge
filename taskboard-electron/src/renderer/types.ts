@@ -1,5 +1,5 @@
-// Shared types for the renderer: backend REST payloads (snake_case JSON from
-// taskboard.py) and the Electron context-bridge surface.
+// Shared types for the renderer: backend REST payloads (snake_case JSON for
+// API compatibility) and the native desktop bridge surface.
 
 export type TaskStatus =
   | "pending"
@@ -77,12 +77,12 @@ export interface Heartbeat {
   updated_at: string;
 }
 
-export interface ElectronAPI {
+export interface DesktopBridgeAPI {
   selectDirectory: () => Promise<string | null>;
 }
 
 declare global {
   interface Window {
-    electronAPI?: ElectronAPI;
+    electronAPI?: DesktopBridgeAPI;
   }
 }

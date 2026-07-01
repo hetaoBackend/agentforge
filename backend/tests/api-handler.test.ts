@@ -97,6 +97,19 @@ describe("api handler", () => {
     expect(await res.json()).toEqual({ status: "ok", tasks: 0 });
   });
 
+  test("GET /api/health allows Electrobun view origins", async () => {
+    const res = await handleApiRequest(
+      ctx,
+      new Request("http://127.0.0.1:9712/api/health", {
+        headers: { Origin: "views://main" },
+      }),
+    );
+
+    expect(res.status).toBe(200);
+    expect(res.headers.get("Access-Control-Allow-Origin")).toBe("views://main");
+    expect(await res.json()).toEqual({ status: "ok", tasks: 0 });
+  });
+
   test("POST /api/tasks enforces browser CSRF and creates tasks with token", async () => {
     const body = JSON.stringify({
       title: "API task",
