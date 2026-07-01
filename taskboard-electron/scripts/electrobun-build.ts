@@ -3,6 +3,7 @@ import { existsSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { shouldInstallMacAppIcon } from "./icon-platform.ts";
 import { installMacAppIcon } from "./install-mac-app-icon.ts";
 
 const appRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -25,7 +26,9 @@ if (result.status !== 0) {
   process.exit(result.status ?? 1);
 }
 
-for (const delayMs of [250, 500, 1000]) {
-  await Bun.sleep(delayMs);
-  installMacAppIcon({ appRoot, targetOS: "macos" });
+if (shouldInstallMacAppIcon()) {
+  for (const delayMs of [250, 500, 1000]) {
+    await Bun.sleep(delayMs);
+    installMacAppIcon({ appRoot, targetOS: "macos" });
+  }
 }

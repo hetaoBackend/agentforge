@@ -5,3 +5,7 @@ export function resolveIconPlatform(): NodeJS.Platform | string {
 export function shouldGenerateIcns(platform = resolveIconPlatform()): boolean {
   return platform === "darwin";
 }
+
+export function shouldInstallMacAppIcon(platform = resolveIconPlatform()): boolean {
+  return platform === "darwin";
+}

@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
 import electrobunConfig from "../../electrobun.config.ts";
-import { shouldGenerateIcns } from "../../scripts/icon-platform.ts";
+import { shouldGenerateIcns, shouldInstallMacAppIcon } from "../../scripts/icon-platform.ts";
 import {
   applyBackendResourceEnv,
   resolveElectrobunResourceDir,
@@ -42,6 +42,12 @@ describe("Electrobun runtime paths", () => {
     expect(shouldGenerateIcns("darwin")).toBe(true);
     expect(shouldGenerateIcns("linux")).toBe(false);
     expect(shouldGenerateIcns("win32")).toBe(false);
+  });
+
+  test("post-build mac icon installation only runs on macOS", () => {
+    expect(shouldInstallMacAppIcon("darwin")).toBe(true);
+    expect(shouldInstallMacAppIcon("linux")).toBe(false);
+    expect(shouldInstallMacAppIcon("win32")).toBe(false);
   });
 
   test("resolveElectrobunResourceDir resolves beside the executable directory", () => {
