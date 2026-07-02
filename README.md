@@ -32,13 +32,17 @@ AgentForge turns agent work into a visible local workflow: queue tasks, watch li
 
 ```bash
 git clone https://github.com/hetaoBackend/agentforge.git
-cd agentforge/taskboard-electron
+cd agentforge
 
-bun install --ignore-scripts
+cd backend
+bun install --frozen-lockfile
+
+cd ../taskboard-electron
+bun install --frozen-lockfile
 bun run start
 ```
 
-The Electrobun dev command builds the renderer, starts the Bun backend in the desktop host, and relaunches the app while you work.
+Install dependencies in both `backend/` and `taskboard-electron/`: the Electrobun host imports backend source directly, so the backend package dependencies must exist even when you launch the desktop app. The Electrobun dev command builds the renderer, starts the Bun backend in the desktop host, and relaunches the app while you work.
 
 ### Build A DMG
 
@@ -64,7 +68,7 @@ The packaged app is built by Electrobun. Stable macOS builds write the DMG under
 ## Requirements
 
 - macOS 12+
-- [Bun](https://bun.sh) 1.3+
+- [Bun](https://bun.sh) 1.3+ on `PATH` (`command -v bun`)
 - [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) or [OpenAI Codex CLI](https://github.com/openai/codex) on `PATH`
 
 ## Skill Library
@@ -175,9 +179,15 @@ bun taskboard.ts
 Desktop app:
 
 ```bash
-cd taskboard-electron
+cd backend
+bun install --frozen-lockfile
+
+cd ../taskboard-electron
+bun install --frozen-lockfile
 bun run start
 ```
+
+When running the desktop app, do not start `backend/taskboard.ts` separately on the same machine: the Electrobun host starts the backend in-process on `127.0.0.1:9712`.
 
 Quality gates:
 

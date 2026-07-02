@@ -4,6 +4,13 @@
 # MacBook 合盖保持运行脚本
 # =========================
 
+# 确保非交互 bash 也能找到通过官方安装器安装到 ~/.bun/bin 的 Bun。
+export BUN_INSTALL="$HOME/.bun"
+case ":$PATH:" in
+  *":$BUN_INSTALL/bin:"*) ;;
+  *) export PATH="$BUN_INSTALL/bin:$PATH" ;;
+esac
+
 # 1. 保持 Mac 接电源不睡眠
 echo "[INFO] 设置接电源时系统不睡眠..."
 sudo pmset -c sleep 0
