@@ -32,13 +32,17 @@ AgentForge 把 AI 编程智能体变成可见、可排队、可调度的本地�
 
 ```bash
 git clone https://github.com/hetaoBackend/agentforge.git
-cd agentforge/taskboard-electron
+cd agentforge
 
-bun install --ignore-scripts
+cd backend
+bun install --frozen-lockfile
+
+cd ../taskboard-electron
+bun install --frozen-lockfile
 bun run start
 ```
 
-开发命令会构建 Electrobun/React 前端，在桌面宿主进程中启动 Bun 后端，并在改动后重新启动 App。
+需要分别安装 `backend/` 和 `taskboard-electron/` 的依赖：Electrobun 宿主进程会直接 import 后端源码，所以即使启动的是桌面 App，后端 package 依赖也必须存在。开发命令会构建 Electrobun/React 前端，在桌面宿主进程中启动 Bun 后端，并在改动后重新启动 App。
 
 ### 构建 DMG
 
@@ -64,7 +68,7 @@ bun run make
 ## 环境要求
 
 - macOS 12+
-- [Bun](https://bun.sh) 1.3+
+- [Bun](https://bun.sh) 1.3+，并且在 `PATH` 中可找到 (`command -v bun`)
 - [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) 或 [OpenAI Codex CLI](https://github.com/openai/codex) 在 `PATH` 中
 
 ## Skill Library
@@ -175,9 +179,15 @@ bun taskboard.ts
 桌面 App:
 
 ```bash
-cd taskboard-electron
+cd backend
+bun install --frozen-lockfile
+
+cd ../taskboard-electron
+bun install --frozen-lockfile
 bun run start
 ```
+
+运行桌面 App 时，不要在同一台机器上另外启动 `backend/taskboard.ts`：Electrobun 宿主进程会在 `127.0.0.1:9712` 上启动内置后端。
 
 质量门禁:
 
