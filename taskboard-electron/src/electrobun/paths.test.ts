@@ -38,6 +38,15 @@ describe("Electrobun runtime paths", () => {
     expect(packageJson.scripts.make).toBe("bun scripts/electrobun-build.ts --env=stable");
   });
 
+  test("dev watcher ignores generated resources written by preBuild hooks", () => {
+    expect(electrobunConfig.build.watchIgnore).toContain("assets/agentforge.png");
+    expect(electrobunConfig.build.watchIgnore).toContain("assets/agentforge.icns");
+    expect(electrobunConfig.build.watchIgnore).toContain("assets/agentforge.iconset");
+    expect(electrobunConfig.build.watchIgnore).toContain("assets/agentforge.iconset/**");
+    expect(electrobunConfig.build.watchIgnore).toContain("**/*.bun-build");
+    expect(electrobunConfig.build.watchIgnore).toContain("resources/weixin-bridge");
+  });
+
   test("app icon generation only uses icns tooling on macOS", () => {
     expect(shouldGenerateIcns("darwin")).toBe(true);
     expect(shouldGenerateIcns("linux")).toBe(false);

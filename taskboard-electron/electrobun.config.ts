@@ -33,7 +33,15 @@ export default {
       "../vendor/skill-creator": "vendor/skill-creator",
     },
     watch: ["../backend/src", "../backend/taskboard.ts", "../vendor/skill-creator"],
-    watchIgnore: ["resources/taskboard"],
+    watchIgnore: [
+      "assets/agentforge.png",
+      "assets/agentforge.icns",
+      "assets/agentforge.iconset",
+      "assets/agentforge.iconset/**",
+      "**/*.bun-build",
+      "resources/taskboard",
+      "resources/weixin-bridge",
+    ],
     mac: {
       codesign: false,
       createDmg: true,
