@@ -685,6 +685,41 @@ describe("api handler", () => {
     expect(db.get_setting("feishu_enabled")).toBe("false");
   });
 
+  test("Feishu settings mask and preserve the app secret", async () => {
+    db.set_setting("feishu_app_secret", "existing-secret");
+
+    const settings = await json(
+      new Request("http://127.0.0.1:9712/api/feishu/settings"),
+    );
+    expect(settings.feishu_app_secret).toBe("********");
+    expect(settings.feishu_app_secret_set).toBe(true);
+    expect(JSON.stringify(settings)).not.toContain("existing-secret");
+
+    for (const unchangedValue of ["", "********", "••••••••"]) {
+      const unchanged = await handleApiRequest(
+        ctx,
+        new Request("http://127.0.0.1:9712/api/feishu/settings", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ feishu_app_secret: unchangedValue }),
+        }),
+      );
+      expect(unchanged.status).toBe(200);
+      expect(db.get_setting("feishu_app_secret")).toBe("existing-secret");
+    }
+
+    const updated = await handleApiRequest(
+      ctx,
+      new Request("http://127.0.0.1:9712/api/feishu/settings", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ feishu_app_secret: "replacement-secret" }),
+      }),
+    );
+    expect(updated.status).toBe(200);
+    expect(db.get_setting("feishu_app_secret")).toBe("replacement-secret");
+  });
+
   test("DELETE /api/tasks enforces CSRF for browser origins", async () => {
     const created = await json(
       new Request("http://127.0.0.1:9712/api/tasks", {
@@ -904,6 +939,28 @@ describe("api handler", () => {
     expect(await res.json()).toEqual({ error: "request body too large" });
   });
 
+  test("POST rejects streamed bodies larger than the API cap", async () => {
+    const chunk = new Uint8Array(6 * 1024 * 1024);
+    chunk.fill(0x20);
+    const req = new Request("http://127.0.0.1:9712/api/tasks", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: new ReadableStream({
+        start(controller) {
+          controller.enqueue(chunk);
+          controller.enqueue(chunk);
+          controller.close();
+        },
+      }),
+    });
+    expect(req.headers.get("Content-Length")).toBeNull();
+
+    const res = await handleApiRequest(ctx, req);
+
+    expect(res.status).toBe(413);
+    expect(await res.json()).toEqual({ error: "request body too large" });
+  });
+
   test("CORS, method, and JSON error paths return explicit responses", async () => {
     const forbiddenOrigin = await handleApiRequest(
       ctx,
@@ -1025,6 +1082,50 @@ describe("api handler", () => {
     expect(status.weixin.account_id).toBe("runtime-account");
     expect(status.weixin.running).toBe(true);
     expect(status.weixin.login_status).toBe("logged_in");
+  });
+
+  test("POST and PUT settings reject non-editable keys without partial writes", async () => {
+    const post = await handleApiRequest(
+      ctx,
+      new Request("http://127.0.0.1:9712/api/settings", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          timeout: 90,
+          skill_sweep_next_run: "2030-01-01T00:00:00",
+        }),
+      }),
+    );
+    expect(post.status).toBe(400);
+    expect(await post.json()).toEqual({
+      error: "unknown or non-editable setting: skill_sweep_next_run",
+      field: "skill_sweep_next_run",
+    });
+    expect(db.get_setting("timeout")).toBeNull();
+    expect(db.get_setting("skill_sweep_next_run")).toBeNull();
+
+    const put = await handleApiRequest(
+      ctx,
+      new Request("http://127.0.0.1:9712/api/settings", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ telegram_bot_token: "credential" }),
+      }),
+    );
+    expect(put.status).toBe(400);
+    expect(db.get_setting("telegram_bot_token")).toBeNull();
+
+    const allowed = await handleApiRequest(
+      ctx,
+      new Request("http://127.0.0.1:9712/api/settings", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ timeout: 90, default_agent: "claude" }),
+      }),
+    );
+    expect(allowed.status).toBe(200);
+    expect(db.get_setting("timeout")).toBe("90");
+    expect(db.get_setting("default_agent")).toBe("claude");
   });
 
   test("task detail routes expose runs, events, messages, and dependency metadata", async () => {
@@ -1236,6 +1337,84 @@ describe("api handler", () => {
     );
     expect(batchCycle.status).toBe(409);
     expect(db.get_dependencies(Number(a.id))).toEqual([]);
+  });
+
+  test("POST /api/tasks strictly validates agent and schedule fields", async () => {
+    const invalidCases = [
+      [{ prompt: "x", schedule_type: "never" }, "schedule_type"],
+      [{ prompt: "x", agent: "other" }, "agent"],
+      [{ prompt: "x", schedule_type: "delayed" }, "delay_seconds"],
+      [
+        { prompt: "x", schedule_type: "delayed", delay_seconds: -1 },
+        "delay_seconds",
+      ],
+      [{ prompt: "x", schedule_type: "scheduled_at" }, "next_run_at"],
+      [
+        {
+          prompt: "x",
+          schedule_type: "scheduled_at",
+          next_run_at: "not-a-date",
+        },
+        "next_run_at",
+      ],
+    ] as const;
+
+    for (const [body, field] of invalidCases) {
+      const res = await handleApiRequest(
+        ctx,
+        new Request("http://127.0.0.1:9712/api/tasks", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        }),
+      );
+      expect(res.status).toBe(400);
+      expect(((await res.json()) as Record<string, any>).field).toBe(field);
+    }
+    expect(db.get_all_tasks()).toHaveLength(0);
+  });
+
+  test("POST /api/dag validates every task before creating the DAG", async () => {
+    const missingDir = path.join(tmpDir, "missing-dag-dir");
+    const invalidDir = await handleApiRequest(
+      ctx,
+      new Request("http://127.0.0.1:9712/api/dag", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          tasks: [
+            { ref: "first", prompt: "valid", working_dir: "." },
+            { ref: "second", prompt: "invalid", working_dir: missingDir },
+          ],
+        }),
+      }),
+    );
+    expect(invalidDir.status).toBe(400);
+    expect(await invalidDir.json()).toMatchObject({
+      field: "working_dir",
+      index: 1,
+    });
+    expect(db.get_all_tasks()).toHaveLength(0);
+
+    for (const [task, field] of [
+      [{ prompt: "x", agent: "other" }, "agent"],
+      [{ prompt: "x", schedule_type: "unknown" }, "schedule_type"],
+      [{ prompt: "x", schedule_type: "delayed" }, "delay_seconds"],
+      [{ prompt: "x", schedule_type: "scheduled_at" }, "next_run_at"],
+      [{ prompt: "x", schedule_type: "cron" }, "cron_expr"],
+    ] as const) {
+      const res = await handleApiRequest(
+        ctx,
+        new Request("http://127.0.0.1:9712/api/dag", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ tasks: [task] }),
+        }),
+      );
+      expect(res.status).toBe(400);
+      expect(await res.json()).toMatchObject({ field, index: 0 });
+    }
+    expect(db.get_all_tasks()).toHaveLength(0);
   });
 
   test("task mutation routes edit, respond, resume, cancel, retry, and remove dependencies", async () => {
