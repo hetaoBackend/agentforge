@@ -93,6 +93,16 @@ export class TaskDB {
     }
   }
 
+  /** Flush pending output events and close SQLite exactly once. */
+  close(): void {
+    if (this._closed) {
+      return;
+    }
+    this.flush_output_events();
+    this._closed = true;
+    this.conn.close();
+  }
+
   private _init_db(): void {
     this.conn.run(`
       CREATE TABLE IF NOT EXISTS tasks (
@@ -1512,15 +1522,16 @@ export class TaskDB {
     event_type: string,
     content: string,
   ): void {
+    if (this._closed) {
+      throw new Error("TaskDB is closed");
+    }
     this._pending_output_events.push({
       task_id,
       run_id,
       event_type,
       content,
     });
-    if (
-      this._pending_output_events.length >= TaskDB.OUTPUT_EVENT_BATCH_SIZE
-    ) {
+    if (this._pending_output_events.length >= TaskDB.OUTPUT_EVENT_BATCH_SIZE) {
       this.flush_output_events();
       return;
     }
@@ -1569,10 +1580,7 @@ export class TaskDB {
         }
       });
     } catch (e) {
-      this._pending_output_events = [
-        ...batch,
-        ...this._pending_output_events,
-      ];
+      this._pending_output_events = [...batch, ...this._pending_output_events];
       throw e;
     }
   }

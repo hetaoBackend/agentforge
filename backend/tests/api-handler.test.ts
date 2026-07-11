@@ -318,6 +318,39 @@ describe("api handler", () => {
       next_offset: 1,
       reset: true,
     });
+
+    scheduler._live_output.delete(taskId);
+    const runId = db.add_run(taskId);
+    db.finish_run(runId, "completed", "done", null, "旧🙂raw");
+    expect(
+      await json(
+        new Request(
+          `http://127.0.0.1:9712/api/tasks/${taskId}/output?offset=1`,
+        ),
+      ),
+    ).toEqual({
+      output: "🙂raw",
+      is_running: false,
+      next_offset: 6,
+      reset: false,
+    });
+    expect(
+      await json(
+        new Request(
+          `http://127.0.0.1:9712/api/tasks/${taskId}/output?offset=99`,
+        ),
+      ),
+    ).toEqual({
+      output: "旧🙂raw",
+      is_running: false,
+      next_offset: 6,
+      reset: true,
+    });
+    expect(
+      await json(
+        new Request(`http://127.0.0.1:9712/api/tasks/${taskId}/output`),
+      ),
+    ).toEqual({ output: "旧🙂raw", is_running: false });
   });
 
   test("task brief API creates lists updates reads and discards drafts", async () => {

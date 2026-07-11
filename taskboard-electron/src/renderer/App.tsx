@@ -3073,11 +3073,7 @@ function DetailPanel({ task, onClose, onRespond, onResume }: any) {
         );
         if (res.ok && !cancelled) {
           const data = await res.json();
-          const update = applyIncrementalOutput(
-            accumulatedOutput,
-            requestedOffset,
-            data,
-          );
+          const update = applyIncrementalOutput(accumulatedOutput, requestedOffset, data);
           accumulatedOutput = update.output;
           nextOffset = update.nextOffset;
           setLiveOutput(accumulatedOutput);

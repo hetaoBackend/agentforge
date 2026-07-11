@@ -188,7 +188,7 @@ export async function runServer(
     context.weixin_channel?.stop();
     context.feishu_channel?.stop();
     await scheduler.stop();
-    db.conn.close();
+    db.close();
     server.stop(true);
   };
 

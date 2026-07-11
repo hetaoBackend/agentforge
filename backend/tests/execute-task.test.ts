@@ -289,6 +289,12 @@ describe("execute task", () => {
     expect(runs[0]!["status"]).toBe("completed");
     expect(runs[0]!["raw_output"]).toBeTruthy(); // raw stdout stored
 
+    const persistedCount = db.conn
+      .query(
+        "SELECT COUNT(*) AS count FROM task_output_events WHERE task_id = ?",
+      )
+      .get(tid) as Row;
+    expect(Number(persistedCount["count"])).toBeGreaterThan(0);
     const events = db.get_output_events(tid);
     const types = new Set(events.map((e) => e["event_type"]));
     // assistant text, a tool_call, a tool_result, the result event, and the raw
@@ -353,6 +359,12 @@ describe("execute task", () => {
     expect(runs).toHaveLength(1);
     expect(runs[0]!["status"]).toBe("cancelled");
     expect(runs[0]!["finished_at"]).not.toBeNull();
+    const persistedCount = db.conn
+      .query(
+        "SELECT COUNT(*) AS count FROM task_output_events WHERE task_id = ?",
+      )
+      .get(tid) as Row;
+    expect(Number(persistedCount["count"])).toBeGreaterThan(0);
   });
 
   // ── _execute_task: codex success path ────────────────────────────────────
@@ -468,7 +480,11 @@ describe("execute task", () => {
     const task = db.get_task(tid)!;
     scheduler._active_tasks.set(tid, { is_alive: () => true });
 
-    const fake = new FakePopen([], ["fatal: something exploded\n"], 1);
+    const fake = new FakePopen(
+      _claude_lines("partial before failure"),
+      ["fatal: something exploded\n"],
+      1,
+    );
     scheduler._popen = () => fake;
     await scheduler._execute_task(task);
 
@@ -478,6 +494,12 @@ describe("execute task", () => {
 
     const runs = db.get_task_runs(tid);
     expect(runs[0]!["status"]).toBe("failed");
+    const persistedCount = db.conn
+      .query(
+        "SELECT COUNT(*) AS count FROM task_output_events WHERE task_id = ?",
+      )
+      .get(tid) as Row;
+    expect(Number(persistedCount["count"])).toBeGreaterThan(0);
   });
 
   // ── _execute_task: failure still persists session_id (resumable retry) ───
@@ -748,6 +770,12 @@ describe("execute task", () => {
     const runs = db.get_task_runs(tid);
     expect(runs[0]!["status"]).toBe("failed");
     expect(runs[0]!["error"] || "").toContain("timed out");
+    const persistedCount = db.conn
+      .query(
+        "SELECT COUNT(*) AS count FROM task_output_events WHERE task_id = ?",
+      )
+      .get(tid) as Row;
+    expect(Number(persistedCount["count"])).toBeGreaterThan(0);
   });
 
   test("test_execute_task_timeout_error_summary_states_timeout_not_stderr", async () => {

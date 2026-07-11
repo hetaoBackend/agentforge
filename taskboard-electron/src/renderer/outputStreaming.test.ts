@@ -1,9 +1,6 @@
 import { expect, test } from "bun:test";
 
-import {
-  applyIncrementalOutput,
-  createIncrementalOutputState,
-} from "./outputStreaming.ts";
+import { applyIncrementalOutput, createIncrementalOutputState } from "./outputStreaming.ts";
 
 test("createIncrementalOutputState clears output and offset on task switch", () => {
   expect(createIncrementalOutputState()).toEqual({ output: "", nextOffset: 0 });
