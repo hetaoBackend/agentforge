@@ -137,6 +137,24 @@ function realpathNonStrict(p: string): string {
   }
 }
 
+const ALLOWED_IMAGE_ROOTS = [expanduser("~"), "/tmp"];
+
+/** Return true only if path resolves inside an allowed image directory. */
+function isSafeImagePath(imagePath: string): boolean {
+  try {
+    const resolved = realpathNonStrict(path.resolve(imagePath));
+    return ALLOWED_IMAGE_ROOTS.some((root) => {
+      const resolvedRoot = realpathNonStrict(root);
+      return (
+        resolved === resolvedRoot ||
+        resolved.startsWith(resolvedRoot + path.sep)
+      );
+    });
+  } catch {
+    return false;
+  }
+}
+
 const _int = (v: unknown): number | null => {
   if (v === null || v === undefined) return null;
   const n = typeof v === "number" ? Math.trunc(v) : parseInt(String(v), 10);
@@ -784,8 +802,12 @@ export class TaskScheduler extends BusAwareSchedulerMixin {
       next_run = null;
     }
     if (next_run === null || next_run.getTime() <= now.getTime()) {
-      this.trigger_skill_sweep(this.db.get_setting("skill_sweep_agent", null));
-      this.db.set_setting("skill_sweep_next_run", cron_next_iso(cron, now));
+      const started = this.trigger_skill_sweep(
+        this.db.get_setting("skill_sweep_agent", null),
+      );
+      if (started) {
+        this.db.set_setting("skill_sweep_next_run", cron_next_iso(cron, now));
+      }
     }
   }
 
@@ -951,9 +973,14 @@ export class TaskScheduler extends BusAwareSchedulerMixin {
       throw new Error(raw || "skill sweep agent failed");
     }
 
+    const parsed = TaskScheduler._parse_sweep_output(raw);
+    if (!parsed.ok) {
+      throw new Error("skill sweep agent returned an invalid JSON array");
+    }
+
     let detected = 0;
     let new_occurrences = 0;
-    for (const item of TaskScheduler._parse_sweep_output(raw)) {
+    for (const item of parsed.items) {
       if (typeof item !== "object" || item === null || Array.isArray(item)) {
         continue;
       }
@@ -1360,7 +1387,9 @@ export class TaskScheduler extends BusAwareSchedulerMixin {
     );
   }
 
-  static _parse_sweep_output(raw_text: string): unknown[] {
+  static _parse_sweep_output(
+    raw_text: string,
+  ): { ok: true; items: unknown[] } | { ok: false; items: [] } {
     let text = (raw_text || "").trim();
     if (text.startsWith("```")) {
       text = text
@@ -1380,13 +1409,17 @@ export class TaskScheduler extends BusAwareSchedulerMixin {
     try {
       data = JSON.parse(text);
     } catch {
-      return [];
+      return { ok: false, items: [] };
     }
-    return Array.isArray(data) ? data : [];
+    return Array.isArray(data)
+      ? { ok: true, items: data }
+      : { ok: false, items: [] };
   }
 
   /** Instance alias so tests can call `sched._parse_sweep_output(...)` like Python. */
-  _parse_sweep_output(raw_text: string): unknown[] {
+  _parse_sweep_output(
+    raw_text: string,
+  ): { ok: true; items: unknown[] } | { ok: false; items: [] } {
     return TaskScheduler._parse_sweep_output(raw_text);
   }
 
@@ -2423,43 +2456,20 @@ export class TaskScheduler extends BusAwareSchedulerMixin {
     const prompt = this._build_injected_prompt(task);
     const prompt_images: Row[] = task["prompt_images"] || [];
     const image_paths: string[] = task["image_paths"] || []; // List of local image file paths
+    const safe_image_paths = image_paths.filter((image_path) => {
+      if (isSafeImagePath(image_path)) {
+        return true;
+      }
+      logger.warning(
+        `Task ${tid}: Rejected image path outside allowed directories: ${image_path}`,
+      );
+      return false;
+    });
 
     // Convert image_paths to prompt_images format (base64 encoded)
-    if (image_paths.length && !prompt_images.length) {
+    if (safe_image_paths.length && !prompt_images.length) {
       // Only if not already using prompt_images
-      const _ALLOWED_IMAGE_ROOTS = [expanduser("~"), "/tmp"];
-
-      /** Return true only if path resolves inside an allowed directory. */
-      const _is_safe_image_path = (p: string): boolean => {
-        let resolved: string;
-        try {
-          resolved = realpathNonStrict(path.resolve(p));
-        } catch {
-          return false;
-        }
-        for (const root of _ALLOWED_IMAGE_ROOTS) {
-          try {
-            const resolved_root = realpathNonStrict(root);
-            if (
-              resolved.startsWith(resolved_root + path.sep) ||
-              resolved === resolved_root
-            ) {
-              return true;
-            }
-          } catch {
-            continue;
-          }
-        }
-        return false;
-      };
-
-      for (const img_path of image_paths) {
-        if (!_is_safe_image_path(img_path)) {
-          logger.warning(
-            `Task ${tid}: Rejected image path outside allowed directories: ${img_path}`,
-          );
-          continue;
-        }
+      for (const img_path of safe_image_paths) {
         try {
           const buf = fs.readFileSync(img_path);
           const img_data = buf.toString("base64");
@@ -2557,7 +2567,7 @@ export class TaskScheduler extends BusAwareSchedulerMixin {
           prompt,
         ];
       }
-      for (const img_path of image_paths) {
+      for (const img_path of safe_image_paths) {
         cmd.push("--image", img_path);
       }
     } else if (use_stdin) {
