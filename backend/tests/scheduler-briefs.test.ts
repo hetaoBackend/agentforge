@@ -85,6 +85,77 @@ describe("scheduler task brief inbound actions", () => {
     expect(task["prompt"]).toContain("Acceptance criteria:");
   });
 
+  test("repeated CONFIRM_BRIEF creates at most one task", () => {
+    const created = scheduler.handle_inbound_message(
+      makeInboundMessage({
+        type: InboundMessageType.CREATE_BRIEF,
+        source: "telegram",
+        payload: {
+          title: "Fix auth",
+          goal: "Fix login redirect",
+          source_channel: "telegram",
+          source_ref: "chat-1:msg-repeat",
+        },
+      }),
+    );
+    const confirm = () =>
+      scheduler.handle_inbound_message(
+        makeInboundMessage({
+          type: InboundMessageType.CONFIRM_BRIEF,
+          source: "telegram",
+          payload: { brief_id: created["brief_id"] },
+        }),
+      );
+
+    expect(confirm()).toEqual({ task_id: 1, status: "created" });
+    expect(confirm).toThrow(/Cannot confirm draft task/);
+    expect(db.get_all_tasks()).toHaveLength(1);
+  });
+
+  test("failed CONFIRM_BRIEF releases the draft claim", () => {
+    const created = scheduler.handle_inbound_message(
+      makeInboundMessage({
+        type: InboundMessageType.CREATE_BRIEF,
+        source: "telegram",
+        payload: {
+          title: "Fix auth",
+          goal: "Fix login redirect",
+          source_channel: "telegram",
+          source_ref: "chat-1:msg-retry",
+        },
+      }),
+    );
+    const originalAddTask = db.add_task.bind(db);
+    db.add_task = (() => {
+      throw new Error("injected task insert failure");
+    }) as typeof db.add_task;
+
+    expect(() =>
+      scheduler.handle_inbound_message(
+        makeInboundMessage({
+          type: InboundMessageType.CONFIRM_BRIEF,
+          source: "telegram",
+          payload: { brief_id: created["brief_id"] },
+        }),
+      ),
+    ).toThrow(/injected task insert failure/);
+    expect(db.get_task_brief(Number(created["brief_id"]))!["status"]).toBe(
+      "draft",
+    );
+    expect(db.get_all_tasks()).toEqual([]);
+
+    db.add_task = originalAddTask;
+    const retried = scheduler.handle_inbound_message(
+      makeInboundMessage({
+        type: InboundMessageType.CONFIRM_BRIEF,
+        source: "telegram",
+        payload: { brief_id: created["brief_id"] },
+      }),
+    );
+    expect(retried["status"]).toBe("created");
+    expect(db.get_all_tasks()).toHaveLength(1);
+  });
+
   test("DISCARD_BRIEF marks a draft discarded", () => {
     const created = scheduler.handle_inbound_message(
       makeInboundMessage({

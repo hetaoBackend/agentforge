@@ -380,8 +380,9 @@ export class TaskScheduler extends BusAwareSchedulerMixin {
           DEFAULT_AGENT,
       ),
     };
-    const task_id = this.submit_task(makeTaskFromPartial(task));
-    this.db.confirm_task_brief(brief_id, task_id);
+    const task_id = this.db.confirm_task_brief_atomic(brief_id, () =>
+      this.submit_task(makeTaskFromPartial(task)),
+    );
     return { task_id, status: "created" };
   }
 
@@ -3053,15 +3054,13 @@ export class TaskScheduler extends BusAwareSchedulerMixin {
       }
     }
 
-    const task_id = this.db.add_task(task);
-
-    // Store dependency rows atomically — if any insert fails the whole
-    // batch is rolled back so we never leave a task with partial deps.
-    if (dep_list.length) {
-      this.db.add_dependencies_batch(task_id, dep_list);
-    }
-
-    return task_id;
+    return this.db.transaction(() => {
+      const task_id = this.db.add_task(task);
+      if (dep_list.length) {
+        this.db.add_dependencies_batch(task_id, dep_list);
+      }
+      return task_id;
+    });
   }
 
   // ──────────────────────── DAG helpers ────────────────────────

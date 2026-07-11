@@ -257,6 +257,44 @@ describe("scheduler logic", () => {
     expect(db.get_task(down)!["status"]).toBe("pending");
   });
 
+  test("test_submit_task_rolls_back_task_when_dependency_batch_fails", () => {
+    expect(() =>
+      sched.submit_task(
+        makeTask({ title: "orphan", prompt: "p", working_dir: "." }),
+        [999],
+      ),
+    ).toThrow(/Dependency task #999 not found/);
+
+    expect(db.get_all_tasks()).toEqual([]);
+  });
+
+  test("test_submit_task_rolls_back_task_and_partial_dependencies_on_insert_error", () => {
+    const a = db.add_task(
+      makeTask({ title: "a", prompt: "p", working_dir: "." }),
+    );
+    const b = db.add_task(
+      makeTask({ title: "b", prompt: "p", working_dir: "." }),
+    );
+    db.conn.run(`
+      CREATE TRIGGER fail_second_dependency
+      BEFORE INSERT ON task_dependencies
+      WHEN NEW.depends_on_task_id = ${b}
+      BEGIN
+        SELECT RAISE(ABORT, 'injected dependency insert failure');
+      END
+    `);
+
+    expect(() =>
+      sched.submit_task(
+        makeTask({ title: "rolled back", prompt: "p", working_dir: "." }),
+        [a, b],
+      ),
+    ).toThrow(/injected dependency insert failure/);
+
+    expect(db.get_all_tasks().map((task) => task["id"])).toEqual([a, b]);
+    expect(db.get_dependents(a)).toEqual([]);
+  });
+
   // ── DAG unblock / cascade-cancel ────────────────────────────────────────
   test("test_on_task_completed_unblocks_downstream", () => {
     const up = db.add_task(

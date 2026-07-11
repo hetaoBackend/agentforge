@@ -25,6 +25,20 @@ import {
 
 type Row = Record<string, any>;
 
+export class DependencyError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "DependencyError";
+  }
+}
+
+export class TaskBriefConflictError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "TaskBriefConflictError";
+  }
+}
+
 function expandUser(p: string): string {
   return p.startsWith("~") ? path.join(os.homedir(), p.slice(1)) : p;
 }
@@ -32,6 +46,7 @@ function expandUser(p: string): string {
 export class TaskDB {
   db_path: string;
   conn: Database;
+  private transaction_depth = 0;
 
   constructor(db_path: string = "~/.agentforge/tasks.db") {
     this.db_path = expandUser(db_path);
@@ -441,18 +456,28 @@ export class TaskDB {
    * Run statements in an explicit transaction.
    *
    * On success the transaction is committed; on any exception it is rolled
-   * back and the exception re-raised. Callers must NOT issue COMMIT or
-   * ROLLBACK themselves inside the callback.
+   * back and the exception re-raised. Nested calls use savepoints so a higher
+   * level operation can atomically compose existing DB helpers.
    */
   transaction<T>(fn: () => T): T {
-    this.conn.run("BEGIN");
+    const depth = this.transaction_depth;
+    const savepoint = `taskdb_${depth}`;
+    this.conn.run(depth === 0 ? "BEGIN" : `SAVEPOINT ${savepoint}`);
+    this.transaction_depth = depth + 1;
     try {
       const result = fn();
-      this.conn.run("COMMIT");
+      this.conn.run(depth === 0 ? "COMMIT" : `RELEASE SAVEPOINT ${savepoint}`);
       return result;
     } catch (e) {
-      this.conn.run("ROLLBACK");
+      if (depth === 0) {
+        this.conn.run("ROLLBACK");
+      } else {
+        this.conn.run(`ROLLBACK TO SAVEPOINT ${savepoint}`);
+        this.conn.run(`RELEASE SAVEPOINT ${savepoint}`);
+      }
       throw e;
+    } finally {
+      this.transaction_depth = depth;
     }
   }
 
@@ -664,9 +689,75 @@ export class TaskDB {
   }
 
   confirm_task_brief(brief_id: number, task_id: number): void {
-    this.update_task_brief(brief_id, {
-      status: TaskBriefStatus.CONVERTED,
-      created_task_id: task_id,
+    const updated = this.conn
+      .query(
+        `
+        UPDATE task_briefs
+        SET status = ?, created_task_id = ?, updated_at = ?
+        WHERE id = ? AND status = ? AND created_task_id IS NULL
+      `,
+      )
+      .run(
+        TaskBriefStatus.CONVERTED,
+        task_id,
+        nowIso(),
+        brief_id,
+        TaskBriefStatus.DRAFT,
+      );
+    if (updated.changes !== 1) {
+      const brief = this.get_task_brief(brief_id);
+      const status = brief ? String(brief["status"]) : "not found";
+      throw new TaskBriefConflictError(
+        `Cannot confirm draft task with status '${status}'.`,
+      );
+    }
+  }
+
+  /**
+   * Claim a draft brief and create its task in one transaction.
+   *
+   * The conditional update is the claim: only one confirmation can move a
+   * draft to converted. If task creation fails, the transaction restores the
+   * brief to draft and removes any partially-created task.
+   */
+  confirm_task_brief_atomic(
+    brief_id: number,
+    create_task: () => number,
+  ): number {
+    return this.transaction(() => {
+      const claimed = this.conn
+        .query(
+          `
+          UPDATE task_briefs
+          SET status = ?, updated_at = ?
+          WHERE id = ? AND status = ? AND created_task_id IS NULL
+        `,
+        )
+        .run(
+          TaskBriefStatus.CONVERTED,
+          nowIso(),
+          brief_id,
+          TaskBriefStatus.DRAFT,
+        );
+      if (claimed.changes !== 1) {
+        const brief = this.get_task_brief(brief_id);
+        const status = brief ? String(brief["status"]) : "not found";
+        throw new TaskBriefConflictError(
+          `Cannot confirm draft task with status '${status}'.`,
+        );
+      }
+
+      const task_id = create_task();
+      this.conn
+        .query(
+          `
+          UPDATE task_briefs
+          SET created_task_id = ?, updated_at = ?
+          WHERE id = ?
+        `,
+        )
+        .run(task_id, nowIso(), brief_id);
+      return task_id;
     });
   }
 
@@ -1901,14 +1992,78 @@ export class TaskDB {
     depends_on_task_id: number,
     inject_result: boolean = false,
   ): void {
-    this.conn
+    this.add_dependencies_batch(task_id, [
+      { task_id: depends_on_task_id, inject_result },
+    ]);
+  }
+
+  /**
+   * Return whether adding any proposed upstream dependency would create a
+   * directed cycle. The recursive CTE follows the indexed dependency edges in
+   * one query and uses UNION to terminate safely even for legacy cyclic data.
+   */
+  would_create_dependency_cycle(
+    task_id: number,
+    depends_on_task_ids: number[],
+  ): boolean {
+    const dependency_ids = [...new Set(depends_on_task_ids)];
+    if (!dependency_ids.length) return false;
+    if (dependency_ids.includes(task_id)) return true;
+
+    const starts = dependency_ids.map(() => "(?)").join(", ");
+    const row = this.conn
       .query(
         `
-        INSERT OR IGNORE INTO task_dependencies (task_id, depends_on_task_id, inject_result)
-        VALUES (?, ?, ?)
-    `,
+        WITH RECURSIVE reachable(task_id) AS (
+          VALUES ${starts}
+          UNION
+          SELECT td.depends_on_task_id
+          FROM task_dependencies td
+          JOIN reachable r ON td.task_id = r.task_id
+        )
+        SELECT 1 AS found
+        FROM reachable
+        WHERE task_id = ?
+        LIMIT 1
+      `,
       )
-      .run(task_id, depends_on_task_id, inject_result ? 1 : 0);
+      .get(...dependency_ids, task_id) as Row | null;
+    return row !== null;
+  }
+
+  private validate_dependencies(
+    task_id: number,
+    depends_on_task_ids: number[],
+  ): void {
+    if (!Number.isInteger(task_id)) {
+      throw new DependencyError("task_id must be an integer");
+    }
+    const dependency_ids = [...new Set(depends_on_task_ids)];
+    if (dependency_ids.some((id) => !Number.isInteger(id))) {
+      throw new DependencyError("dependency task_id must be an integer");
+    }
+    if (dependency_ids.includes(task_id)) {
+      throw new DependencyError(`Task #${task_id} cannot depend on itself`);
+    }
+
+    const required_ids = [...new Set([task_id, ...dependency_ids])];
+    const placeholders = required_ids.map(() => "?").join(", ");
+    const rows = this.conn
+      .query(`SELECT id FROM tasks WHERE id IN (${placeholders})`)
+      .all(...required_ids) as Row[];
+    const existing_ids = new Set(rows.map((row) => Number(row["id"])));
+    if (!existing_ids.has(task_id)) {
+      throw new DependencyError(`Task #${task_id} not found`);
+    }
+    const missing = dependency_ids.find((id) => !existing_ids.has(id));
+    if (missing !== undefined) {
+      throw new DependencyError(`Dependency task #${missing} not found`);
+    }
+    if (this.would_create_dependency_cycle(task_id, dependency_ids)) {
+      throw new DependencyError(
+        `Dependency cycle detected for task #${task_id}`,
+      );
+    }
   }
 
   /**
@@ -1922,6 +2077,10 @@ export class TaskDB {
     dep_list: Array<{ task_id: number; inject_result: unknown }>,
   ): void {
     this.transaction(() => {
+      this.validate_dependencies(
+        task_id,
+        dep_list.map((dep) => dep.task_id),
+      );
       for (const dep of dep_list) {
         this.conn
           .query(
@@ -1932,6 +2091,17 @@ export class TaskDB {
           )
           .run(task_id, dep.task_id, dep.inject_result ? 1 : 0);
       }
+    });
+  }
+
+  /** Replace all upstream dependencies without exposing a cleared half-state. */
+  replace_dependencies(
+    task_id: number,
+    dep_list: Array<{ task_id: number; inject_result: unknown }>,
+  ): void {
+    this.transaction(() => {
+      this.clear_dependencies(task_id);
+      this.add_dependencies_batch(task_id, dep_list);
     });
   }
 

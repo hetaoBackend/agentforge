@@ -12,7 +12,7 @@ import {
   collect_im_skill_suggestions,
   render_im_skill_suggestion_text,
 } from "./skill_suggestions.ts";
-import type { TaskDB } from "./db.ts";
+import { DependencyError, TaskBriefConflictError, type TaskDB } from "./db.ts";
 import type { TaskScheduler } from "./scheduler.ts";
 import { runbook_from_row, type RunbookDefinition } from "./runbooks.ts";
 import {
@@ -1331,8 +1331,17 @@ async function handlePost(
       `working_dir does not exist or is not a directory: ${task.working_dir}`,
     );
     if (dirError) return jsonResponse(dirError, 400, origin);
-    const taskId = ctx.scheduler.submit_task(task);
-    ctx.db.confirm_task_brief(bid, taskId);
+    let taskId: number;
+    try {
+      taskId = ctx.db.confirm_task_brief_atomic(bid, () =>
+        ctx.scheduler.submit_task(task),
+      );
+    } catch (e) {
+      if (e instanceof TaskBriefConflictError) {
+        return jsonResponse({ error: e.message }, 409, origin);
+      }
+      throw e;
+    }
     return jsonResponse(
       {
         status: "created",
@@ -1683,7 +1692,15 @@ async function handlePost(
       image_paths: parseJsonList(body["image_paths"]).map(String),
       dag_id: body["dag_id"] ?? null,
     });
-    const id = ctx.scheduler.submit_task(task, deps);
+    let id: number;
+    try {
+      id = ctx.scheduler.submit_task(task, deps);
+    } catch (e) {
+      if (e instanceof DependencyError) {
+        return jsonResponse({ error: e.message }, 409, origin);
+      }
+      throw e;
+    }
     return jsonResponse({ id, status: "created" }, 201, origin);
   }
 
@@ -1820,10 +1837,17 @@ async function handlePost(
     const shouldBlock =
       upstream["status"] !== "completed" &&
       ["pending", "scheduled"].includes(task["status"]);
-    ctx.db.transaction(() => {
-      ctx.db.add_dependency(tid, depTaskId, Boolean(body["inject_result"]));
-      if (shouldBlock) ctx.db.update_task(tid, { status: "blocked" });
-    });
+    try {
+      ctx.db.transaction(() => {
+        ctx.db.add_dependency(tid, depTaskId, Boolean(body["inject_result"]));
+        if (shouldBlock) ctx.db.update_task(tid, { status: "blocked" });
+      });
+    } catch (e) {
+      if (e instanceof DependencyError) {
+        return jsonResponse({ error: e.message }, 409, origin);
+      }
+      throw e;
+    }
     if (shouldBlock) ctx.scheduler._notify(tid);
     return jsonResponse({ status: "added" }, 200, origin);
   }
@@ -2137,17 +2161,21 @@ async function handlePut(
     }
 
     if ("depends_on" in body) {
-      ctx.db.clear_dependencies(tid);
       const deps = dependencyList(body["depends_on"]);
-      if (deps.length) {
-        ctx.db.add_dependencies_batch(tid, deps);
-        if (
-          deps.some(
-            (dep) => ctx.db.get_task(dep.task_id)?.["status"] !== "completed",
-          )
-        ) {
-          updates["status"] = "blocked";
+      try {
+        ctx.db.replace_dependencies(tid, deps);
+      } catch (e) {
+        if (e instanceof DependencyError) {
+          return jsonResponse({ error: e.message }, 409, origin);
         }
+        throw e;
+      }
+      if (
+        deps.some(
+          (dep) => ctx.db.get_task(dep.task_id)?.["status"] !== "completed",
+        )
+      ) {
+        updates["status"] = "blocked";
       }
     }
     if (Object.keys(updates).length) ctx.db.update_task(tid, updates);
