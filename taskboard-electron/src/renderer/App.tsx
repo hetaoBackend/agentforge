@@ -37,10 +37,15 @@ import {
 } from "./channelsSettings.ts";
 import { createRequestGenerationGuard, parseApiResponse } from "./apiReliability.ts";
 import {
+  attemptTargetedTaskRefresh,
   getTaskResponseUiState,
+  markTaskResponseSubmitted,
+  mergeTargetedTaskDetail,
   prepareTaskResponse,
+  reconcileTasksWithSubmittedAnswers,
   selectTickAfterRefresh,
   startHeartbeatTickPolling,
+  taskNeedsResponse,
   type TaskResponseRefreshResult,
 } from "./operatorUi.ts";
 import { buildExecutionSteps } from "./traceSteps.ts";
@@ -835,6 +840,13 @@ async function fetchTasks() {
   const res = await fetch(`${API}/tasks`);
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   return res.json();
+}
+
+async function fetchTask(id) {
+  const res = await fetch(`${API}/tasks/${id}`);
+  const payload = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(payload.error || `HTTP ${res.status}`);
+  return payload;
 }
 
 async function fetchHeartbeats() {
@@ -5951,6 +5963,7 @@ export default function App() {
   const [editingHeartbeat, setEditingHeartbeat] = useState<any>(null);
   const pollGuardRef = useRef(createRequestGenerationGuard());
   const heartbeatDetailId = heartbeatDetail?.id;
+  const submittedTaskAnswersRef = useRef<Record<string, string>>({});
 
   // ─── Color mode ───
   const [colorMode, setColorMode] = useState(() => localStorage.getItem("colorMode") || "system");
@@ -6008,7 +6021,14 @@ export default function App() {
         fetchSkills(),
       ]);
       if (!pollGuardRef.current.isCurrent(generation)) return;
-      setTasks(taskData);
+      const reconciled = reconcileTasksWithSubmittedAnswers(
+        taskData,
+        submittedTaskAnswersRef.current,
+      );
+      submittedTaskAnswersRef.current = Object.fromEntries(
+        reconciled.pendingSubmissionIds.map((id) => [id, submittedTaskAnswersRef.current[id]]),
+      );
+      setTasks(reconciled.tasks);
       setHeartbeats(heartbeatData);
       setSkillData(skillRes);
       setSkills(skillsRes.skills || []);
@@ -6200,7 +6220,35 @@ export default function App() {
       setApiError(`Respond failed: ${e.message}`);
       throw e;
     }
-    const refreshed = await poll();
+
+    submittedTaskAnswersRef.current[String(id)] = answer;
+    setTasks((current) => current.map((task) => markTaskResponseSubmitted(task, id, answer)));
+    setDetail((current) =>
+      current?.id === id ? markTaskResponseSubmitted(current, id, answer) : current,
+    );
+
+    const refreshed = await attemptTargetedTaskRefresh({
+      load: () => fetchTask(id),
+      onTask: (refreshedTask) => {
+        const responseStillPending = taskNeedsResponse(
+          refreshedTask.question,
+          refreshedTask.answer,
+        );
+        if (responseStillPending) {
+          submittedTaskAnswersRef.current[String(id)] = answer;
+        } else {
+          delete submittedTaskAnswersRef.current[String(id)];
+        }
+        const safeTask = responseStillPending
+          ? markTaskResponseSubmitted(refreshedTask, id, answer)
+          : refreshedTask;
+        setTasks((current) => current.map((task) => (task.id === id ? safeTask : task)));
+        setDetail((current) => mergeTargetedTaskDetail(current, id, safeTask));
+      },
+      onError: () => {
+        setApiError("Answer submitted, but task details have not refreshed yet.");
+      },
+    });
     return { refreshed };
   };
 

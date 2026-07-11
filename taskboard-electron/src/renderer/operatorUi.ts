@@ -14,6 +14,18 @@ type HeartbeatTickPollingOptions<T> = {
   cancelScheduled?: (timer: unknown) => void;
 };
 
+type TaskWithResponse = {
+  id: TickId;
+  question?: unknown;
+  answer?: unknown;
+};
+
+type TargetedTaskRefreshOptions<T> = {
+  load: () => Promise<T>;
+  onTask: (task: T) => void;
+  onError: (error: unknown) => void;
+};
+
 export type TaskResponseRefreshResult = {
   refreshed: boolean;
 };
@@ -32,6 +44,53 @@ export function getTaskResponseUiState(
   if (!taskNeedsResponse(question, answer)) return "hidden";
   if (!result) return "form";
   return result.refreshed ? "submitted" : "submitted-stale";
+}
+
+export function markTaskResponseSubmitted<T extends TaskWithResponse>(
+  task: T,
+  taskId: TickId,
+  answer: string,
+): T {
+  if (task.id !== taskId) return task;
+  return { ...task, question: null, answer };
+}
+
+export function reconcileTasksWithSubmittedAnswers<T extends TaskWithResponse>(
+  tasks: T[],
+  submittedAnswers: Readonly<Record<string, string>>,
+): { tasks: T[]; pendingSubmissionIds: string[] } {
+  const pendingSubmissionIds: string[] = [];
+  const reconciled = tasks.map((task) => {
+    const key = String(task.id);
+    if (!Object.hasOwn(submittedAnswers, key) || !taskNeedsResponse(task.question, task.answer)) {
+      return task;
+    }
+    pendingSubmissionIds.push(key);
+    return markTaskResponseSubmitted(task, task.id, submittedAnswers[key]);
+  });
+  return { tasks: reconciled, pendingSubmissionIds };
+}
+
+export function mergeTargetedTaskDetail<T extends TaskWithResponse>(
+  currentDetail: T | null,
+  requestedTaskId: TickId,
+  refreshedTask: T,
+): T | null {
+  return currentDetail?.id === requestedTaskId ? refreshedTask : currentDetail;
+}
+
+export async function attemptTargetedTaskRefresh<T>({
+  load,
+  onTask,
+  onError,
+}: TargetedTaskRefreshOptions<T>): Promise<boolean> {
+  try {
+    onTask(await load());
+    return true;
+  } catch (error) {
+    onError(error);
+    return false;
+  }
 }
 
 export function prepareTaskResponse(
