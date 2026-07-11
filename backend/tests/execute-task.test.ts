@@ -340,6 +340,9 @@ describe("execute task", () => {
 
     const execution = scheduler._execute_task(db.get_task(tid)!);
     scheduler.cancel_task(tid);
+    // The cancelled settle path must restore the task terminal state together
+    // with the run, even if the stored status changes before the process exits.
+    db.update_task(tid, { status: "pending" });
     resolvePopen(new FakePopen(_claude_lines("must not complete")));
     await execution;
 

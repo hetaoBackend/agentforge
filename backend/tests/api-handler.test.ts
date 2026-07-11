@@ -657,6 +657,19 @@ describe("api handler", () => {
     expect(accepted.status).toBe(200);
     expect(await accepted.json()).toEqual({ status: "deleted" });
     expect(db.get_task(taskId)).toBeNull();
+
+    const repeated = await handleApiRequest(
+      ctx,
+      new Request(`http://127.0.0.1:9712/api/tasks/${taskId}`, {
+        method: "DELETE",
+        headers: {
+          Origin: "http://localhost:5173",
+          "X-CSRF-Token": csrf["csrf_token"],
+        },
+      }),
+    );
+    expect(repeated.status).toBe(200);
+    expect(await repeated.json()).toEqual({ status: "deleted" });
   });
 
   test("running task cannot be deleted or retried", async () => {

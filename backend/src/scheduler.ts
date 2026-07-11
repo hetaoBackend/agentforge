@@ -2841,6 +2841,7 @@ export class TaskScheduler extends BusAwareSchedulerMixin {
       this.db.get_task(tid)?.["status"] === "cancelled";
     if (cancelled) {
       const updates: Row = {
+        status: "cancelled",
         last_run_at: nowIso(),
         run_count: new_count,
       };

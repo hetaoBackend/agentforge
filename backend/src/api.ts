@@ -2207,10 +2207,9 @@ async function handleDelete(
   }
   if (path.startsWith("/api/tasks/")) {
     const tid = idAt(path);
-    const task = tid === null ? null : ctx.db.get_task(tid);
-    if (!task || tid === null)
-      return jsonResponse({ error: "not found" }, 404, origin);
-    if (task["status"] === "running" || ctx.scheduler.is_task_active(tid)) {
+    if (tid === null) return jsonResponse({ error: "not found" }, 404, origin);
+    const task = ctx.db.get_task(tid);
+    if (task?.["status"] === "running" || ctx.scheduler.is_task_active(tid)) {
       return jsonResponse(
         { error: "cannot delete task while execution is active" },
         409,
