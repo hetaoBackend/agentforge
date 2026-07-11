@@ -36,6 +36,12 @@ import {
   mergeChannelsStatus,
 } from "./channelsSettings.ts";
 import { createRequestGenerationGuard, parseApiResponse } from "./apiReliability.ts";
+import {
+  prepareTaskResponse,
+  selectTickAfterRefresh,
+  startHeartbeatTickPolling,
+  taskNeedsResponse,
+} from "./operatorUi.ts";
 import { buildExecutionSteps } from "./traceSteps.ts";
 
 const API = "http://127.0.0.1:9712/api";
@@ -2212,9 +2218,14 @@ function HeartbeatDetailPanel({ heartbeat, ticks, onClose }) {
   const [tickOutput, setTickOutput] = useState("");
   const [tickRunning, setTickRunning] = useState(false);
   const outputRef = useRef<any>(null);
+  const previousHeartbeatIdRef = useRef(heartbeat.id);
 
   useEffect(() => {
-    setSelectedTickId(ticks[0]?.id || null);
+    const heartbeatChanged = previousHeartbeatIdRef.current !== heartbeat.id;
+    previousHeartbeatIdRef.current = heartbeat.id;
+    setSelectedTickId((current) =>
+      selectTickAfterRefresh(current, ticks, heartbeatChanged),
+    );
   }, [heartbeat.id, ticks]);
 
   useEffect(() => {
@@ -2224,12 +2235,16 @@ function HeartbeatDetailPanel({ heartbeat, ticks, onClose }) {
       return;
     }
     let cancelled = false;
+    let timeout;
     const load = async () => {
       try {
         const data = await fetchHeartbeatTickOutput(heartbeat.id, selectedTickId);
         if (cancelled) return;
         setTickOutput(data.output || "");
         setTickRunning(!!data.is_running);
+        if (data.is_running) {
+          timeout = setTimeout(load, 1000);
+        }
       } catch {
         if (!cancelled) {
           setTickOutput("");
@@ -2238,10 +2253,9 @@ function HeartbeatDetailPanel({ heartbeat, ticks, onClose }) {
       }
     };
     load();
-    const interval = setInterval(load, 1000);
     return () => {
       cancelled = true;
-      clearInterval(interval);
+      if (timeout) clearTimeout(timeout);
     };
   }, [heartbeat.id, selectedTickId]);
 
@@ -3015,7 +3029,7 @@ function NewTaskModal({ onClose, onSubmit, initialData, mode = "create" }) {
   );
 }
 
-function DetailPanel({ task, onClose, onResume }: any) {
+function DetailPanel({ task, onClose, onRespond, onResume }: any) {
   // `task` is always truthy here — the only caller renders this inside
   // `{detail && <DetailPanel task={... || detail} />}`. Hooks must stay
   // unconditional, so do not early-return before them.
@@ -3023,6 +3037,9 @@ function DetailPanel({ task, onClose, onResume }: any) {
   const [resumeText, setResumeText] = useState("");
   const [resumeError, setResumeError] = useState("");
   const [resumeSent, setResumeSent] = useState(false);
+  const [answerText, setAnswerText] = useState("");
+  const [responseLoading, setResponseLoading] = useState(false);
+  const [responseError, setResponseError] = useState("");
   const [messages, setMessages] = useState<any[]>([]);
   const [events, setEvents] = useState<any[]>([]);
   const [showMessages, setShowMessages] = useState(false);
@@ -3099,6 +3116,31 @@ function DetailPanel({ task, onClose, onResume }: any) {
       messagesRef.current.scrollTop = messagesRef.current.scrollHeight;
     }
   }, [messages]);
+
+  useEffect(() => {
+    setAnswerText("");
+    setResponseError("");
+    setResponseLoading(false);
+  }, [task.id, task.question, task.answer]);
+
+  const handleResponse = async () => {
+    const prepared = prepareTaskResponse(answerText);
+    if (prepared.error) {
+      setResponseError(prepared.error);
+      return;
+    }
+
+    setResponseError("");
+    setResponseLoading(true);
+    try {
+      await onRespond(task.id, prepared.answer);
+      setAnswerText("");
+    } catch (error) {
+      setResponseError(error instanceof Error ? error.message : "Failed to submit response.");
+    } finally {
+      setResponseLoading(false);
+    }
+  };
 
   const handleResume = async () => {
     if (!resumeText.trim()) return;
@@ -3226,6 +3268,67 @@ function DetailPanel({ task, onClose, onResume }: any) {
           </div>
         )}
       </Section>
+
+      {taskNeedsResponse(task.question, task.answer) && (
+        <Section title="Agent Question">
+          <div
+            style={{
+              background: theme.orangeBg,
+              border: `1px solid ${theme.orange}`,
+              borderRadius: 8,
+              padding: 14,
+              fontSize: 12,
+              color: theme.text,
+              whiteSpace: "pre-wrap",
+              wordBreak: "break-word",
+              lineHeight: 1.6,
+              marginBottom: 12,
+            }}
+          >
+            {task.question}
+          </div>
+          <textarea
+            value={answerText}
+            onChange={(event) => {
+              setAnswerText(event.target.value);
+              if (responseError) setResponseError("");
+            }}
+            placeholder="Enter your answer..."
+            disabled={responseLoading}
+            rows={4}
+            style={{
+              width: "100%",
+              boxSizing: "border-box",
+              background: theme.field,
+              color: theme.text,
+              border: `1px solid ${responseError ? theme.red : theme.border}`,
+              borderRadius: 8,
+              padding: 12,
+              fontSize: 12,
+              fontFamily: "'JetBrains Mono', monospace",
+              lineHeight: 1.6,
+              resize: "vertical",
+              outline: "none",
+            }}
+          />
+          {responseError && (
+            <div style={{ color: theme.red, fontSize: 11, marginTop: 8 }}>{responseError}</div>
+          )}
+          <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 10 }}>
+            <button
+              onClick={handleResponse}
+              disabled={responseLoading}
+              style={{
+                ...primaryButton(),
+                cursor: responseLoading ? "wait" : "pointer",
+                opacity: responseLoading ? 0.65 : 1,
+              }}
+            >
+              {responseLoading ? "Submitting..." : "Submit Answer"}
+            </button>
+          </div>
+        </Section>
+      )}
 
       <Section title="Configuration">
         <InfoRow label="Working Dir" value={task.working_dir} />
@@ -5822,6 +5925,7 @@ export default function App() {
   const [forkingTask, setForkingTask] = useState<any>(null);
   const [editingHeartbeat, setEditingHeartbeat] = useState<any>(null);
   const pollGuardRef = useRef(createRequestGenerationGuard());
+  const heartbeatDetailId = heartbeatDetail?.id;
 
   // ─── Color mode ───
   const [colorMode, setColorMode] = useState(() => localStorage.getItem("colorMode") || "system");
@@ -5904,6 +6008,22 @@ export default function App() {
   }, [poll, backendReady]);
 
   useEffect(() => {
+    if (!heartbeatDetailId) return;
+
+    return startHeartbeatTickPolling({
+      heartbeatId: heartbeatDetailId,
+      load: fetchHeartbeatTicks,
+      onTicks: setHeartbeatTicks,
+      onError: (error) =>
+        setApiError(
+          `Failed to fetch heartbeat ticks: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        ),
+    });
+  }, [heartbeatDetailId]);
+
+  useEffect(() => {
     if (!backendReady) return;
     fetchSettings().then((s) => {
       if (s.timeout) setTaskTimeout(s.timeout);
@@ -5955,14 +6075,6 @@ export default function App() {
         return;
       }
       poll();
-      if (heartbeatDetail?.id === id && action !== "delete") {
-        const [updatedHeartbeat, ticks] = await Promise.all([
-          fetch(`${API}/heartbeats/${id}`).then((r) => r.json()),
-          fetchHeartbeatTicks(id),
-        ]);
-        setHeartbeatDetail(updatedHeartbeat);
-        setHeartbeatTicks(ticks);
-      }
     } catch (e) {
       setApiError(`Heartbeat ${action} failed: ${e.message}`);
     }
@@ -6057,9 +6169,10 @@ export default function App() {
   const handleRespond = async (id, answer) => {
     try {
       await respondToTask(id, answer);
-      poll();
+      await poll();
     } catch (e) {
       setApiError(`Respond failed: ${e.message}`);
+      throw e;
     }
   };
 
@@ -6087,15 +6200,9 @@ export default function App() {
     }
   };
 
-  const openHeartbeatDetail = async (heartbeat) => {
+  const openHeartbeatDetail = (heartbeat) => {
+    if (heartbeatDetail?.id !== heartbeat.id) setHeartbeatTicks([]);
     setHeartbeatDetail(heartbeat);
-    try {
-      const ticks = await fetchHeartbeatTicks(heartbeat.id);
-      setHeartbeatTicks(ticks);
-    } catch (e) {
-      setApiError(`Failed to fetch heartbeat ticks: ${e.message}`);
-      setHeartbeatTicks([]);
-    }
   };
 
   const filter =
