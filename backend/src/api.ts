@@ -1423,8 +1423,9 @@ async function handleGet(
   }
 
   if (path === "/api/tasks") {
+    const summary = url.searchParams.get("mode") === "summary";
     return jsonResponse(
-      ctx.db.get_all_tasks().map((t) => attachDependencyMetadata(ctx.db, t)),
+      ctx.db.get_all_tasks_with_dependencies(summary),
       200,
       origin,
     );
@@ -1512,7 +1513,7 @@ async function handleGet(
     return jsonResponse({ csrf_token: CSRF_TOKEN }, 200, origin);
   if (path === "/api/health")
     return jsonResponse(
-      { status: "ok", tasks: ctx.db.get_all_tasks().length },
+      { status: "ok", tasks: ctx.db.count_tasks() },
       200,
       origin,
     );

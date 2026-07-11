@@ -158,6 +158,75 @@ describe("api handler", () => {
     expect(tasks[0]["dependents"]).toEqual([]);
   });
 
+  test("GET /api/tasks batches dependency metadata without per-task queries", async () => {
+    const upstream = db.add_task(
+      makeTask({ title: "Upstream", prompt: "prepare", working_dir: "." }),
+    );
+    const downstream = db.add_task(
+      makeTask({ title: "Downstream", prompt: "finish", working_dir: "." }),
+    );
+    db.add_dependency(downstream, upstream, true);
+    db.get_dependencies = () => {
+      throw new Error("per-task dependency query should not run");
+    };
+    db.get_dependents = () => {
+      throw new Error("per-task dependent query should not run");
+    };
+
+    const tasks = await json(new Request("http://127.0.0.1:9712/api/tasks"));
+
+    expect(tasks).toHaveLength(2);
+    expect(tasks.find((task) => task.id === upstream).dependents).toEqual([
+      downstream,
+    ]);
+    expect(
+      tasks.find((task) => task.id === downstream).dependencies[0],
+    ).toMatchObject({
+      task_id: downstream,
+      depends_on_task_id: upstream,
+      inject_result: 1,
+      depends_on_title: "Upstream",
+    });
+    expect(tasks.find((task) => task.id === upstream).prompt).toBe("prepare");
+  });
+
+  test("GET /api/tasks summary returns only board fields", async () => {
+    db.add_task(
+      makeTask({
+        title: "Summary",
+        prompt: "x".repeat(400),
+        working_dir: "/private/project",
+      }),
+    );
+
+    const tasks = await json(
+      new Request("http://127.0.0.1:9712/api/tasks?mode=summary"),
+    );
+    const task = tasks[0];
+
+    expect(task.prompt_preview).toHaveLength(240);
+    expect(task.dependencies).toEqual([]);
+    expect(task.dependents).toEqual([]);
+    expect(task).not.toHaveProperty("prompt");
+    expect(task).not.toHaveProperty("working_dir");
+    expect(task).not.toHaveProperty("result");
+    expect(task).not.toHaveProperty("error");
+    expect(task).not.toHaveProperty("prompt_images");
+  });
+
+  test("GET /api/health counts tasks without loading task rows", async () => {
+    db.add_task(makeTask({ title: "Count me", prompt: "p" }));
+    db.get_all_tasks = () => {
+      throw new Error("health should use COUNT");
+    };
+
+    const health = await json(
+      new Request("http://127.0.0.1:9712/api/health"),
+    );
+
+    expect(health).toEqual({ status: "ok", tasks: 1 });
+  });
+
   test("GET task output falls back to latest persisted raw output", async () => {
     const created = await json(
       new Request("http://127.0.0.1:9712/api/tasks", {

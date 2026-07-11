@@ -106,6 +106,10 @@ export class TaskDB {
     this._migrate("ALTER TABLE tasks ADD COLUMN image_paths TEXT DEFAULT '[]'");
     this._migrate("ALTER TABLE tasks ADD COLUMN notify_slack_channel TEXT");
     this._migrate("ALTER TABLE tasks ADD COLUMN notify_telegram_chat_id TEXT");
+    this.conn.run(`
+      CREATE INDEX IF NOT EXISTS idx_tasks_status_next_run
+      ON tasks(status, next_run_at)
+    `);
 
     this.conn.run(`
       CREATE TABLE IF NOT EXISTS settings (
@@ -174,6 +178,10 @@ export class TaskDB {
       )
     `);
     this._migrate("ALTER TABLE task_runs ADD COLUMN raw_output TEXT");
+    this.conn.run(`
+      CREATE INDEX IF NOT EXISTS idx_task_runs_task_started
+      ON task_runs(task_id, started_at DESC)
+    `);
 
     this.conn.run(`
       CREATE TABLE IF NOT EXISTS heartbeats (
@@ -264,6 +272,10 @@ export class TaskDB {
     this.conn.run(`
       CREATE INDEX IF NOT EXISTS idx_task_output_events_timestamp
       ON task_output_events(timestamp)
+    `);
+    this.conn.run(`
+      CREATE INDEX IF NOT EXISTS idx_task_output_events_task_timestamp
+      ON task_output_events(task_id, timestamp DESC)
     `);
 
     // DAG dependency table
@@ -1284,6 +1296,71 @@ export class TaskDB {
       .query("SELECT * FROM tasks ORDER BY created_at DESC")
       .all() as Row[];
     return rows.map((r) => this._deserialize_task(r));
+  }
+
+  /**
+   * Return the task list with dependency metadata using three fixed queries.
+   *
+   * The legacy list keeps the same shape as get_task() plus dependencies and
+   * dependents. Summary mode omits large detail-only columns and truncates the
+   * prompt for TaskCard rendering.
+   */
+  get_all_tasks_with_dependencies(summary: boolean = false): Row[] {
+    const taskSql = summary
+      ? `SELECT id, title, substr(prompt, 1, 240) AS prompt_preview,
+                status, schedule_type, cron_expr, delay_seconds, next_run_at,
+                last_run_at, run_count, max_runs, tags, agent, dag_id
+         FROM tasks ORDER BY created_at DESC`
+      : "SELECT * FROM tasks ORDER BY created_at DESC";
+    const rows = this.conn.query(taskSql).all() as Row[];
+    if (rows.length === 0) return [];
+
+    const taskIds = new Set(rows.map((row) => Number(row["id"])));
+    const dependenciesByTask = new Map<number, Row[]>();
+    const dependentsByTask = new Map<number, number[]>();
+    const dependencies = this.conn
+      .query(
+        `SELECT td.*, t.title AS depends_on_title, t.status AS depends_on_status
+         FROM task_dependencies td
+         JOIN tasks t ON t.id = td.depends_on_task_id`,
+      )
+      .all() as Row[];
+    const dependents = this.conn
+      .query(
+        `SELECT td.*, t.title AS task_title, t.status AS task_status
+         FROM task_dependencies td
+         JOIN tasks t ON t.id = td.task_id`,
+      )
+      .all() as Row[];
+
+    for (const dependency of dependencies) {
+      const taskId = Number(dependency["task_id"]);
+      if (!taskIds.has(taskId)) continue;
+      const value = summary
+        ? { depends_on_task_id: dependency["depends_on_task_id"] }
+        : { ...dependency };
+      const current = dependenciesByTask.get(taskId) ?? [];
+      current.push(value);
+      dependenciesByTask.set(taskId, current);
+    }
+    for (const dependent of dependents) {
+      const upstreamId = Number(dependent["depends_on_task_id"]);
+      if (!taskIds.has(upstreamId)) continue;
+      const current = dependentsByTask.get(upstreamId) ?? [];
+      current.push(Number(dependent["task_id"]));
+      dependentsByTask.set(upstreamId, current);
+    }
+
+    return rows.map((row) => ({
+      ...(summary ? row : this._deserialize_task(row)),
+      dependencies: dependenciesByTask.get(Number(row["id"])) ?? [],
+      dependents: dependentsByTask.get(Number(row["id"])) ?? [],
+    }));
+  }
+
+  count_tasks(): number {
+    const row = this.conn.query("SELECT COUNT(*) AS count FROM tasks").get() as Row;
+    return Number(row["count"]);
   }
 
   get_due_tasks(): Row[] {

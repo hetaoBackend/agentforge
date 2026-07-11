@@ -1,4 +1,12 @@
-import { useState, useEffect, useCallback, useRef, type CSSProperties } from "react";
+import {
+  memo,
+  useState,
+  useEffect,
+  useCallback,
+  useMemo,
+  useRef,
+  type CSSProperties,
+} from "react";
 import {
   CheckCircle2,
   GitFork,
@@ -50,6 +58,7 @@ import {
   type TaskResponseRefreshResult,
 } from "./operatorUi.ts";
 import { buildExecutionSteps } from "./traceSteps.ts";
+import { fetchMainViewData, type MainView } from "./viewPolling.ts";
 
 const API = "http://127.0.0.1:9712/api";
 
@@ -837,21 +846,8 @@ async function fetchWithTimeout(
 }
 
 // ─── API helpers ───
-async function fetchTasks() {
-  const res = await fetch(`${API}/tasks`);
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  return res.json();
-}
-
 async function fetchTask(id) {
   const res = await fetch(`${API}/tasks/${id}`);
-  const payload = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(payload.error || `HTTP ${res.status}`);
-  return payload;
-}
-
-async function fetchHeartbeats() {
-  const res = await fetch(`${API}/heartbeats`);
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   return res.json();
 }
@@ -867,12 +863,6 @@ async function createTask(data) {
     headers: await csrfHeaders(),
     body: JSON.stringify(data),
   });
-}
-
-async function fetchSkillPatterns() {
-  const res = await fetch(`${API}/skill-patterns`);
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  return res.json();
 }
 
 async function triggerSkillSweep(agent?: string) {
@@ -905,12 +895,6 @@ async function dismissSkillPattern(id) {
     headers: await csrfHeaders(),
     body: "{}",
   });
-}
-
-async function fetchSkills() {
-  const res = await fetch(`${API}/skills`);
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  return res.json();
 }
 
 async function setSkillEnabledApi(id, enabled) {
@@ -1603,7 +1587,8 @@ function segmentedButton(active: boolean): CSSProperties {
   };
 }
 
-function TaskCard({ task, onAction, onViewDetail }) {
+function TaskCard({ task, onAction, onViewDetail, themeVersion }) {
+  void themeVersion;
   const [hovered, setHovered] = useState(false);
   const tags = task.tags ? task.tags.split(",").filter(Boolean) : [];
 
@@ -1677,7 +1662,7 @@ function TaskCard({ task, onAction, onViewDetail }) {
             WebkitBoxOrient: "vertical",
           }}
         >
-          {task.prompt || "No prompt saved for this task."}
+          {task.prompt_preview || task.prompt || "No prompt saved for this task."}
         </div>
 
         <div style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
@@ -1784,6 +1769,8 @@ function TaskCard({ task, onAction, onViewDetail }) {
   );
 }
 
+const MemoizedTaskCard = memo(TaskCard);
+
 function ActionBtn({ icon, title, onClick, color }) {
   const [hovered, setHovered] = useState(false);
   return (
@@ -1811,7 +1798,7 @@ function ActionBtn({ icon, title, onClick, color }) {
   );
 }
 
-function Column({ col, tasks, onAction, onViewDetail }) {
+function Column({ col, tasks, onAction, onViewDetail, themeVersion }) {
   const iconColor = theme[col.tone] || theme.accent;
   const iconBackground = theme[`${col.tone}Bg`] || theme.field;
 
@@ -1877,7 +1864,13 @@ function Column({ col, tasks, onAction, onViewDetail }) {
       </div>
       <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
         {tasks.map((t) => (
-          <TaskCard key={t.id} task={t} onAction={onAction} onViewDetail={onViewDetail} />
+          <MemoizedTaskCard
+            key={t.id}
+            task={t}
+            onAction={onAction}
+            onViewDetail={onViewDetail}
+            themeVersion={themeVersion}
+          />
         ))}
         {tasks.length === 0 && (
           <div
@@ -5944,7 +5937,7 @@ export default function App() {
     sweep: { running: false, last: null },
   });
   const [skills, setSkills] = useState<any[]>([]);
-  const [activeView, setActiveView] = useState("tasks");
+  const [activeView, setActiveView] = useState<MainView>("tasks");
   const [showNew, setShowNew] = useState(false);
   const [showNewHeartbeat, setShowNewHeartbeat] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
@@ -6015,34 +6008,36 @@ export default function App() {
   const poll = useCallback(async () => {
     const generation = pollGuardRef.current.begin();
     try {
-      const [taskData, heartbeatData, skillRes, skillsRes] = await Promise.all([
-        fetchTasks(),
-        fetchHeartbeats(),
-        fetchSkillPatterns(),
-        fetchSkills(),
-      ]);
+      const data = await fetchMainViewData(activeView, API);
       if (!pollGuardRef.current.isCurrent(generation)) return;
-      const reconciled = reconcileTasksWithSubmittedAnswers(
-        taskData,
-        submittedTaskAnswersRef.current,
-      );
-      submittedTaskAnswersRef.current = Object.fromEntries(
-        reconciled.pendingSubmissionIds.map((id) => [id, submittedTaskAnswersRef.current[id]]),
-      );
-      setTasks(reconciled.tasks);
-      setHeartbeats(heartbeatData);
-      setSkillData(skillRes);
-      setSkills(skillsRes.skills || []);
+      if (data.tasks !== undefined) {
+        const reconciled = reconcileTasksWithSubmittedAnswers(
+          data.tasks,
+          submittedTaskAnswersRef.current,
+        );
+        submittedTaskAnswersRef.current = Object.fromEntries(
+          reconciled.pendingSubmissionIds.map((id) => [id, submittedTaskAnswersRef.current[id]]),
+        );
+        setTasks(reconciled.tasks);
+        setDetail((current) => {
+          if (!current) return current;
+          const summary = reconciled.tasks.find((task) => task.id === current.id);
+          return summary ? { ...current, ...summary } : current;
+        });
+      }
+      if (data.heartbeats !== undefined) setHeartbeats(data.heartbeats);
+      if (data.skillData !== undefined) setSkillData(data.skillData);
+      if (data.skills !== undefined) setSkills(data.skills);
       setConnected(true);
       setApiError(null);
       return true;
     } catch (err) {
       if (!pollGuardRef.current.isCurrent(generation)) return;
       setConnected(false);
-      setApiError(`Failed to fetch tasks: ${err.message}`);
+      setApiError(`Failed to refresh ${activeView}: ${err.message}`);
       return false;
     }
-  }, []);
+  }, [activeView]);
 
   useEffect(() => {
     if (!backendReady) return;
@@ -6081,27 +6076,33 @@ export default function App() {
     fetchChannelsStatus().then((s) => setChannelsStatus(s));
   }, [backendReady]);
 
-  const handleAction = async (action, id) => {
+  const openTaskDetail = useCallback(async (task) => {
+    try {
+      setDetail(await fetchTask(task.id));
+    } catch (e) {
+      setApiError(`Failed to fetch task details: ${e.message}`);
+    }
+  }, []);
+
+  const handleAction = useCallback(async (action, id) => {
     try {
       if (action === "cancel") await cancelTask(id);
       else if (action === "retry") await retryTask(id);
       else if (action === "delete") {
         await deleteTask(id);
-        if (detail?.id === id) setDetail(null);
+        setDetail((current) => (current?.id === id ? null : current));
       } else if (action === "edit") {
-        const task = tasks.find((t) => t.id === id);
-        if (task) setEditingTask(task);
+        setEditingTask(await fetchTask(id));
         return;
       } else if (action === "fork") {
-        const task = tasks.find((t) => t.id === id);
-        if (task) setForkingTask(task);
+        setForkingTask(await fetchTask(id));
         return;
       }
       poll();
     } catch (e) {
       setApiError(`${action} failed: ${e.message}`);
     }
-  };
+  }, [poll]);
 
   const handleHeartbeatAction = async (action, id) => {
     try {
@@ -6310,21 +6311,44 @@ export default function App() {
           ? "Search skills"
           : "";
 
-  const filtered = filter
-    ? tasks.filter(
-        (t) =>
-          t.title.toLowerCase().includes(filter.toLowerCase()) ||
-          t.tags?.toLowerCase().includes(filter.toLowerCase()),
-      )
-    : tasks;
-
-  const runningCount = tasks.filter((t) => t.status === "running").length;
-  const queueCount = tasks.filter((t) =>
-    ["pending", "scheduled", "blocked"].includes(t.status),
-  ).length;
-  const doneCount = tasks.filter((t) =>
-    ["completed", "failed", "cancelled"].includes(t.status),
-  ).length;
+  const filtered = useMemo(() => {
+    const query = filters.tasks.trim().toLowerCase();
+    if (!query) return tasks;
+    return tasks.filter(
+      (task) =>
+        task.title.toLowerCase().includes(query) || task.tags?.toLowerCase().includes(query),
+    );
+  }, [filters.tasks, tasks]);
+  const tasksByColumn = useMemo(
+    () =>
+      Object.fromEntries(
+        COLUMNS.map((column) => [
+          column.key,
+          filtered.filter((task) => column.statuses.includes(task.status)),
+        ]),
+      ),
+    [filtered],
+  );
+  const filteredHeartbeats = useMemo(() => {
+    const query = filters.heartbeats.trim().toLowerCase();
+    if (!query) return heartbeats;
+    return heartbeats.filter(
+      (heartbeat) =>
+        heartbeat.name.toLowerCase().includes(query) ||
+        heartbeat.check_prompt.toLowerCase().includes(query),
+    );
+  }, [filters.heartbeats, heartbeats]);
+  const { runningCount, queueCount, doneCount } = useMemo(() => {
+    let running = 0;
+    let queued = 0;
+    let done = 0;
+    for (const task of tasks) {
+      if (task.status === "running") running += 1;
+      else if (["pending", "scheduled", "blocked"].includes(task.status)) queued += 1;
+      else if (["completed", "failed", "cancelled"].includes(task.status)) done += 1;
+    }
+    return { runningCount: running, queueCount: queued, doneCount: done };
+  }, [tasks]);
   const enabledHeartbeatCount = heartbeats.filter((h) => h.enabled).length;
   const pausedHeartbeatCount = Math.max(heartbeats.length - enabledHeartbeatCount, 0);
   const heartbeatIssueCount = heartbeats.filter((h) => h.last_error).length;
@@ -6575,7 +6599,7 @@ export default function App() {
               ].map((tab) => (
                 <button
                   key={tab.key}
-                  onClick={() => setActiveView(tab.key)}
+                  onClick={() => setActiveView(tab.key as MainView)}
                   style={{
                     padding: "6px 9px",
                     borderRadius: 5,
@@ -7155,9 +7179,10 @@ export default function App() {
               <Column
                 key={col.key}
                 col={col}
-                tasks={filtered.filter((t) => col.statuses.includes(t.status))}
+                tasks={tasksByColumn[col.key]}
                 onAction={handleAction}
-                onViewDetail={setDetail}
+                onViewDetail={openTaskDetail}
+                themeVersion={resolvedMode}
               />
             ))}
           </div>
@@ -7171,14 +7196,7 @@ export default function App() {
               gap: 12,
             }}
           >
-            {(filter
-              ? heartbeats.filter(
-                  (h) =>
-                    h.name.toLowerCase().includes(filter.toLowerCase()) ||
-                    h.check_prompt.toLowerCase().includes(filter.toLowerCase()),
-                )
-              : heartbeats
-            ).map((h) => (
+            {filteredHeartbeats.map((h) => (
               <HeartbeatCard
                 key={h.id}
                 heartbeat={h}
@@ -7275,7 +7293,7 @@ export default function App() {
       )}
       {detail && (
         <DetailPanel
-          task={tasks.find((t) => t.id === detail.id) || detail}
+          task={detail}
           onClose={() => setDetail(null)}
           onRespond={handleRespond}
           onResume={handleResume}
