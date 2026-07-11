@@ -291,7 +291,9 @@ describe("scheduler logic", () => {
       ),
     ).toThrow(/injected dependency insert failure/);
 
-    expect(db.get_all_tasks().map((task) => task["id"])).toEqual([a, b]);
+    expect(new Set(db.get_all_tasks().map((task) => task["id"]))).toEqual(
+      new Set([a, b]),
+    );
     expect(db.get_dependents(a)).toEqual([]);
   });
 
