@@ -14,8 +14,24 @@ type HeartbeatTickPollingOptions<T> = {
   cancelScheduled?: (timer: unknown) => void;
 };
 
+export type TaskResponseRefreshResult = {
+  refreshed: boolean;
+};
+
+export type TaskResponseUiState = "hidden" | "form" | "submitted" | "submitted-stale";
+
 export function taskNeedsResponse(question: unknown, answer: unknown): boolean {
   return typeof question === "string" && question.trim().length > 0 && !String(answer ?? "").trim();
+}
+
+export function getTaskResponseUiState(
+  question: unknown,
+  answer: unknown,
+  result: TaskResponseRefreshResult | null,
+): TaskResponseUiState {
+  if (!taskNeedsResponse(question, answer)) return "hidden";
+  if (!result) return "form";
+  return result.refreshed ? "submitted" : "submitted-stale";
 }
 
 export function prepareTaskResponse(

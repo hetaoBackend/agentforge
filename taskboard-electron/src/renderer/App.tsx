@@ -37,10 +37,11 @@ import {
 } from "./channelsSettings.ts";
 import { createRequestGenerationGuard, parseApiResponse } from "./apiReliability.ts";
 import {
+  getTaskResponseUiState,
   prepareTaskResponse,
   selectTickAfterRefresh,
   startHeartbeatTickPolling,
-  taskNeedsResponse,
+  type TaskResponseRefreshResult,
 } from "./operatorUi.ts";
 import { buildExecutionSteps } from "./traceSteps.ts";
 
@@ -3038,6 +3039,7 @@ function DetailPanel({ task, onClose, onRespond, onResume }: any) {
   const [answerText, setAnswerText] = useState("");
   const [responseLoading, setResponseLoading] = useState(false);
   const [responseError, setResponseError] = useState("");
+  const [responseResult, setResponseResult] = useState<TaskResponseRefreshResult | null>(null);
   const [messages, setMessages] = useState<any[]>([]);
   const [events, setEvents] = useState<any[]>([]);
   const [showMessages, setShowMessages] = useState(false);
@@ -3119,6 +3121,7 @@ function DetailPanel({ task, onClose, onRespond, onResume }: any) {
     setAnswerText("");
     setResponseError("");
     setResponseLoading(false);
+    setResponseResult(null);
   }, [task.id, task.question, task.answer]);
 
   const handleResponse = async () => {
@@ -3131,14 +3134,16 @@ function DetailPanel({ task, onClose, onRespond, onResume }: any) {
     setResponseError("");
     setResponseLoading(true);
     try {
-      await onRespond(task.id, prepared.answer);
+      const result = await onRespond(task.id, prepared.answer);
       setAnswerText("");
+      setResponseResult({ refreshed: result?.refreshed !== false });
     } catch (error) {
       setResponseError(error instanceof Error ? error.message : "Failed to submit response.");
     } finally {
       setResponseLoading(false);
     }
   };
+  const responseUiState = getTaskResponseUiState(task.question, task.answer, responseResult);
 
   const handleResume = async () => {
     if (!resumeText.trim()) return;
@@ -3267,7 +3272,7 @@ function DetailPanel({ task, onClose, onRespond, onResume }: any) {
         )}
       </Section>
 
-      {taskNeedsResponse(task.question, task.answer) && (
+      {responseUiState !== "hidden" && (
         <Section title="Agent Question">
           <div
             style={{
@@ -3285,46 +3290,68 @@ function DetailPanel({ task, onClose, onRespond, onResume }: any) {
           >
             {task.question}
           </div>
-          <textarea
-            value={answerText}
-            onChange={(event) => {
-              setAnswerText(event.target.value);
-              if (responseError) setResponseError("");
-            }}
-            placeholder="Enter your answer..."
-            disabled={responseLoading}
-            rows={4}
-            style={{
-              width: "100%",
-              boxSizing: "border-box",
-              background: theme.field,
-              color: theme.text,
-              border: `1px solid ${responseError ? theme.red : theme.border}`,
-              borderRadius: 8,
-              padding: 12,
-              fontSize: 12,
-              fontFamily: "'JetBrains Mono', monospace",
-              lineHeight: 1.6,
-              resize: "vertical",
-              outline: "none",
-            }}
-          />
-          {responseError && (
-            <div style={{ color: theme.red, fontSize: 11, marginTop: 8 }}>{responseError}</div>
-          )}
-          <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 10 }}>
-            <button
-              onClick={handleResponse}
-              disabled={responseLoading}
+          {responseUiState === "form" ? (
+            <>
+              <textarea
+                value={answerText}
+                onChange={(event) => {
+                  setAnswerText(event.target.value);
+                  if (responseError) setResponseError("");
+                }}
+                placeholder="Enter your answer..."
+                disabled={responseLoading}
+                rows={4}
+                style={{
+                  width: "100%",
+                  boxSizing: "border-box",
+                  background: theme.field,
+                  color: theme.text,
+                  border: `1px solid ${responseError ? theme.red : theme.border}`,
+                  borderRadius: 8,
+                  padding: 12,
+                  fontSize: 12,
+                  fontFamily: "'JetBrains Mono', monospace",
+                  lineHeight: 1.6,
+                  resize: "vertical",
+                  outline: "none",
+                }}
+              />
+              {responseError && (
+                <div style={{ color: theme.red, fontSize: 11, marginTop: 8 }}>{responseError}</div>
+              )}
+              <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 10 }}>
+                <button
+                  onClick={handleResponse}
+                  disabled={responseLoading}
+                  style={{
+                    ...primaryButton(),
+                    cursor: responseLoading ? "wait" : "pointer",
+                    opacity: responseLoading ? 0.65 : 1,
+                  }}
+                >
+                  {responseLoading ? "Submitting..." : "Submit Answer"}
+                </button>
+              </div>
+            </>
+          ) : (
+            <div
               style={{
-                ...primaryButton(),
-                cursor: responseLoading ? "wait" : "pointer",
-                opacity: responseLoading ? 0.65 : 1,
+                background: responseUiState === "submitted-stale" ? theme.orangeBg : theme.greenBg,
+                border: `1px solid ${
+                  responseUiState === "submitted-stale" ? theme.orange : theme.green
+                }`,
+                borderRadius: 8,
+                padding: 12,
+                color: theme.text,
+                fontSize: 12,
+                lineHeight: 1.6,
               }}
             >
-              {responseLoading ? "Submitting..." : "Submit Answer"}
-            </button>
-          </div>
+              {responseUiState === "submitted-stale"
+                ? "Answer submitted, but the task refresh failed. This view may be stale; automatic refresh will retry."
+                : "Answer submitted. Refreshing task status..."}
+            </div>
+          )}
         </Section>
       )}
 
@@ -5987,10 +6014,12 @@ export default function App() {
       setSkills(skillsRes.skills || []);
       setConnected(true);
       setApiError(null);
+      return true;
     } catch (err) {
       if (!pollGuardRef.current.isCurrent(generation)) return;
       setConnected(false);
       setApiError(`Failed to fetch tasks: ${err.message}`);
+      return false;
     }
   }, []);
 
@@ -6167,11 +6196,12 @@ export default function App() {
   const handleRespond = async (id, answer) => {
     try {
       await respondToTask(id, answer);
-      await poll();
     } catch (e) {
       setApiError(`Respond failed: ${e.message}`);
       throw e;
     }
+    const refreshed = await poll();
+    return { refreshed };
   };
 
   const handleResume = () => {

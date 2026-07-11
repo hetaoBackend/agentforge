@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 
 import {
+  getTaskResponseUiState,
   prepareTaskResponse,
   selectTickAfterRefresh,
   startHeartbeatTickPolling,
@@ -23,6 +24,17 @@ test("prepareTaskResponse trims answers and rejects blank input", () => {
     answer: null,
     error: "Please enter an answer before submitting.",
   });
+});
+
+test("task response UI treats submit success separately from refresh failure", () => {
+  expect(getTaskResponseUiState("Proceed?", null, null)).toBe("form");
+  expect(getTaskResponseUiState("Proceed?", null, { refreshed: true })).toBe("submitted");
+  expect(getTaskResponseUiState("Proceed?", null, { refreshed: false })).toBe("submitted-stale");
+});
+
+test("task response UI hides once the refreshed task is answered", () => {
+  expect(getTaskResponseUiState("Proceed?", "Yes", { refreshed: true })).toBe("hidden");
+  expect(getTaskResponseUiState(null, null, { refreshed: false })).toBe("hidden");
 });
 
 test("selectTickAfterRefresh preserves a selected tick still in the refreshed list", () => {
