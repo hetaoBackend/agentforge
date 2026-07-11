@@ -176,18 +176,22 @@ describe("api handler", () => {
     const tasks = await json(new Request("http://127.0.0.1:9712/api/tasks"));
 
     expect(tasks).toHaveLength(2);
-    expect(tasks.find((task) => task.id === upstream).dependents).toEqual([
-      downstream,
-    ]);
     expect(
-      tasks.find((task) => task.id === downstream).dependencies[0],
+      tasks.find((task: Record<string, any>) => task.id === upstream)
+        .dependents,
+    ).toEqual([downstream]);
+    expect(
+      tasks.find((task: Record<string, any>) => task.id === downstream)
+        .dependencies[0],
     ).toMatchObject({
       task_id: downstream,
       depends_on_task_id: upstream,
       inject_result: 1,
       depends_on_title: "Upstream",
     });
-    expect(tasks.find((task) => task.id === upstream).prompt).toBe("prepare");
+    expect(
+      tasks.find((task: Record<string, any>) => task.id === upstream).prompt,
+    ).toBe("prepare");
   });
 
   test("GET /api/tasks summary returns only board fields", async () => {
@@ -220,9 +224,7 @@ describe("api handler", () => {
       throw new Error("health should use COUNT");
     };
 
-    const health = await json(
-      new Request("http://127.0.0.1:9712/api/health"),
-    );
+    const health = await json(new Request("http://127.0.0.1:9712/api/health"));
 
     expect(health).toEqual({ status: "ok", tasks: 1 });
   });

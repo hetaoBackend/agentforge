@@ -32,10 +32,8 @@ describe("fetchMainViewData", () => {
   );
 
   test("returns partial data without empty placeholders for unrequested views", async () => {
-    const data = await fetchMainViewData(
-      "heartbeats",
-      "http://localhost/api",
-      async () => response([{ id: 7 }]),
+    const data = await fetchMainViewData("heartbeats", "http://localhost/api", async () =>
+      response([{ id: 7 }]),
     );
 
     expect(data).toEqual({ heartbeats: [{ id: 7 }] });

@@ -1359,7 +1359,9 @@ export class TaskDB {
   }
 
   count_tasks(): number {
-    const row = this.conn.query("SELECT COUNT(*) AS count FROM tasks").get() as Row;
+    const row = this.conn
+      .query("SELECT COUNT(*) AS count FROM tasks")
+      .get() as Row;
     return Number(row["count"]);
   }
 

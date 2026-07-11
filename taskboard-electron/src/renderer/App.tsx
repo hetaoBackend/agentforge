@@ -1,12 +1,4 @@
-import {
-  memo,
-  useState,
-  useEffect,
-  useCallback,
-  useMemo,
-  useRef,
-  type CSSProperties,
-} from "react";
+import { memo, useState, useEffect, useCallback, useMemo, useRef, type CSSProperties } from "react";
 import {
   CheckCircle2,
   GitFork,
@@ -5958,6 +5950,7 @@ export default function App() {
   const pollGuardRef = useRef(createRequestGenerationGuard());
   const heartbeatDetailId = heartbeatDetail?.id;
   const submittedTaskAnswersRef = useRef<Record<string, string>>({});
+  const detailRequestIdRef = useRef(0);
 
   // ─── Color mode ───
   const [colorMode, setColorMode] = useState(() => localStorage.getItem("colorMode") || "system");
@@ -6077,32 +6070,47 @@ export default function App() {
   }, [backendReady]);
 
   const openTaskDetail = useCallback(async (task) => {
+    const requestId = ++detailRequestIdRef.current;
     try {
-      setDetail(await fetchTask(task.id));
+      const fullTask = await fetchTask(task.id);
+      if (requestId === detailRequestIdRef.current) setDetail(fullTask);
     } catch (e) {
-      setApiError(`Failed to fetch task details: ${e.message}`);
+      if (requestId === detailRequestIdRef.current) {
+        setApiError(`Failed to fetch task details: ${e.message}`);
+      }
     }
   }, []);
+  const closeTaskDetail = useCallback(() => {
+    detailRequestIdRef.current += 1;
+    setDetail(null);
+  }, []);
+  const switchActiveView = useCallback((view: MainView) => {
+    pollGuardRef.current.invalidate();
+    setActiveView(view);
+  }, []);
 
-  const handleAction = useCallback(async (action, id) => {
-    try {
-      if (action === "cancel") await cancelTask(id);
-      else if (action === "retry") await retryTask(id);
-      else if (action === "delete") {
-        await deleteTask(id);
-        setDetail((current) => (current?.id === id ? null : current));
-      } else if (action === "edit") {
-        setEditingTask(await fetchTask(id));
-        return;
-      } else if (action === "fork") {
-        setForkingTask(await fetchTask(id));
-        return;
+  const handleAction = useCallback(
+    async (action, id) => {
+      try {
+        if (action === "cancel") await cancelTask(id);
+        else if (action === "retry") await retryTask(id);
+        else if (action === "delete") {
+          await deleteTask(id);
+          setDetail((current) => (current?.id === id ? null : current));
+        } else if (action === "edit") {
+          setEditingTask(await fetchTask(id));
+          return;
+        } else if (action === "fork") {
+          setForkingTask(await fetchTask(id));
+          return;
+        }
+        poll();
+      } catch (e) {
+        setApiError(`${action} failed: ${e.message}`);
       }
-      poll();
-    } catch (e) {
-      setApiError(`${action} failed: ${e.message}`);
-    }
-  }, [poll]);
+    },
+    [poll],
+  );
 
   const handleHeartbeatAction = async (action, id) => {
     try {
@@ -6599,7 +6607,7 @@ export default function App() {
               ].map((tab) => (
                 <button
                   key={tab.key}
-                  onClick={() => setActiveView(tab.key as MainView)}
+                  onClick={() => switchActiveView(tab.key as MainView)}
                   style={{
                     padding: "6px 9px",
                     borderRadius: 5,
@@ -7294,7 +7302,7 @@ export default function App() {
       {detail && (
         <DetailPanel
           task={detail}
-          onClose={() => setDetail(null)}
+          onClose={closeTaskDetail}
           onRespond={handleRespond}
           onResume={handleResume}
         />
