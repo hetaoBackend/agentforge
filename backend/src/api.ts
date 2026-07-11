@@ -2271,37 +2271,15 @@ async function handlePut(
         origin,
       );
     }
-    const prompt = asString(body["prompt"] ?? task["prompt"]);
-    if (!prompt.trim())
+    const validated = validateTaskInput(ctx, { ...task, ...body });
+    if (validated.response) {
       return jsonResponse(
-        { error: "prompt cannot be empty", field: "prompt" },
-        400,
+        validated.response[0],
+        validated.response[1] ?? 400,
         origin,
       );
-    const workingDir = asString(body["working_dir"] ?? task["working_dir"]);
-    const dirError = ensureWorkingDir(
-      workingDir,
-      `working_dir does not exist: ${workingDir}`,
-    );
-    if (dirError) return jsonResponse(dirError, 400, origin);
-    const scheduleType = asString(
-      body["schedule_type"] ?? task["schedule_type"],
-    );
-    const cronExpr = asString(body["cron_expr"] ?? task["cron_expr"]);
-    if (scheduleType === "cron") {
-      if (!cronExpr.trim())
-        return jsonResponse(
-          { error: "cron_expr required for cron schedule", field: "cron_expr" },
-          400,
-          origin,
-        );
-      if (!cronValid(cronExpr))
-        return jsonResponse(
-          { error: `invalid cron expression: ${cronExpr}`, field: "cron_expr" },
-          400,
-          origin,
-        );
     }
+    const fields = validated.task!;
 
     const updates: Row = {};
     for (const field of [
@@ -2327,9 +2305,12 @@ async function handlePut(
         parseJsonList(body["image_paths"]),
       );
 
-    const newScheduleType = asString(
-      updates["schedule_type"] ?? task["schedule_type"],
-    );
+    if ("prompt" in body) updates["prompt"] = fields.prompt;
+    if ("working_dir" in body) updates["working_dir"] = fields.workingDir;
+    if ("schedule_type" in body) updates["schedule_type"] = fields.scheduleType;
+    if ("agent" in body) updates["agent"] = fields.agent;
+
+    const newScheduleType = fields.scheduleType;
     if (newScheduleType === "immediate") {
       Object.assign(updates, {
         status: "pending",
@@ -2342,28 +2323,19 @@ async function handlePut(
         status: "pending",
         next_run_at: null,
         cron_expr: null,
+        delay_seconds: fields.delaySeconds,
       });
     } else if (newScheduleType === "scheduled_at") {
-      const nextRunAt = body["next_run_at"] ?? task["next_run_at"];
-      if (!nextRunAt)
-        return jsonResponse(
-          {
-            error: "next_run_at required for scheduled_at",
-            field: "next_run_at",
-          },
-          400,
-          origin,
-        );
       Object.assign(updates, {
-        next_run_at: nextRunAt,
+        next_run_at: fields.nextRunAt,
         status: "scheduled",
         cron_expr: null,
         delay_seconds: null,
       });
     } else if (newScheduleType === "cron") {
-      const newCron = asString(updates["cron_expr"] ?? task["cron_expr"]);
       Object.assign(updates, {
-        next_run_at: cronNextIso(newCron),
+        cron_expr: fields.cronExpr,
+        next_run_at: cronNextIso(fields.cronExpr!),
         status: "scheduled",
         delay_seconds: null,
       });

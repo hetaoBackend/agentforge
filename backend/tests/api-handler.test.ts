@@ -1417,6 +1417,97 @@ describe("api handler", () => {
     expect(db.get_all_tasks()).toHaveLength(0);
   });
 
+  test("PUT /api/tasks validates the merged final task without partial updates", async () => {
+    async function createTask(
+      payload: Record<string, unknown>,
+    ): Promise<number> {
+      const created = await json(
+        new Request("http://127.0.0.1:9712/api/tasks", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ prompt: "original", ...payload }),
+        }),
+      );
+      return Number(created.id);
+    }
+
+    const delayedId = await createTask({
+      title: "Delayed",
+      schedule_type: "delayed",
+      delay_seconds: 120,
+      agent: "codex",
+    });
+    const partial = await handleApiRequest(
+      ctx,
+      new Request(`http://127.0.0.1:9712/api/tasks/${delayedId}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title: "Renamed" }),
+      }),
+    );
+    expect(partial.status).toBe(200);
+    expect(db.get_task(delayedId)).toMatchObject({
+      title: "Renamed",
+      schedule_type: "delayed",
+      delay_seconds: 120,
+      agent: "codex",
+    });
+
+    for (const [body, field] of [
+      [{ title: "Must not change", schedule_type: "invalid" }, "schedule_type"],
+      [{ title: "Must not change", agent: "invalid" }, "agent"],
+      [{ title: "Must not change", schedule_type: "cron" }, "cron_expr"],
+      [
+        { title: "Must not change", schedule_type: "scheduled_at" },
+        "next_run_at",
+      ],
+    ] as const) {
+      const before = db.get_task(delayedId);
+      const res = await handleApiRequest(
+        ctx,
+        new Request(`http://127.0.0.1:9712/api/tasks/${delayedId}`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        }),
+      );
+      expect(res.status).toBe(400);
+      expect(await res.json()).toMatchObject({ field });
+      expect(db.get_task(delayedId)).toEqual(before);
+    }
+
+    const immediateId = await createTask({ title: "Immediate" });
+    const missingDelay = await handleApiRequest(
+      ctx,
+      new Request(`http://127.0.0.1:9712/api/tasks/${immediateId}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title: "Must not change",
+          schedule_type: "delayed",
+        }),
+      }),
+    );
+    expect(missingDelay.status).toBe(400);
+    expect(await missingDelay.json()).toMatchObject({ field: "delay_seconds" });
+    expect(db.get_task(immediateId)!["title"]).toBe("Immediate");
+
+    const badDir = await handleApiRequest(
+      ctx,
+      new Request(`http://127.0.0.1:9712/api/tasks/${immediateId}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title: "Must not change",
+          working_dir: path.join(tmpDir, "missing-put-dir"),
+        }),
+      }),
+    );
+    expect(badDir.status).toBe(400);
+    expect(await badDir.json()).toMatchObject({ field: "working_dir" });
+    expect(db.get_task(immediateId)!["title"]).toBe("Immediate");
+  });
+
   test("task mutation routes edit, respond, resume, cancel, retry, and remove dependencies", async () => {
     const upstream = await json(
       new Request("http://127.0.0.1:9712/api/tasks", {
