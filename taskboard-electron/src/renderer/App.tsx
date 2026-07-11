@@ -5894,11 +5894,12 @@ export default function App() {
 
   useEffect(() => {
     if (!backendReady) return;
+    const pollGuard = pollGuardRef.current;
     poll();
     const interval = setInterval(poll, 3000);
     return () => {
       clearInterval(interval);
-      pollGuardRef.current.invalidate();
+      pollGuard.invalidate();
     };
   }, [poll, backendReady]);
 
