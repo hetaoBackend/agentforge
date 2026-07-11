@@ -49,6 +49,11 @@ import {
   taskNeedsResponse,
   type TaskResponseRefreshResult,
 } from "./operatorUi.ts";
+import {
+  DetailRequestCoordinator,
+  loadLatestTaskDetail,
+  mergeTaskSummaryIntoDetail,
+} from "./taskPollingState.ts";
 import { buildExecutionSteps } from "./traceSteps.ts";
 import { fetchMainViewData, type MainView } from "./viewPolling.ts";
 
@@ -838,8 +843,8 @@ async function fetchWithTimeout(
 }
 
 // ─── API helpers ───
-async function fetchTask(id) {
-  const res = await fetch(`${API}/tasks/${id}`);
+async function fetchTask(id, signal?: AbortSignal) {
+  const res = await fetch(`${API}/tasks/${id}`, { signal });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   return res.json();
 }
@@ -5950,7 +5955,10 @@ export default function App() {
   const pollGuardRef = useRef(createRequestGenerationGuard());
   const heartbeatDetailId = heartbeatDetail?.id;
   const submittedTaskAnswersRef = useRef<Record<string, string>>({});
-  const detailRequestIdRef = useRef(0);
+  const detailRequestCoordinatorRef = useRef<DetailRequestCoordinator | null>(null);
+  if (detailRequestCoordinatorRef.current === null) {
+    detailRequestCoordinatorRef.current = new DetailRequestCoordinator();
+  }
 
   // ─── Color mode ───
   const [colorMode, setColorMode] = useState(() => localStorage.getItem("colorMode") || "system");
@@ -6015,7 +6023,7 @@ export default function App() {
         setDetail((current) => {
           if (!current) return current;
           const summary = reconciled.tasks.find((task) => task.id === current.id);
-          return summary ? { ...current, ...summary } : current;
+          return mergeTaskSummaryIntoDetail(current, summary);
         });
       }
       if (data.heartbeats !== undefined) setHeartbeats(data.heartbeats);
@@ -6069,19 +6077,24 @@ export default function App() {
     fetchChannelsStatus().then((s) => setChannelsStatus(s));
   }, [backendReady]);
 
-  const openTaskDetail = useCallback(async (task) => {
-    const requestId = ++detailRequestIdRef.current;
-    try {
-      const fullTask = await fetchTask(task.id);
-      if (requestId === detailRequestIdRef.current) setDetail(fullTask);
-    } catch (e) {
-      if (requestId === detailRequestIdRef.current) {
-        setApiError(`Failed to fetch task details: ${e.message}`);
-      }
-    }
+  useEffect(() => {
+    return () => detailRequestCoordinatorRef.current?.invalidate();
+  }, []);
+
+  const openTaskDetail = useCallback((task) => {
+    return loadLatestTaskDetail(
+      task.id,
+      detailRequestCoordinatorRef.current!,
+      fetchTask,
+      setDetail,
+      (error) =>
+        setApiError(
+          `Failed to fetch task details: ${error instanceof Error ? error.message : String(error)}`,
+        ),
+    );
   }, []);
   const closeTaskDetail = useCallback(() => {
-    detailRequestIdRef.current += 1;
+    detailRequestCoordinatorRef.current?.invalidate();
     setDetail(null);
   }, []);
   const switchActiveView = useCallback((view: MainView) => {
