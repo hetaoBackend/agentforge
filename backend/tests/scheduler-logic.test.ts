@@ -524,17 +524,33 @@ describe("scheduler logic", () => {
 
   // ── skill sweep core ────────────────────────────────────────────────────
   test("test_parse_sweep_output_variants", () => {
-    expect(sched._parse_sweep_output("[]")).toEqual([]);
+    expect(sched._parse_sweep_output("[]")).toEqual({
+      ok: true,
+      items: [],
+    });
     const fenced = '```json\n[{"pattern_key":"k"}]\n```';
-    expect(sched._parse_sweep_output(fenced)).toEqual([{ pattern_key: "k" }]);
+    expect(sched._parse_sweep_output(fenced)).toEqual({
+      ok: true,
+      items: [{ pattern_key: "k" }],
+    });
     const embedded = 'prose [{"pattern_key":"k2"}] tail';
-    expect(sched._parse_sweep_output(embedded)).toEqual([
-      { pattern_key: "k2" },
-    ]);
-    // non-array / garbage → empty list, never raises
-    expect(sched._parse_sweep_output('{"a":1}')).toEqual([]);
-    expect(sched._parse_sweep_output("not json")).toEqual([]);
-    expect(sched._parse_sweep_output("")).toEqual([]);
+    expect(sched._parse_sweep_output(embedded)).toEqual({
+      ok: true,
+      items: [{ pattern_key: "k2" }],
+    });
+    // Non-array / garbage are distinguishable from a valid empty array.
+    expect(sched._parse_sweep_output('{"a":1}')).toEqual({
+      ok: false,
+      items: [],
+    });
+    expect(sched._parse_sweep_output("not json")).toEqual({
+      ok: false,
+      items: [],
+    });
+    expect(sched._parse_sweep_output("")).toEqual({
+      ok: false,
+      items: [],
+    });
   });
 
   test("test_run_skill_sweep_no_runs_short_circuits", async () => {

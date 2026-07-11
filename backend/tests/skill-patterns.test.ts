@@ -114,10 +114,9 @@ describe("skill patterns", () => {
       (sched._parse_sweep_output(arr).items[0] as any)["pattern_key"],
     ).toBe("x");
     expect(
-      (
-        sched._parse_sweep_output("```json\n" + arr + "\n```")
-          .items[0] as any
-      )["pattern_key"],
+      (sched._parse_sweep_output("```json\n" + arr + "\n```").items[0] as any)[
+        "pattern_key"
+      ],
     ).toBe("x");
     expect(
       (
