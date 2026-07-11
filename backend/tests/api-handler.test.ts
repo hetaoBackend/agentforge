@@ -657,6 +657,61 @@ describe("api handler", () => {
     expect(accepted.status).toBe(200);
     expect(await accepted.json()).toEqual({ status: "deleted" });
     expect(db.get_task(taskId)).toBeNull();
+
+    const repeated = await handleApiRequest(
+      ctx,
+      new Request(`http://127.0.0.1:9712/api/tasks/${taskId}`, {
+        method: "DELETE",
+        headers: {
+          Origin: "http://localhost:5173",
+          "X-CSRF-Token": csrf["csrf_token"],
+        },
+      }),
+    );
+    expect(repeated.status).toBe(200);
+    expect(await repeated.json()).toEqual({ status: "deleted" });
+  });
+
+  test("running task cannot be deleted or retried", async () => {
+    const taskId = db.add_task(
+      makeTask({ title: "Running", prompt: "busy", working_dir: "." }),
+    );
+    db.update_task(taskId, { status: "running" });
+    scheduler._active_tasks.set(taskId, { is_alive: () => true });
+
+    const deleted = await handleApiRequest(
+      ctx,
+      new Request(`http://127.0.0.1:9712/api/tasks/${taskId}`, {
+        method: "DELETE",
+      }),
+    );
+    expect(deleted.status).toBe(409);
+    expect(await deleted.json()).toEqual({
+      error: "cannot delete task while execution is active",
+    });
+    expect(db.get_task(taskId)!["status"]).toBe("running");
+
+    const retried = await handleApiRequest(
+      ctx,
+      new Request(`http://127.0.0.1:9712/api/tasks/${taskId}/retry`, {
+        method: "POST",
+      }),
+    );
+    expect(retried.status).toBe(409);
+    expect(await retried.json()).toEqual({
+      error: "cannot retry task while execution is active",
+    });
+    expect(db.get_task(taskId)!["status"]).toBe("running");
+
+    db.update_task(taskId, { status: "cancelled" });
+    const deleteWhileStopping = await handleApiRequest(
+      ctx,
+      new Request(`http://127.0.0.1:9712/api/tasks/${taskId}`, {
+        method: "DELETE",
+      }),
+    );
+    expect(deleteWhileStopping.status).toBe(409);
+    expect(db.get_task(taskId)).not.toBeNull();
   });
 
   test("POST /api/channels/settings stops existing disabled channels", async () => {
