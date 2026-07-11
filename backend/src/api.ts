@@ -1005,16 +1005,53 @@ function taskFromBrief(ctx: ApiContext, brief: Row): Task {
   });
 }
 
-function taskOutputPayload(ctx: ApiContext, taskId: number): Row {
+function taskOutputPayload(
+  ctx: ApiContext,
+  taskId: number,
+  requestedOffset: number | null = null,
+  offsetUnit: "characters" | "bytes" = "characters",
+): Row {
   const isRunning = ctx.scheduler._live_output.has(taskId);
-  if (isRunning) {
+  const output = isRunning
+    ? (ctx.scheduler._live_output.get(taskId) ?? "")
+    : (ctx.db.get_task_runs(taskId, 1)[0]?.["raw_output"] ?? "");
+
+  // Preserve the response shape used by clients that predate incremental
+  // output polling.
+  if (requestedOffset === null) {
+    return { output, is_running: isRunning };
+  }
+
+  if (offsetUnit === "bytes") {
+    const encoded = new TextEncoder().encode(output);
+    let reset = requestedOffset > encoded.byteLength;
+    let chunk = output;
+    if (!reset) {
+      try {
+        chunk = new TextDecoder("utf-8", { fatal: true }).decode(
+          encoded.slice(requestedOffset),
+        );
+      } catch {
+        // An arbitrary byte offset can split a UTF-8 code point. Send a clean
+        // full snapshot so the client never appends replacement characters.
+        reset = true;
+      }
+    }
     return {
-      output: ctx.scheduler._live_output.get(taskId) ?? "",
-      is_running: true,
+      output: reset ? output : chunk,
+      is_running: isRunning,
+      next_offset: encoded.byteLength,
+      reset,
     };
   }
-  const runs = ctx.db.get_task_runs(taskId, 1);
-  return { output: runs[0]?.["raw_output"] ?? "", is_running: false };
+
+  const reset = requestedOffset > output.length;
+  return {
+    output: reset ? output : output.slice(requestedOffset),
+    is_running: isRunning,
+    next_offset: output.length,
+    reset,
+  };
 }
 
 function taskMessages(ctx: ApiContext, taskId: number): Row[] {
@@ -1438,9 +1475,21 @@ async function handleGet(
   }
   if (path.startsWith("/api/tasks/") && path.endsWith("/output")) {
     const tid = idAt(path);
+    const offsetParam = url.searchParams.get("offset");
+    const requestedOffset =
+      offsetParam === null
+        ? null
+        : Math.max(0, Number.parseInt(offsetParam, 10) || 0);
+    const requestedUnit =
+      url.searchParams.get("unit") ?? url.searchParams.get("offset_unit");
+    const offsetUnit = requestedUnit === "bytes" ? "bytes" : "characters";
     return tid === null
       ? jsonResponse({ error: "not found" }, 404, origin)
-      : jsonResponse(taskOutputPayload(ctx, tid), 200, origin);
+      : jsonResponse(
+          taskOutputPayload(ctx, tid, requestedOffset, offsetUnit),
+          200,
+          origin,
+        );
   }
   if (path.startsWith("/api/tasks/") && path.endsWith("/events")) {
     const tid = idAt(path);

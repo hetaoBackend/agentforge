@@ -49,6 +49,7 @@ import {
   taskNeedsResponse,
   type TaskResponseRefreshResult,
 } from "./operatorUi.ts";
+import { applyIncrementalOutput, createIncrementalOutputState } from "./outputStreaming.ts";
 import {
   DetailRequestCoordinator,
   loadLatestTaskDetail,
@@ -3053,26 +3054,38 @@ function DetailPanel({ task, onClose, onRespond, onResume }: any) {
   const eventsRef = useRef<any>(null);
 
   useEffect(() => {
+    setLiveOutput("");
     if (task.status !== "running") {
-      setLiveOutput("");
       return;
     }
     let cancelled = false;
-    let lastOutputLength = 0;
+    const initialOutput = createIncrementalOutputState();
+    let accumulatedOutput = initialOutput.output;
+    let nextOffset = initialOutput.nextOffset;
+    let inFlight = false;
     const poll = async () => {
+      if (inFlight) return;
+      inFlight = true;
+      const requestedOffset = nextOffset;
       try {
-        const res = await fetch(`${API}/tasks/${task.id}/output`);
+        const res = await fetch(
+          `${API}/tasks/${task.id}/output?offset=${requestedOffset}&unit=characters`,
+        );
         if (res.ok && !cancelled) {
           const data = await res.json();
-          const currentOutput = data.output || "";
-          // Incremental update: append only new output.
-          if (currentOutput.length > lastOutputLength) {
-            const newContent = currentOutput.slice(lastOutputLength);
-            setLiveOutput((prev) => prev + newContent);
-            lastOutputLength = currentOutput.length;
-          }
+          const update = applyIncrementalOutput(
+            accumulatedOutput,
+            requestedOffset,
+            data,
+          );
+          accumulatedOutput = update.output;
+          nextOffset = update.nextOffset;
+          setLiveOutput(accumulatedOutput);
         }
-      } catch {}
+      } catch {
+      } finally {
+        inFlight = false;
+      }
     };
     poll();
     const interval = setInterval(poll, 1000);
