@@ -300,6 +300,58 @@ describe("execute task", () => {
     expect(types.has("text")).toBe(true); // the malformed/non-JSON line
   });
 
+  test("test_cancel_while_process_starts_preserves_cancelled_and_finishes_run", async () => {
+    const tid = db.add_task(
+      makeTask({
+        title: "cancel race",
+        prompt: "stop",
+        working_dir: ".",
+        agent: "claude",
+      }),
+    );
+    const downstream = db.add_task(
+      makeTask({ title: "downstream", prompt: "wait", working_dir: "." }),
+    );
+    db.add_dependency(downstream, tid);
+    db.update_task(tid, { status: "running" });
+    db.update_task(downstream, { status: "blocked" });
+    scheduler._active_tasks.set(tid, { is_alive: () => true });
+
+    const killed: number[] = [];
+    scheduler._os = {
+      getpgid: (pid: number) => pid,
+      killpg: (pgid: number, sig: number | NodeJS.Signals) => {
+        if (sig === "SIGKILL") {
+          killed.push(pgid);
+          return;
+        }
+        throw new ProcessLookupError();
+      },
+      kill: () => {
+        throw new ProcessLookupError();
+      },
+    };
+
+    let resolvePopen!: (proc: PopenLike) => void;
+    scheduler._popen = () =>
+      new Promise<PopenLike>((resolve) => {
+        resolvePopen = resolve;
+      });
+
+    const execution = scheduler._execute_task(db.get_task(tid)!);
+    scheduler.cancel_task(tid);
+    resolvePopen(new FakePopen(_claude_lines("must not complete")));
+    await execution;
+
+    expect(killed).toHaveLength(1);
+    expect(db.get_task(tid)!["status"]).toBe("cancelled");
+    expect(db.get_task(downstream)!["status"]).toBe("blocked");
+    const runs = db.get_task_runs(tid);
+    expect(runs).toHaveLength(1);
+    expect(runs[0]!["status"]).toBe("cancelled");
+    expect(runs[0]!["finished_at"]).not.toBeNull();
+  });
+
   // ── _execute_task: codex success path ────────────────────────────────────
   test("test_execute_task_codex_success_persists_completed_and_events", async () => {
     const tid = db.add_task(

@@ -1836,7 +1836,17 @@ async function handlePost(
   if (path.startsWith("/api/tasks/") && path.endsWith("/retry")) {
     const tid = idAt(path);
     if (tid === null) return jsonResponse({ error: "not found" }, 404, origin);
-    ctx.scheduler.retry_task(tid);
+    if (!ctx.db.get_task(tid))
+      return jsonResponse({ error: "not found" }, 404, origin);
+    try {
+      ctx.scheduler.retry_task(tid);
+    } catch (e) {
+      return jsonResponse(
+        { error: e instanceof Error ? e.message : String(e) },
+        409,
+        origin,
+      );
+    }
     return jsonResponse({ status: "retrying" }, 200, origin);
   }
   if (path.startsWith("/api/tasks/") && path.endsWith("/respond")) {
@@ -2197,7 +2207,17 @@ async function handleDelete(
   }
   if (path.startsWith("/api/tasks/")) {
     const tid = idAt(path);
-    if (tid !== null) ctx.db.delete_task(tid);
+    const task = tid === null ? null : ctx.db.get_task(tid);
+    if (!task || tid === null)
+      return jsonResponse({ error: "not found" }, 404, origin);
+    if (task["status"] === "running" || ctx.scheduler.is_task_active(tid)) {
+      return jsonResponse(
+        { error: "cannot delete task while execution is active" },
+        409,
+        origin,
+      );
+    }
+    ctx.db.delete_task(tid);
     return jsonResponse({ status: "deleted" }, 200, origin);
   }
   return jsonResponse({ error: "not found" }, 404, origin);

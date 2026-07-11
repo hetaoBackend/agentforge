@@ -245,6 +245,7 @@ export class TaskScheduler extends BusAwareSchedulerMixin {
   _live_output: Map<number, string> = new Map(); // task_id -> accumulated stdout
   _live_heartbeat_output: Map<number, string> = new Map(); // tick_id -> accumulated stdout/stderr
   _active_pgids: Map<number, number> = new Map(); // task_id -> process group id
+  _cancel_requested: Set<number> = new Set();
   _codex_item_text: Map<string, string> = new Map(); // key = JSON.stringify([run_id, item_id])
   _claude_message_text: Map<string, string> = new Map(); // key = JSON.stringify([run_id, message_id])
   // Skill Library sweep state (manual + scheduled share this guard)
@@ -2619,6 +2620,15 @@ export class TaskScheduler extends BusAwareSchedulerMixin {
       }
       const pgid = this._os.getpgid(proc.pid);
       this._active_pgids.set(tid, pgid);
+      // Cancellation can arrive while _popen is still starting. Once the process
+      // group exists, honor that request before consuming any more output.
+      if (this._cancel_requested.has(tid)) {
+        try {
+          this._os.killpg(pgid, "SIGKILL");
+        } catch (e) {
+          if (!(e instanceof OSError)) throw e;
+        }
+      }
 
       // Read stderr concurrently so it never blocks stdout reading
       const stderr_chunks: string[] = [];
@@ -2826,7 +2836,27 @@ export class TaskScheduler extends BusAwareSchedulerMixin {
     const raw_output_stored = raw_stdout ? raw_stdout.slice(0, 500000) : null;
 
     const new_count = (task["run_count"] || 0) + 1;
-    if (success) {
+    const cancelled =
+      this._cancel_requested.has(tid) ||
+      this.db.get_task(tid)?.["status"] === "cancelled";
+    if (cancelled) {
+      const updates: Row = {
+        last_run_at: nowIso(),
+        run_count: new_count,
+      };
+      if (extracted_session_id) {
+        updates["session_id"] = extracted_session_id;
+      }
+      this.db.finish_run_and_update_task(
+        run_id,
+        "cancelled",
+        tid,
+        updates,
+        null,
+        "Task cancelled",
+        raw_output_stored,
+      );
+    } else if (success) {
       const updates: Row = {
         result: output.slice(0, 50000), // truncate for storage
         last_run_at: nowIso(),
@@ -2903,9 +2933,12 @@ export class TaskScheduler extends BusAwareSchedulerMixin {
 
     this._notify(tid);
     this._active_tasks.delete(tid);
+    this._cancel_requested.delete(tid);
 
     // DAG: trigger downstream cascade after task finishes
-    if (success) {
+    if (cancelled) {
+      return;
+    } else if (success) {
       this._on_task_completed(tid);
     } else {
       this._on_task_failed(tid);
@@ -3125,7 +3158,14 @@ export class TaskScheduler extends BusAwareSchedulerMixin {
 
   // ─────────────────────────────────────────────────────────────
 
+  is_task_active(task_id: number): boolean {
+    return this._active_tasks.get(task_id)?.is_alive() === true;
+  }
+
   cancel_task(task_id: number): void {
+    if (this.is_task_active(task_id)) {
+      this._cancel_requested.add(task_id);
+    }
     const pgid = this._active_pgids.get(task_id);
     if (pgid) {
       try {
@@ -3140,6 +3180,13 @@ export class TaskScheduler extends BusAwareSchedulerMixin {
   }
 
   retry_task(task_id: number): void {
+    const task = this.db.get_task(task_id);
+    if (!task) {
+      throw new Error("task not found");
+    }
+    if (task["status"] === "running" || this.is_task_active(task_id)) {
+      throw new Error("cannot retry task while execution is active");
+    }
     this.db.update_task(task_id, { status: "pending", error: null });
     this._notify(task_id);
   }
