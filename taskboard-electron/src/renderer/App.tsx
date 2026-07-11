@@ -35,6 +35,7 @@ import {
   isWeixinQrImageSource,
   mergeChannelsStatus,
 } from "./channelsSettings.ts";
+import { createRequestGenerationGuard, parseApiResponse } from "./apiReliability.ts";
 import { buildExecutionSteps } from "./traceSteps.ts";
 
 const API = "http://127.0.0.1:9712/api";
@@ -835,13 +836,17 @@ async function fetchHeartbeats() {
   return res.json();
 }
 
+async function apiMutation<T = any>(path: string, init: RequestInit): Promise<T> {
+  const response = await fetch(`${API}${path}`, init);
+  return parseApiResponse<T>(response);
+}
+
 async function createTask(data) {
-  const res = await fetch(`${API}/tasks`, {
+  return apiMutation("/tasks", {
     method: "POST",
     headers: await csrfHeaders(),
     body: JSON.stringify(data),
   });
-  return res.json();
 }
 
 async function fetchSkillPatterns() {
@@ -851,47 +856,35 @@ async function fetchSkillPatterns() {
 }
 
 async function triggerSkillSweep(agent?: string) {
-  const res = await fetch(`${API}/skills/sweep`, {
+  return apiMutation("/skills/sweep", {
     method: "POST",
     headers: await csrfHeaders(),
     body: JSON.stringify(agent ? { agent } : {}),
   });
-  const payload = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(payload.error || `HTTP ${res.status}`);
-  return payload;
 }
 
 async function triggerSkillDraft(id, agent?: string) {
-  const res = await fetch(`${API}/skill-patterns/${id}/draft`, {
+  return apiMutation(`/skill-patterns/${id}/draft`, {
     method: "POST",
     headers: await csrfHeaders(),
     body: JSON.stringify(agent ? { agent } : {}),
   });
-  const payload = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(payload.error || `HTTP ${res.status}`);
-  return payload;
 }
 
 async function approveSkill(id, data) {
-  const res = await fetch(`${API}/skill-patterns/${id}/approve`, {
+  return apiMutation(`/skill-patterns/${id}/approve`, {
     method: "POST",
     headers: await csrfHeaders(),
     body: JSON.stringify(data),
   });
-  const payload = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(payload.error || `HTTP ${res.status}`);
-  return payload;
 }
 
 async function dismissSkillPattern(id) {
-  const res = await fetch(`${API}/skill-patterns/${id}/dismiss`, {
+  return apiMutation(`/skill-patterns/${id}/dismiss`, {
     method: "POST",
     headers: await csrfHeaders(),
     body: "{}",
   });
-  const payload = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(payload.error || `HTTP ${res.status}`);
-  return payload;
 }
 
 async function fetchSkills() {
@@ -901,84 +894,62 @@ async function fetchSkills() {
 }
 
 async function setSkillEnabledApi(id, enabled) {
-  const res = await fetch(`${API}/skills/${id}`, {
+  return apiMutation(`/skills/${id}`, {
     method: "PUT",
     headers: await csrfHeaders(),
     body: JSON.stringify({ enabled }),
   });
-  const payload = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(payload.error || `HTTP ${res.status}`);
-  return payload;
 }
 
 async function deleteSkillApi(id) {
-  const res = await fetch(`${API}/skills/${id}`, {
+  return apiMutation(`/skills/${id}`, {
     method: "DELETE",
     headers: await csrfHeaders(),
   });
-  const payload = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(payload.error || `HTTP ${res.status}`);
-  return payload;
 }
 
 async function createHeartbeat(data) {
-  const res = await fetch(`${API}/heartbeats`, {
+  return apiMutation("/heartbeats", {
     method: "POST",
     headers: await csrfHeaders(),
     body: JSON.stringify(data),
   });
-  const payload = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(payload.error || `HTTP ${res.status}`);
-  return payload;
 }
 
 async function updateHeartbeat(id, data) {
-  const res = await fetch(`${API}/heartbeats/${id}`, {
+  return apiMutation(`/heartbeats/${id}`, {
     method: "PUT",
     headers: await csrfHeaders(),
     body: JSON.stringify(data),
   });
-  const payload = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(payload.error || `HTTP ${res.status}`);
-  return payload;
 }
 
 async function deleteHeartbeat(id) {
-  const res = await fetch(`${API}/heartbeats/${id}`, {
+  return apiMutation(`/heartbeats/${id}`, {
     method: "DELETE",
     headers: await csrfHeaders(),
   });
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
 }
 
 async function runHeartbeatNow(id) {
-  const res = await fetch(`${API}/heartbeats/${id}/run-now`, {
+  return apiMutation(`/heartbeats/${id}/run-now`, {
     method: "POST",
     headers: await csrfHeaders(),
   });
-  const payload = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(payload.error || `HTTP ${res.status}`);
-  return payload;
 }
 
 async function pauseHeartbeat(id) {
-  const res = await fetch(`${API}/heartbeats/${id}/pause`, {
+  return apiMutation(`/heartbeats/${id}/pause`, {
     method: "POST",
     headers: await csrfHeaders(),
   });
-  const payload = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(payload.error || `HTTP ${res.status}`);
-  return payload;
 }
 
 async function resumeHeartbeatApi(id) {
-  const res = await fetch(`${API}/heartbeats/${id}/resume`, {
+  return apiMutation(`/heartbeats/${id}/resume`, {
     method: "POST",
     headers: await csrfHeaders(),
   });
-  const payload = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(payload.error || `HTTP ${res.status}`);
-  return payload;
 }
 
 async function fetchHeartbeatTicks(id) {
@@ -995,32 +966,36 @@ async function fetchHeartbeatTickOutput(heartbeatId, tickId) {
 }
 
 async function cancelTask(id) {
-  await fetch(`${API}/tasks/${id}/cancel`, { method: "POST", headers: await csrfHeaders() });
+  return apiMutation(`/tasks/${id}/cancel`, {
+    method: "POST",
+    headers: await csrfHeaders(),
+  });
 }
 
 async function retryTask(id) {
-  await fetch(`${API}/tasks/${id}/retry`, { method: "POST", headers: await csrfHeaders() });
+  return apiMutation(`/tasks/${id}/retry`, {
+    method: "POST",
+    headers: await csrfHeaders(),
+  });
 }
 
 async function deleteTask(id) {
-  await fetch(`${API}/tasks/${id}`, { method: "DELETE", headers: await csrfHeaders() });
+  return apiMutation(`/tasks/${id}`, {
+    method: "DELETE",
+    headers: await csrfHeaders(),
+  });
 }
 
 async function updateTask(id, data) {
-  const res = await fetch(`${API}/tasks/${id}`, {
+  return apiMutation(`/tasks/${id}`, {
     method: "PUT",
     headers: await csrfHeaders(),
     body: JSON.stringify(data),
   });
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}));
-    throw new Error(err.error || `HTTP ${res.status}`);
-  }
-  return res.json();
 }
 
 async function respondToTask(id, answer) {
-  await fetch(`${API}/tasks/${id}/respond`, {
+  return apiMutation(`/tasks/${id}/respond`, {
     method: "POST",
     headers: await csrfHeaders(),
     body: JSON.stringify({ answer }),
@@ -1028,12 +1003,11 @@ async function respondToTask(id, answer) {
 }
 
 async function resumeTask(id, message) {
-  const res = await fetch(`${API}/tasks/${id}/resume`, {
+  return apiMutation(`/tasks/${id}/resume`, {
     method: "POST",
     headers: await csrfHeaders(),
     body: JSON.stringify({ message }),
   });
-  return res.json();
 }
 
 async function fetchTaskMessages(id) {
@@ -1068,7 +1042,7 @@ async function fetchSettings() {
 }
 
 async function updateSettings(data) {
-  await fetch(`${API}/settings`, {
+  return apiMutation("/settings", {
     method: "PUT",
     headers: await csrfHeaders(),
     body: JSON.stringify(data),
@@ -1085,7 +1059,7 @@ async function fetchFeishuSettings() {
 }
 
 async function updateFeishuSettings(data) {
-  await fetch(`${API}/feishu/settings`, {
+  return apiMutation("/feishu/settings", {
     method: "POST",
     headers: await csrfHeaders(),
     body: JSON.stringify(data),
@@ -1102,7 +1076,7 @@ async function fetchChannelsStatus() {
 }
 
 async function updateChannelsSettings(data) {
-  await fetch(`${API}/channels/settings`, {
+  return apiMutation("/channels/settings", {
     method: "POST",
     headers: await csrfHeaders(),
     body: JSON.stringify(data),
@@ -1110,15 +1084,11 @@ async function updateChannelsSettings(data) {
 }
 
 async function runWeixinAction(action) {
-  const res = await fetch(`${API}/channels/weixin/action`, {
+  return apiMutation("/channels/weixin/action", {
     method: "POST",
     headers: await csrfHeaders(),
     body: JSON.stringify({ action }),
   });
-  if (!res.ok) {
-    const data = await res.json().catch(() => ({}));
-    throw new Error(data.error || `HTTP ${res.status}`);
-  }
 }
 
 // ─── Components ───
@@ -3133,14 +3103,18 @@ function DetailPanel({ task, onClose, onResume }: any) {
   const handleResume = async () => {
     if (!resumeText.trim()) return;
     setResumeError("");
-    const result = await resumeTask(task.id, resumeText.trim());
-    if (result.error) {
-      setResumeError(result.error);
-    } else {
+    try {
+      const result = await resumeTask(task.id, resumeText.trim());
+      if (result?.error) {
+        setResumeError(result.error);
+        return;
+      }
       setResumeText("");
       setResumeSent(true);
       setTimeout(() => setResumeSent(false), 3000);
       onResume();
+    } catch (error) {
+      setResumeError(error instanceof Error ? error.message : String(error));
     }
   };
 
@@ -3748,6 +3722,8 @@ function SettingsModal({
   const [skillEnabled, setSkillEnabled] = useState(false);
   const [skillSweepAgent, setSkillSweepAgent] = useState(DEFAULT_AGENT);
   const [skillSweepCron, setSkillSweepCron] = useState("0 3 * * *");
+  const [generalSaving, setGeneralSaving] = useState(false);
+  const [generalMsg, setGeneralMsg] = useState<any>(null);
   const [feishu, setFeishu] = useState({
     feishu_app_id: "",
     feishu_app_secret: "",
@@ -3855,15 +3831,23 @@ function SettingsModal({
   };
 
   const handleSaveGeneral = async () => {
-    await updateSettings({
-      timeout: parseInt(timeout) || DEFAULT_TIMEOUT_SECONDS,
-      default_agent: defaultAgent,
-      skill_library_enabled: skillEnabled ? "1" : "0",
-      skill_sweep_agent: skillSweepAgent,
-      skill_sweep_cron: skillSweepCron,
-    });
-    onSave(parseInt(timeout) || DEFAULT_TIMEOUT_SECONDS, defaultAgent);
-    onClose();
+    setGeneralSaving(true);
+    setGeneralMsg(null);
+    try {
+      await updateSettings({
+        timeout: parseInt(timeout) || DEFAULT_TIMEOUT_SECONDS,
+        default_agent: defaultAgent,
+        skill_library_enabled: skillEnabled ? "1" : "0",
+        skill_sweep_agent: skillSweepAgent,
+        skill_sweep_cron: skillSweepCron,
+      });
+      onSave(parseInt(timeout) || DEFAULT_TIMEOUT_SECONDS, defaultAgent);
+      onClose();
+    } catch (e) {
+      setGeneralMsg({ ok: false, text: String(e) });
+    } finally {
+      setGeneralSaving(false);
+    }
   };
 
   const handleSaveFeishu = async () => {
@@ -4039,12 +4023,28 @@ function SettingsModal({
               </>
             )}
 
+            {generalMsg && (
+              <div
+                style={{
+                  padding: "8px 12px",
+                  borderRadius: 8,
+                  marginBottom: 16,
+                  fontSize: 12,
+                  background: theme.redBg,
+                  color: theme.red,
+                  border: `1px solid ${theme.red}`,
+                }}
+              >
+                {generalMsg.text}
+              </div>
+            )}
+
             <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
               <button onClick={onClose} style={secondaryButton()}>
                 Cancel
               </button>
-              <button onClick={handleSaveGeneral} style={primaryButton()}>
-                Save
+              <button onClick={handleSaveGeneral} disabled={generalSaving} style={primaryButton()}>
+                {generalSaving ? "Saving..." : "Save"}
               </button>
             </div>
           </>
@@ -5821,6 +5821,7 @@ export default function App() {
   const [editingTask, setEditingTask] = useState<any>(null);
   const [forkingTask, setForkingTask] = useState<any>(null);
   const [editingHeartbeat, setEditingHeartbeat] = useState<any>(null);
+  const pollGuardRef = useRef(createRequestGenerationGuard());
 
   // ─── Color mode ───
   const [colorMode, setColorMode] = useState(() => localStorage.getItem("colorMode") || "system");
@@ -5869,6 +5870,7 @@ export default function App() {
   }, []);
 
   const poll = useCallback(async () => {
+    const generation = pollGuardRef.current.begin();
     try {
       const [taskData, heartbeatData, skillRes, skillsRes] = await Promise.all([
         fetchTasks(),
@@ -5876,6 +5878,7 @@ export default function App() {
         fetchSkillPatterns(),
         fetchSkills(),
       ]);
+      if (!pollGuardRef.current.isCurrent(generation)) return;
       setTasks(taskData);
       setHeartbeats(heartbeatData);
       setSkillData(skillRes);
@@ -5883,6 +5886,7 @@ export default function App() {
       setConnected(true);
       setApiError(null);
     } catch (err) {
+      if (!pollGuardRef.current.isCurrent(generation)) return;
       setConnected(false);
       setApiError(`Failed to fetch tasks: ${err.message}`);
     }
@@ -5892,7 +5896,10 @@ export default function App() {
     if (!backendReady) return;
     poll();
     const interval = setInterval(poll, 3000);
-    return () => clearInterval(interval);
+    return () => {
+      clearInterval(interval);
+      pollGuardRef.current.invalidate();
+    };
   }, [poll, backendReady]);
 
   useEffect(() => {
