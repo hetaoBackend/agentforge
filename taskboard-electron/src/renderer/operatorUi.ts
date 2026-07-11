@@ -15,11 +15,7 @@ type HeartbeatTickPollingOptions<T> = {
 };
 
 export function taskNeedsResponse(question: unknown, answer: unknown): boolean {
-  return (
-    typeof question === "string" &&
-    question.trim().length > 0 &&
-    !String(answer ?? "").trim()
-  );
+  return typeof question === "string" && question.trim().length > 0 && !String(answer ?? "").trim();
 }
 
 export function prepareTaskResponse(

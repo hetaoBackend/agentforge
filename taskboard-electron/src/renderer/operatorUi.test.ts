@@ -44,13 +44,20 @@ test("heartbeat tick polling schedules only after the active request settles", a
     resolveLoad = resolve;
   });
   const applied: number[][] = [];
+  let confirmApplied: () => void = () => {};
+  const application = new Promise<void>((resolve) => {
+    confirmApplied = resolve;
+  });
   const scheduled: Array<() => void> = [];
   const cancelled: unknown[] = [];
 
   const stop = startHeartbeatTickPolling({
     heartbeatId: 4,
-    load: async () => loaded,
-    onTicks: (ticks) => applied.push(ticks),
+    load: () => loaded,
+    onTicks: (ticks) => {
+      applied.push(ticks);
+      confirmApplied();
+    },
     onError: () => {},
     schedule: (callback) => {
       scheduled.push(callback);
@@ -61,7 +68,7 @@ test("heartbeat tick polling schedules only after the active request settles", a
 
   expect(scheduled).toHaveLength(0);
   resolveLoad([8, 7]);
-  await Promise.resolve();
+  await application;
   await Promise.resolve();
   expect(applied).toEqual([[8, 7]]);
   expect(scheduled).toHaveLength(1);
@@ -80,7 +87,7 @@ test("stopping heartbeat tick polling ignores an in-flight stale response", asyn
 
   const stop = startHeartbeatTickPolling({
     heartbeatId: 4,
-    load: async () => loaded,
+    load: () => loaded,
     onTicks: (ticks) => applied.push(ticks),
     onError: () => {},
     schedule: () => {

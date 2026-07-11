@@ -2223,9 +2223,7 @@ function HeartbeatDetailPanel({ heartbeat, ticks, onClose }) {
   useEffect(() => {
     const heartbeatChanged = previousHeartbeatIdRef.current !== heartbeat.id;
     previousHeartbeatIdRef.current = heartbeat.id;
-    setSelectedTickId((current) =>
-      selectTickAfterRefresh(current, ticks, heartbeatChanged),
-    );
+    setSelectedTickId((current) => selectTickAfterRefresh(current, ticks, heartbeatChanged));
   }, [heartbeat.id, ticks]);
 
   useEffect(() => {
