@@ -298,6 +298,82 @@ describe("api handler", () => {
     expect(brief["created_task_id"]).toBe(Number(confirmed["task_id"]));
   });
 
+  test("concurrent brief confirms create one task and return a conflict", async () => {
+    const created = await json(
+      new Request("http://127.0.0.1:9712/api/task-briefs", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title: "Fix auth",
+          goal: "Fix login redirect",
+          working_dir: ".",
+          source_channel: "telegram",
+          source_ref: "chat-1:concurrent",
+        }),
+      }),
+    );
+    const request = () =>
+      handleApiRequest(
+        ctx,
+        new Request(
+          `http://127.0.0.1:9712/api/task-briefs/${created["id"]}/confirm`,
+          { method: "POST" },
+        ),
+      );
+
+    const responses = await Promise.all([request(), request()]);
+    expect(responses.map((response) => response.status).sort()).toEqual([
+      201, 409,
+    ]);
+    const conflict = responses.find((response) => response.status === 409)!;
+    expect(((await conflict.json()) as Record<string, any>)["error"]).toContain(
+      "Cannot confirm draft task",
+    );
+    expect(db.get_all_tasks()).toHaveLength(1);
+  });
+
+  test("failed brief confirmation leaves the draft retryable", async () => {
+    const created = await json(
+      new Request("http://127.0.0.1:9712/api/task-briefs", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title: "Retry confirmation",
+          goal: "Create exactly one task",
+          working_dir: ".",
+          source_channel: "telegram",
+          source_ref: "chat-1:retry",
+        }),
+      }),
+    );
+    const originalSubmitTask = scheduler.submit_task.bind(scheduler);
+    scheduler.submit_task = (() => {
+      throw new Error("injected confirmation failure");
+    }) as typeof scheduler.submit_task;
+
+    const failed = await handleApiRequest(
+      ctx,
+      new Request(
+        `http://127.0.0.1:9712/api/task-briefs/${created["id"]}/confirm`,
+        { method: "POST" },
+      ),
+    );
+    expect(failed.status).toBe(500);
+    expect(db.get_task_brief(Number(created["id"]))!["status"]).toBe("draft");
+    expect(db.get_all_tasks()).toEqual([]);
+
+    scheduler.submit_task = originalSubmitTask;
+    const retried = await handleApiRequest(
+      ctx,
+      new Request(
+        `http://127.0.0.1:9712/api/task-briefs/${created["id"]}/confirm`,
+        { method: "POST" },
+      ),
+    );
+    expect(retried.status).toBe(201);
+    expect(db.get_all_tasks()).toHaveLength(1);
+  });
+
   test("IM runbook API starts empty and supports user command CRUD", async () => {
     const initial = await json(
       new Request("http://127.0.0.1:9712/api/im-runbooks"),
@@ -1111,6 +1187,55 @@ describe("api handler", () => {
     expect(((await invalidCron.json()) as Record<string, any>).field).toBe(
       "cron_expr",
     );
+  });
+
+  test("dependency APIs reject self, two-node, and longer cycles", async () => {
+    const createTask = (title: string) =>
+      json(
+        new Request("http://127.0.0.1:9712/api/tasks", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ title, prompt: title }),
+        }),
+      );
+    const [a, b, c, independent] = await Promise.all([
+      createTask("a"),
+      createTask("b"),
+      createTask("c"),
+      createTask("independent"),
+    ]);
+    const addDependency = (taskId: number, dependencyId: number) =>
+      handleApiRequest(
+        ctx,
+        new Request(`http://127.0.0.1:9712/api/tasks/${taskId}/dependencies`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ depends_on_task_id: dependencyId }),
+        }),
+      );
+
+    expect((await addDependency(Number(b.id), Number(a.id))).status).toBe(200);
+    expect((await addDependency(Number(a.id), Number(b.id))).status).toBe(409);
+    expect(db.get_dependencies(Number(a.id))).toEqual([]);
+
+    expect((await addDependency(Number(c.id), Number(b.id))).status).toBe(200);
+    expect(
+      (await addDependency(Number(independent.id), Number(independent.id)))
+        .status,
+    ).toBe(409);
+
+    const batchCycle = await handleApiRequest(
+      ctx,
+      new Request(`http://127.0.0.1:9712/api/tasks/${a.id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          depends_on: [Number(independent.id), Number(c.id)],
+        }),
+      }),
+    );
+    expect(batchCycle.status).toBe(409);
+    expect(db.get_dependencies(Number(a.id))).toEqual([]);
   });
 
   test("task mutation routes edit, respond, resume, cancel, retry, and remove dependencies", async () => {

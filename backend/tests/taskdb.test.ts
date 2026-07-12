@@ -301,6 +301,39 @@ describe("TaskDB", () => {
     expect(db.get_dependencies(down)).toEqual([]);
   });
 
+  test("dependency writes reject self and directed cycles atomically", () => {
+    const a = db.add_task(
+      makeTask({ title: "a", prompt: "p", working_dir: "." }),
+    );
+    const b = db.add_task(
+      makeTask({ title: "b", prompt: "p", working_dir: "." }),
+    );
+    const c = db.add_task(
+      makeTask({ title: "c", prompt: "p", working_dir: "." }),
+    );
+    const independent = db.add_task(
+      makeTask({ title: "independent", prompt: "p", working_dir: "." }),
+    );
+
+    expect(() => db.add_dependency(a, a)).toThrow(/itself/);
+    expect(db.get_dependencies(a)).toEqual([]);
+
+    db.add_dependency(b, a);
+    expect(db.would_create_dependency_cycle(a, [b])).toBe(true);
+    expect(() => db.add_dependency(a, b)).toThrow(/cycle/);
+    expect(db.get_dependencies(a)).toEqual([]);
+
+    db.add_dependency(c, b);
+    expect(db.would_create_dependency_cycle(a, [independent, c])).toBe(true);
+    expect(() =>
+      db.add_dependencies_batch(a, [
+        { task_id: independent, inject_result: false },
+        { task_id: c, inject_result: false },
+      ]),
+    ).toThrow(/cycle/);
+    expect(db.get_dependencies(a)).toEqual([]);
+  });
+
   test("test_get_dag_tasks_filters_by_dag_id", () => {
     db.add_task(
       makeTask({ title: "x", prompt: "p", working_dir: ".", dag_id: "flow-1" }),
