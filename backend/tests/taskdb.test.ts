@@ -49,6 +49,29 @@ describe("TaskDB", () => {
     expect(db.get_setting("k")).toBe("v2");
   });
 
+  test("test_task_count_and_polling_indexes_are_idempotent", () => {
+    db.add_task(makeTask({ title: "one", prompt: "p" }));
+    expect(db.count_tasks()).toBe(1);
+
+    const dbPath = db.db_path;
+    db.conn.close();
+    db = new TaskDB(dbPath);
+
+    const indexNames = (table: string) =>
+      new Set(
+        (
+          db.conn.query(`PRAGMA index_list('${table}')`).all() as Array<{
+            name: string;
+          }>
+        ).map((row) => row.name),
+      );
+    expect(indexNames("tasks")).toContain("idx_tasks_status_next_run");
+    expect(indexNames("task_runs")).toContain("idx_task_runs_task_started");
+    expect(indexNames("task_output_events")).toContain(
+      "idx_task_output_events_task_timestamp",
+    );
+  });
+
   // ── run history ────────────────────────────────────────────────────────────
   test("test_run_lifecycle_and_ordering", () => {
     const tid = db.add_task(
