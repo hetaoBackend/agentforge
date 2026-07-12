@@ -3,6 +3,7 @@ import {
   CheckCircle2,
   GitFork,
   HeartPulse,
+  Home,
   Inbox,
   KanbanSquare,
   MonitorCog,
@@ -6286,14 +6287,18 @@ export default function App() {
       ? filters.tasks
       : activeView === "heartbeats"
         ? filters.heartbeats
-        : filters.skills;
+        : activeView === "skills"
+          ? filters.skills
+          : "";
   const setActiveFilter = (value) => {
     setFilters((prev) =>
       activeView === "tasks"
         ? { ...prev, tasks: value }
         : activeView === "heartbeats"
           ? { ...prev, heartbeats: value }
-          : { ...prev, skills: value },
+          : activeView === "skills"
+            ? { ...prev, skills: value }
+            : prev,
     );
   };
   const searchPlaceholder =
@@ -6301,7 +6306,9 @@ export default function App() {
       ? "Search tasks"
       : activeView === "heartbeats"
         ? "Search heartbeats"
-        : "Search skills";
+        : activeView === "skills"
+          ? "Search skills"
+          : "";
 
   const filtered = filter
     ? tasks.filter(
@@ -6327,6 +6334,17 @@ export default function App() {
     (p) => p.recurrence_count >= 2,
   ).length;
   const activeSummary = {
+    home: {
+      label: "Welcome to AgentForge",
+      tone: theme.accent,
+      background: theme.accentGlow,
+      metrics: [
+        { label: "Tasks", value: tasks.length, tone: theme.blue },
+        { label: "Heartbeats", value: heartbeats.length, tone: theme.cyan },
+        { label: "Skills", value: skills.length, tone: theme.accent },
+        { label: "Running", value: runningCount, tone: theme.green },
+      ],
+    },
     tasks: {
       label: `${runningCount} running / ${queueCount} queued`,
       tone: runningCount > 0 ? theme.blue : theme.green,
@@ -6550,6 +6568,7 @@ export default function App() {
               }}
             >
               {[
+                { key: "home", label: "Home", icon: Home },
                 { key: "tasks", label: "Tasks", icon: KanbanSquare },
                 { key: "heartbeats", label: "Heartbeats", icon: HeartPulse },
                 { key: "skills", label: "Skills", icon: Sparkles },
@@ -6578,39 +6597,41 @@ export default function App() {
               ))}
             </div>
 
-            <div
-              style={{
-                display: "flex",
-                alignItems: "center",
-                gap: 8,
-                padding: "0 9px",
-                height: 32,
-                borderRadius: 7,
-                border: `1px solid ${theme.border}`,
-                background: theme.surface,
-              }}
-            >
-              <Search
-                aria-hidden="true"
-                size={14}
-                strokeWidth={2.4}
-                style={{ color: theme.textDim, flexShrink: 0 }}
-              />
-              <input
-                placeholder={searchPlaceholder}
-                value={filter}
-                onChange={(e) => setActiveFilter(e.target.value)}
+            {activeView !== "home" && (
+              <div
                 style={{
-                  border: "none",
-                  background: "transparent",
-                  color: theme.text,
-                  fontSize: 12,
-                  outline: "none",
-                  width: 152,
-                  fontFamily: APP_FONT_STACK,
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 8,
+                  padding: "0 9px",
+                  height: 32,
+                  borderRadius: 7,
+                  border: `1px solid ${theme.border}`,
+                  background: theme.surface,
                 }}
-              />
-            </div>
+              >
+                <Search
+                  aria-hidden="true"
+                  size={14}
+                  strokeWidth={2.4}
+                  style={{ color: theme.textDim, flexShrink: 0 }}
+                />
+                <input
+                  placeholder={searchPlaceholder}
+                  value={filter}
+                  onChange={(e) => setActiveFilter(e.target.value)}
+                  style={{
+                    border: "none",
+                    background: "transparent",
+                    color: theme.text,
+                    fontSize: 12,
+                    outline: "none",
+                    width: 152,
+                    fontFamily: APP_FONT_STACK,
+                  }}
+                />
+              </div>
+            )}
 
             {(() => {
               const cycle = { system: "light", light: "dark", dark: "system" };
@@ -6655,7 +6676,7 @@ export default function App() {
                 <IconGlyph icon={Radar} size={15} strokeWidth={2.8} />
                 {skillData.sweep?.running ? "Scanning" : "Run Scan"}
               </button>
-            ) : (
+            ) : activeView !== "home" ? (
               <button
                 onClick={() =>
                   activeView === "tasks" ? setShowNew(true) : setShowNewHeartbeat(true)
@@ -6679,7 +6700,7 @@ export default function App() {
                 <IconGlyph icon={Plus} size={15} strokeWidth={2.8} />
                 {activeView === "tasks" ? "New Task" : "New Heartbeat"}
               </button>
-            )}
+            ) : null}
           </div>
         </div>
 
@@ -6695,7 +6716,426 @@ export default function App() {
         </div>
       </div>
 
-      {activeView === "tasks" ? (
+      {activeView === "home" ? (
+        <div
+          style={{
+            padding: "48px 24px",
+            maxWidth: 1200,
+            margin: "0 auto",
+            minHeight: "calc(100vh - 148px)",
+          }}
+        >
+          {/* Hero Section */}
+          <div
+            style={{
+              textAlign: "center",
+              marginBottom: 56,
+              animation: "deckIn 0.4s ease",
+            }}
+          >
+            <div
+              style={{
+                display: "inline-flex",
+                padding: "6px 14px",
+                borderRadius: 24,
+                background: theme.accentGlow,
+                color: theme.accent,
+                fontSize: 12,
+                fontWeight: 650,
+                marginBottom: 24,
+                border: `1px solid ${theme.borderActive}`,
+              }}
+            >
+              <Sparkles size={14} strokeWidth={2.4} style={{ marginRight: 6 }} />
+              Agent Orchestration Platform
+            </div>
+            <h1
+              style={{
+                fontSize: 56,
+                fontWeight: 800,
+                fontFamily: DISPLAY_FONT_STACK,
+                lineHeight: 1.1,
+                marginBottom: 20,
+                background: `linear-gradient(135deg, ${theme.brandStart} 0%, ${theme.brandEnd} 100%)`,
+                WebkitBackgroundClip: "text",
+                WebkitTextFillColor: "transparent",
+                backgroundClip: "text",
+              }}
+            >
+              Stop babysitting terminals
+            </h1>
+            <p
+              style={{
+                fontSize: 18,
+                color: theme.textMuted,
+                lineHeight: 1.6,
+                maxWidth: 620,
+                margin: "0 auto 40px",
+                fontWeight: 450,
+              }}
+            >
+              Queue tasks, watch live runs, schedule recurring checks, route work from chat, and
+              distill patterns into reusable skills — all in one command center.
+            </p>
+            <div
+              style={{
+                display: "flex",
+                gap: 12,
+                justifyContent: "center",
+                flexWrap: "wrap",
+              }}
+            >
+              <button
+                onClick={() => setActiveView("tasks")}
+                style={{
+                  padding: "14px 32px",
+                  borderRadius: 8,
+                  border: "none",
+                  background: theme.accent,
+                  color: "#ffffff",
+                  fontSize: 15,
+                  fontWeight: 680,
+                  cursor: "pointer",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 8,
+                  boxShadow: `0 8px 24px ${theme.accentGlow}`,
+                  transition: "transform 0.15s ease, box-shadow 0.15s ease",
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.transform = "translateY(-1px)";
+                  e.currentTarget.style.boxShadow = `0 12px 32px ${theme.accentGlow}`;
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.transform = "translateY(0)";
+                  e.currentTarget.style.boxShadow = `0 8px 24px ${theme.accentGlow}`;
+                }}
+              >
+                <KanbanSquare size={18} strokeWidth={2.4} />
+                View Task Board
+              </button>
+              <button
+                onClick={() => setShowNew(true)}
+                style={{
+                  padding: "14px 32px",
+                  borderRadius: 8,
+                  border: `1px solid ${theme.border}`,
+                  background: theme.surface,
+                  color: theme.text,
+                  fontSize: 15,
+                  fontWeight: 680,
+                  cursor: "pointer",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 8,
+                  transition: "background 0.15s ease, border-color 0.15s ease",
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.background = theme.surfaceHover;
+                  e.currentTarget.style.borderColor = theme.borderActive;
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.background = theme.surface;
+                  e.currentTarget.style.borderColor = theme.border;
+                }}
+              >
+                <Plus size={18} strokeWidth={2.4} />
+                Create Task
+              </button>
+            </div>
+          </div>
+
+          {/* Feature Grid */}
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))",
+              gap: 20,
+              marginBottom: 48,
+            }}
+          >
+            {[
+              {
+                icon: KanbanSquare,
+                title: "Visual Task Pipeline",
+                description:
+                  "Kanban board with queue, running, and done columns. Track pending, scheduled, blocked, and completed work at a glance.",
+                color: theme.blue,
+                bg: theme.blueBg,
+              },
+              {
+                icon: Play,
+                title: "Flexible Scheduling",
+                description:
+                  "Run tasks immediately, after a delay, at a specific time, or on a cron schedule. Set max-run limits for recurring tasks.",
+                color: theme.cyan,
+                bg: theme.cyanBg,
+              },
+              {
+                icon: MonitorCog,
+                title: "Live Agent Output",
+                description:
+                  "Stream structured output from Claude Code or Codex CLI. See tool calls, results, and errors in real-time.",
+                color: theme.green,
+                bg: theme.greenBg,
+              },
+              {
+                icon: HeartPulse,
+                title: "Background Watchers",
+                description:
+                  "Recurring heartbeats that check conditions and decide whether to trigger tasks, resume work, or send notifications.",
+                color: theme.orange,
+                bg: theme.orangeBg,
+              },
+              {
+                icon: Sparkles,
+                title: "Skill Library",
+                description:
+                  "Detect recurring patterns across runs, distill them into Claude Code skills, and install approved skills automatically.",
+                color: theme.accent,
+                bg: theme.accentGlow,
+              },
+              {
+                icon: GitFork,
+                title: "Multi-Agent Pipelines",
+                description:
+                  "Task dependencies with upstream result injection. Fan-out research, fan-in summaries, and sub-workflow orchestration.",
+                color: theme.yellow,
+                bg: "rgba(216, 184, 78, 0.12)",
+              },
+            ].map((feature, i) => (
+              <div
+                key={i}
+                style={{
+                  background: theme.surface,
+                  border: `1px solid ${theme.border}`,
+                  borderRadius: 12,
+                  padding: 24,
+                  transition: "border-color 0.15s ease, box-shadow 0.15s ease",
+                  animation: `deckIn 0.4s ease ${i * 0.05}s both`,
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.borderColor = theme.borderActive;
+                  e.currentTarget.style.boxShadow = theme.shadowSoft;
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.borderColor = theme.border;
+                  e.currentTarget.style.boxShadow = "none";
+                }}
+              >
+                <div
+                  style={{
+                    width: 44,
+                    height: 44,
+                    borderRadius: 10,
+                    background: feature.bg,
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    marginBottom: 16,
+                  }}
+                >
+                  <IconGlyph
+                    icon={feature.icon}
+                    size={22}
+                    strokeWidth={2.4}
+                    style={{ color: feature.color }}
+                  />
+                </div>
+                <h3
+                  style={{
+                    fontSize: 17,
+                    fontWeight: 700,
+                    fontFamily: DISPLAY_FONT_STACK,
+                    marginBottom: 8,
+                    color: theme.text,
+                  }}
+                >
+                  {feature.title}
+                </h3>
+                <p
+                  style={{
+                    fontSize: 14,
+                    color: theme.textMuted,
+                    lineHeight: 1.5,
+                    margin: 0,
+                  }}
+                >
+                  {feature.description}
+                </p>
+              </div>
+            ))}
+          </div>
+
+          {/* Quick Stats */}
+          {(tasks.length > 0 || heartbeats.length > 0 || skills.length > 0) && (
+            <div
+              style={{
+                background: theme.surface,
+                border: `1px solid ${theme.border}`,
+                borderRadius: 12,
+                padding: 32,
+                textAlign: "center",
+              }}
+            >
+              <h3
+                style={{
+                  fontSize: 20,
+                  fontWeight: 700,
+                  fontFamily: DISPLAY_FONT_STACK,
+                  marginBottom: 24,
+                  color: theme.text,
+                }}
+              >
+                Your Activity
+              </h3>
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))",
+                  gap: 24,
+                }}
+              >
+                <div>
+                  <div
+                    style={{
+                      fontSize: 36,
+                      fontWeight: 800,
+                      fontFamily: DISPLAY_FONT_STACK,
+                      color: theme.blue,
+                      marginBottom: 4,
+                    }}
+                  >
+                    {tasks.length}
+                  </div>
+                  <div style={{ fontSize: 13, color: theme.textMuted, fontWeight: 600 }}>
+                    Total Tasks
+                  </div>
+                </div>
+                <div>
+                  <div
+                    style={{
+                      fontSize: 36,
+                      fontWeight: 800,
+                      fontFamily: DISPLAY_FONT_STACK,
+                      color: theme.green,
+                      marginBottom: 4,
+                    }}
+                  >
+                    {tasks.filter((t) => t.status === "completed").length}
+                  </div>
+                  <div style={{ fontSize: 13, color: theme.textMuted, fontWeight: 600 }}>
+                    Completed
+                  </div>
+                </div>
+                <div>
+                  <div
+                    style={{
+                      fontSize: 36,
+                      fontWeight: 800,
+                      fontFamily: DISPLAY_FONT_STACK,
+                      color: theme.orange,
+                      marginBottom: 4,
+                    }}
+                  >
+                    {heartbeats.length}
+                  </div>
+                  <div style={{ fontSize: 13, color: theme.textMuted, fontWeight: 600 }}>
+                    Heartbeats
+                  </div>
+                </div>
+                <div>
+                  <div
+                    style={{
+                      fontSize: 36,
+                      fontWeight: 800,
+                      fontFamily: DISPLAY_FONT_STACK,
+                      color: theme.accent,
+                      marginBottom: 4,
+                    }}
+                  >
+                    {skills.length}
+                  </div>
+                  <div style={{ fontSize: 13, color: theme.textMuted, fontWeight: 600 }}>
+                    Skills
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Getting Started (if no tasks) */}
+          {tasks.length === 0 && (
+            <div
+              style={{
+                background: theme.surface,
+                border: `1px solid ${theme.border}`,
+                borderRadius: 12,
+                padding: 32,
+                textAlign: "center",
+              }}
+            >
+              <div
+                style={{
+                  width: 56,
+                  height: 56,
+                  borderRadius: "50%",
+                  background: theme.accentGlow,
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  margin: "0 auto 20px",
+                }}
+              >
+                <Radar size={28} strokeWidth={2.4} color={theme.accent} />
+              </div>
+              <h3
+                style={{
+                  fontSize: 20,
+                  fontWeight: 700,
+                  fontFamily: DISPLAY_FONT_STACK,
+                  marginBottom: 12,
+                  color: theme.text,
+                }}
+              >
+                Ready to orchestrate your agents?
+              </h3>
+              <p
+                style={{
+                  fontSize: 15,
+                  color: theme.textMuted,
+                  lineHeight: 1.6,
+                  marginBottom: 24,
+                  maxWidth: 480,
+                  margin: "0 auto 24px",
+                }}
+              >
+                Create your first task to get started. Choose Claude Code or Codex CLI, write a
+                prompt, set a schedule, and let AgentForge handle the rest.
+              </p>
+              <button
+                onClick={() => setShowNew(true)}
+                style={{
+                  padding: "12px 28px",
+                  borderRadius: 8,
+                  border: "none",
+                  background: theme.accent,
+                  color: "#ffffff",
+                  fontSize: 14,
+                  fontWeight: 680,
+                  cursor: "pointer",
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: 8,
+                }}
+              >
+                <Plus size={16} strokeWidth={2.4} />
+                Create Your First Task
+              </button>
+            </div>
+          )}
+        </div>
+      ) : activeView === "tasks" ? (
         <div
           style={{
             padding: "20px",
