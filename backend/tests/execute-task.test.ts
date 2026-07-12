@@ -190,7 +190,7 @@ describe("execute task", () => {
 
   afterEach(() => {
     AgentExecutor.subprocess_run = default_subprocess_run;
-    db.conn.close();
+    db.close();
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 

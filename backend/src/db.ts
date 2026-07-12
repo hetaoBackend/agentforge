@@ -93,16 +93,6 @@ export class TaskDB {
     }
   }
 
-  /** Flush pending output events and close SQLite exactly once. */
-  close(): void {
-    if (this._closed) {
-      return;
-    }
-    this.flush_output_events();
-    this._closed = true;
-    this.conn.close();
-  }
-
   private _init_db(): void {
     this.conn.run(`
       CREATE TABLE IF NOT EXISTS tasks (

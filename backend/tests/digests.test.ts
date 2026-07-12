@@ -21,7 +21,7 @@ describe("im digests", () => {
   });
 
   afterEach(() => {
-    db.conn.close();
+    db.close();
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 

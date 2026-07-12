@@ -90,7 +90,7 @@ describe("server lifecycle", () => {
     const dbPath = path.join(tmpDir, ".agentforge", "tasks.db");
     const seed = new TaskDB(dbPath);
     seed.set_setting("feishu_enabled", "true");
-    seed.conn.close();
+    seed.close();
     const port = await freePort();
 
     running = await runServer(port, dbPath);
