@@ -5804,7 +5804,7 @@ export default function App() {
     sweep: { running: false, last: null },
   });
   const [skills, setSkills] = useState<any[]>([]);
-  const [activeView, setActiveView] = useState("home");
+  const [activeView, setActiveView] = useState("tasks");
   const [showNew, setShowNew] = useState(false);
   const [showNewHeartbeat, setShowNewHeartbeat] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
