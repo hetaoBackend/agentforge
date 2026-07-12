@@ -32,7 +32,7 @@ import {
   type Task,
   type TaskBrief,
 } from "./types.ts";
-import { dateToLocalIso } from "./util.ts";
+import { dateToLocalIso, parseComparableDatetime } from "./util.ts";
 import { FeishuChannel } from "./channels/feishu.ts";
 import { SlackChannel } from "./channels/slack.ts";
 import {
@@ -55,6 +55,21 @@ export interface ApiContext {
 
 const CSRF_TOKEN = crypto.randomBytes(32).toString("hex");
 const MAX_BODY_SIZE = 10 * 1024 * 1024;
+const FEISHU_SECRET_MASK = "********";
+const SUPPORTED_AGENTS = new Set(["claude", "codex"]);
+const EDITABLE_SETTINGS = new Set([
+  "default_agent",
+  "timeout",
+  "skill_library_enabled",
+  "skill_sweep_agent",
+  "skill_sweep_cron",
+  "im_digest_enabled",
+  "im_digest_cron",
+  "im_digest_channels",
+  "im_attention_digest_minutes",
+  "im_skill_suggestions_enabled",
+  "im_skill_suggestion_channels",
+]);
 
 function isAllowedOrigin(origin: string): boolean {
   if (origin === "null") return true;
@@ -105,7 +120,23 @@ async function readJsonBody(
     void req.body?.cancel();
     return jsonResponse({ error: "request body too large" }, 413, origin);
   }
-  const raw = await req.text();
+  const reader = req.body?.getReader();
+  const decoder = new TextDecoder();
+  let raw = "";
+  let totalBytes = 0;
+  if (reader) {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      totalBytes += value.byteLength;
+      if (totalBytes > MAX_BODY_SIZE) {
+        await reader.cancel();
+        return jsonResponse({ error: "request body too large" }, 413, origin);
+      }
+      raw += decoder.decode(value, { stream: true });
+    }
+    raw += decoder.decode();
+  }
   if (!raw) return {};
   try {
     const parsed = JSON.parse(raw);
@@ -208,6 +239,319 @@ function ensureWorkingDir(
     }
   }
   return null;
+}
+
+interface ValidatedTaskInput {
+  prompt: string;
+  workingDir: string;
+  scheduleType: ScheduleType;
+  cronExpr: string | null;
+  delaySeconds: number | null;
+  nextRunAt: string | null;
+  agent: string;
+}
+
+function validateTaskInput(
+  ctx: ApiContext,
+  body: Row,
+): { task?: ValidatedTaskInput; response?: ResponseData } {
+  const prompt = asString(body["prompt"]);
+  if (!prompt.trim()) {
+    return {
+      response: [{ error: "prompt cannot be empty", field: "prompt" }, 400],
+    };
+  }
+
+  const workingDir = asString(body["working_dir"], ".");
+  const dirError = ensureWorkingDir(
+    workingDir,
+    `working_dir does not exist or is not a directory: ${workingDir}`,
+  );
+  if (dirError) return { response: [dirError, 400] };
+
+  const scheduleType = body["schedule_type"] ?? ScheduleType.IMMEDIATE;
+  if (
+    typeof scheduleType !== "string" ||
+    !Object.values(ScheduleType).includes(scheduleType as ScheduleType)
+  ) {
+    return {
+      response: [
+        {
+          error: `invalid schedule_type: ${String(scheduleType)}`,
+          field: "schedule_type",
+        },
+        400,
+      ],
+    };
+  }
+
+  const agent =
+    body["agent"] ?? ctx.db.get_setting("default_agent", DEFAULT_AGENT);
+  if (typeof agent !== "string" || !SUPPORTED_AGENTS.has(agent)) {
+    return {
+      response: [
+        { error: `invalid agent: ${String(agent)}`, field: "agent" },
+        400,
+      ],
+    };
+  }
+
+  let cronExpr: string | null = null;
+  let delaySeconds: number | null = null;
+  let nextRunAt: string | null = null;
+  if (scheduleType === ScheduleType.DELAYED) {
+    const rawDelay = body["delay_seconds"];
+    if (
+      (typeof rawDelay !== "number" && typeof rawDelay !== "string") ||
+      (typeof rawDelay === "string" && !rawDelay.trim())
+    ) {
+      return {
+        response: [
+          {
+            error: "delay_seconds is required for delayed schedule",
+            field: "delay_seconds",
+          },
+          400,
+        ],
+      };
+    }
+    delaySeconds = Number(rawDelay);
+    if (!Number.isFinite(delaySeconds) || delaySeconds < 0) {
+      return {
+        response: [
+          {
+            error: "delay_seconds must be a non-negative number",
+            field: "delay_seconds",
+          },
+          400,
+        ],
+      };
+    }
+  } else if (scheduleType === ScheduleType.SCHEDULED_AT) {
+    const rawNextRunAt = body["next_run_at"];
+    if (typeof rawNextRunAt !== "string" || !rawNextRunAt.trim()) {
+      return {
+        response: [
+          {
+            error: "next_run_at is required for scheduled_at schedule",
+            field: "next_run_at",
+          },
+          400,
+        ],
+      };
+    }
+    try {
+      parseComparableDatetime(rawNextRunAt);
+    } catch {
+      return {
+        response: [
+          {
+            error: `invalid next_run_at: ${rawNextRunAt}`,
+            field: "next_run_at",
+          },
+          400,
+        ],
+      };
+    }
+    nextRunAt = rawNextRunAt;
+  } else if (scheduleType === ScheduleType.CRON) {
+    const rawCronExpr = body["cron_expr"];
+    if (typeof rawCronExpr !== "string" || !rawCronExpr.trim()) {
+      return {
+        response: [
+          {
+            error: "cron_expr is required for cron schedule",
+            field: "cron_expr",
+          },
+          400,
+        ],
+      };
+    }
+    if (!cronValid(rawCronExpr)) {
+      return {
+        response: [
+          {
+            error: `invalid cron expression: ${rawCronExpr}`,
+            field: "cron_expr",
+          },
+          400,
+        ],
+      };
+    }
+    cronExpr = rawCronExpr;
+  }
+
+  return {
+    task: {
+      prompt,
+      workingDir,
+      scheduleType: scheduleType as ScheduleType,
+      cronExpr,
+      delaySeconds,
+      nextRunAt,
+      agent,
+    },
+  };
+}
+
+function settingValidationError(key: string, reason: string): ResponseData {
+  return [{ error: `invalid setting ${key}: ${reason}`, field: key }, 400];
+}
+
+function normalizePositiveIntegerSetting(
+  key: string,
+  value: unknown,
+): { value?: string; response?: ResponseData } {
+  const raw =
+    typeof value === "string"
+      ? value.trim()
+      : value === null
+        ? ""
+        : String(value);
+  if (!raw) {
+    return {
+      response: settingValidationError(key, "must be a positive integer"),
+    };
+  }
+  const parsed = Number(raw);
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    return {
+      response: settingValidationError(key, "must be a positive integer"),
+    };
+  }
+  return { value: String(parsed) };
+}
+
+function normalizeBooleanSetting(
+  key: string,
+  value: unknown,
+): { value?: string; response?: ResponseData } {
+  if (typeof value === "boolean") return { value: value ? "1" : "0" };
+  if (typeof value === "number" && (value === 0 || value === 1)) {
+    return { value: value ? "1" : "0" };
+  }
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    if (["1", "true"].includes(normalized)) return { value: "1" };
+    if (["0", "false"].includes(normalized)) return { value: "0" };
+  }
+  return { response: settingValidationError(key, "must be a boolean") };
+}
+
+function normalizeAgentSetting(
+  key: string,
+  value: unknown,
+): { value?: string; response?: ResponseData } {
+  const agent = typeof value === "string" ? value.trim() : "";
+  if (!SUPPORTED_AGENTS.has(agent)) {
+    return {
+      response: settingValidationError(
+        key,
+        `must be one of ${[...SUPPORTED_AGENTS].join(", ")}`,
+      ),
+    };
+  }
+  return { value: agent };
+}
+
+function normalizeCronSetting(
+  key: string,
+  value: unknown,
+): { value?: string; response?: ResponseData } {
+  const expr = typeof value === "string" ? value.trim() : "";
+  if (!expr || !cronValid(expr)) {
+    return {
+      response: settingValidationError(key, "must be a valid cron expression"),
+    };
+  }
+  return { value: expr };
+}
+
+function normalizeRecipientListSetting(
+  key: string,
+  value: unknown,
+): { value?: string; response?: ResponseData } {
+  let raw: unknown = value;
+  if (typeof value === "string") {
+    try {
+      raw = JSON.parse(value);
+    } catch {
+      return { response: settingValidationError(key, "must be a JSON array") };
+    }
+  }
+  if (!Array.isArray(raw)) {
+    return { response: settingValidationError(key, "must be an array") };
+  }
+  const recipients = parse_im_digest_recipients(raw);
+  if (recipients.length !== raw.length) {
+    return {
+      response: settingValidationError(
+        key,
+        "must contain channel and target for every recipient",
+      ),
+    };
+  }
+  return { value: JSON.stringify(recipients) };
+}
+
+function normalizeEditableSetting(
+  key: string,
+  value: unknown,
+): { value?: string; response?: ResponseData } {
+  switch (key) {
+    case "default_agent":
+    case "skill_sweep_agent":
+      return normalizeAgentSetting(key, value);
+    case "timeout":
+    case "im_attention_digest_minutes":
+      return normalizePositiveIntegerSetting(key, value);
+    case "skill_library_enabled":
+    case "im_digest_enabled":
+    case "im_skill_suggestions_enabled":
+      return normalizeBooleanSetting(key, value);
+    case "skill_sweep_cron":
+    case "im_digest_cron":
+      return normalizeCronSetting(key, value);
+    case "im_digest_channels":
+    case "im_skill_suggestion_channels":
+      return normalizeRecipientListSetting(key, value);
+    default:
+      return { response: settingValidationError(key, "unsupported setting") };
+  }
+}
+
+function updateEditableSettings(
+  ctx: ApiContext,
+  body: Row,
+): ResponseData | null {
+  const unknownKey = Object.keys(body).find(
+    (key) => !EDITABLE_SETTINGS.has(key),
+  );
+  if (unknownKey) {
+    return [
+      {
+        error: `unknown or non-editable setting: ${unknownKey}`,
+        field: unknownKey,
+      },
+      400,
+    ];
+  }
+  const normalized: Array<[string, string]> = [];
+  for (const [key, value] of Object.entries(body)) {
+    const result = normalizeEditableSetting(key, value);
+    if (result.response) return result.response;
+    normalized.push([key, result.value ?? ""]);
+  }
+  for (const [key, value] of normalized) {
+    ctx.db.set_setting(key, value);
+  }
+  return null;
+}
+
+function isEmptyOrMaskedSecret(value: unknown): boolean {
+  if (typeof value !== "string") return false;
+  const trimmed = value.trim();
+  return !trimmed || /^[*•]+$/.test(trimmed);
 }
 
 function dependencyList(
@@ -1208,10 +1552,12 @@ async function handleGet(
     );
   }
   if (path === "/api/feishu/settings") {
+    const appSecret = ctx.db.get_setting("feishu_app_secret", "") ?? "";
     return jsonResponse(
       {
         feishu_app_id: ctx.db.get_setting("feishu_app_id", ""),
-        feishu_app_secret: ctx.db.get_setting("feishu_app_secret", ""),
+        feishu_app_secret: appSecret ? FEISHU_SECRET_MASK : "",
+        feishu_app_secret_set: Boolean(appSecret),
         feishu_default_chat_id: ctx.db.get_setting(
           "feishu_default_chat_id",
           "",
@@ -1637,57 +1983,30 @@ async function handlePost(
   }
 
   if (path === "/api/tasks") {
-    const prompt = asString(body["prompt"]);
-    if (!prompt.trim())
+    const validated = validateTaskInput(ctx, body);
+    if (validated.response) {
       return jsonResponse(
-        { error: "prompt cannot be empty", field: "prompt" },
-        400,
+        validated.response[0],
+        validated.response[1] ?? 400,
         origin,
       );
-    const workingDir = asString(body["working_dir"], ".");
-    const dirError = ensureWorkingDir(
-      workingDir,
-      `working_dir does not exist or is not a directory: ${workingDir}`,
-    );
-    if (dirError) return jsonResponse(dirError, 400, origin);
-    const scheduleType = asString(body["schedule_type"], "immediate");
-    const cronExpr =
-      body["cron_expr"] === undefined ? null : asString(body["cron_expr"]);
-    if (scheduleType === "cron") {
-      if (!cronExpr?.trim())
-        return jsonResponse(
-          {
-            error: "cron_expr is required for cron schedule",
-            field: "cron_expr",
-          },
-          400,
-          origin,
-        );
-      if (!cronValid(cronExpr))
-        return jsonResponse(
-          { error: `invalid cron expression: ${cronExpr}`, field: "cron_expr" },
-          400,
-          origin,
-        );
     }
+    const fields = validated.task!;
     const deps = dependencyList(
       body["depends_on"],
       Boolean(body["inject_result"]),
     );
     const task: Task = makeTask({
       title: asString(body["title"], "Untitled"),
-      prompt,
-      working_dir: workingDir,
-      schedule_type: scheduleType as ScheduleType,
-      cron_expr: cronExpr,
-      delay_seconds: body["delay_seconds"] ?? null,
-      next_run_at: body["next_run_at"] ?? null,
+      prompt: fields.prompt,
+      working_dir: fields.workingDir,
+      schedule_type: fields.scheduleType,
+      cron_expr: fields.cronExpr,
+      delay_seconds: fields.delaySeconds,
+      next_run_at: fields.nextRunAt,
       max_runs: body["max_runs"] ?? null,
       tags: asString(body["tags"]),
-      agent: asString(
-        body["agent"] ?? ctx.db.get_setting("default_agent", DEFAULT_AGENT),
-        DEFAULT_AGENT,
-      ),
+      agent: fields.agent,
       prompt_images: parseJsonList(body["prompt_images"]),
       image_paths: parseJsonList(body["image_paths"]).map(String),
       dag_id: body["dag_id"] ?? null,
@@ -1705,8 +2024,8 @@ async function handlePost(
   }
 
   if (path === "/api/settings") {
-    for (const [key, value] of Object.entries(body))
-      ctx.db.set_setting(key, String(value));
+    const error = updateEditableSettings(ctx, body);
+    if (error) return jsonResponse(error[0], error[1] ?? 400, origin);
     return jsonResponse({ status: "updated" }, 200, origin);
   }
   if (path === "/api/feishu/settings") {
@@ -1717,7 +2036,13 @@ async function handlePost(
       "feishu_default_working_dir",
       "feishu_enabled",
     ]) {
-      if (key in body) ctx.db.set_setting(key, String(body[key]));
+      if (
+        key in body &&
+        (key !== "feishu_app_secret" ||
+          !isEmptyOrMaskedSecret(body["feishu_app_secret"]))
+      ) {
+        ctx.db.set_setting(key, String(body[key]));
+      }
     }
     await restartChannels(ctx, body);
     return jsonResponse({ status: "updated" }, 200, origin);
@@ -1771,9 +2096,31 @@ async function handlePost(
       body["dag_id"],
       `dag-${Math.trunc(Date.now() / 1000)}`,
     );
+    const validatedTasks: ValidatedTaskInput[] = [];
+    for (let index = 0; index < taskDefs.length; index += 1) {
+      const taskDef = taskDefs[index];
+      if (!taskDef || typeof taskDef !== "object" || Array.isArray(taskDef)) {
+        return jsonResponse(
+          { error: "each task must be an object", field: "tasks", index },
+          400,
+          origin,
+        );
+      }
+      const validated = validateTaskInput(ctx, taskDef);
+      if (validated.response) {
+        return jsonResponse(
+          { ...(validated.response[0] as Row), index },
+          validated.response[1] ?? 400,
+          origin,
+        );
+      }
+      validatedTasks.push(validated.task!);
+    }
     const refToId = new Map<string, number>();
     const results: Row = {};
-    for (const tdef of taskDefs) {
+    for (let index = 0; index < taskDefs.length; index += 1) {
+      const tdef = taskDefs[index];
+      const fields = validatedTasks[index];
       const ref = asString(tdef["ref"], String(refToId.size));
       const dependsOn: Array<{ task_id: number; inject_result: boolean }> = [];
       for (const depRef of Array.isArray(tdef["depends_on_refs"])
@@ -1795,22 +2142,16 @@ async function handlePost(
         });
       }
       const task = makeTask({
-        title: asString(tdef["title"], asString(tdef["prompt"]).slice(0, 60)),
-        prompt: asString(tdef["prompt"]),
-        working_dir: asString(tdef["working_dir"], "."),
-        schedule_type: asString(
-          tdef["schedule_type"],
-          "immediate",
-        ) as ScheduleType,
-        cron_expr: tdef["cron_expr"] ?? null,
-        delay_seconds: tdef["delay_seconds"] ?? null,
-        next_run_at: tdef["next_run_at"] ?? null,
+        title: asString(tdef["title"], fields.prompt.slice(0, 60)),
+        prompt: fields.prompt,
+        working_dir: fields.workingDir,
+        schedule_type: fields.scheduleType,
+        cron_expr: fields.cronExpr,
+        delay_seconds: fields.delaySeconds,
+        next_run_at: fields.nextRunAt,
         max_runs: tdef["max_runs"] ?? null,
         tags: asString(tdef["tags"]),
-        agent: asString(
-          tdef["agent"] ?? ctx.db.get_setting("default_agent", DEFAULT_AGENT),
-          DEFAULT_AGENT,
-        ),
+        agent: fields.agent,
         prompt_images: parseJsonList(tdef["prompt_images"]),
         dag_id: dagId,
       });
@@ -1927,8 +2268,8 @@ async function handlePut(
   const path = url.pathname;
 
   if (path === "/api/settings") {
-    for (const [key, value] of Object.entries(body))
-      ctx.db.set_setting(key, String(value));
+    const error = updateEditableSettings(ctx, body);
+    if (error) return jsonResponse(error[0], error[1] ?? 400, origin);
     return jsonResponse({ status: "updated" }, 200, origin);
   }
   if (path.startsWith("/api/task-briefs/") && path.split("/").length === 4) {
@@ -2062,37 +2403,15 @@ async function handlePut(
         origin,
       );
     }
-    const prompt = asString(body["prompt"] ?? task["prompt"]);
-    if (!prompt.trim())
+    const validated = validateTaskInput(ctx, { ...task, ...body });
+    if (validated.response) {
       return jsonResponse(
-        { error: "prompt cannot be empty", field: "prompt" },
-        400,
+        validated.response[0],
+        validated.response[1] ?? 400,
         origin,
       );
-    const workingDir = asString(body["working_dir"] ?? task["working_dir"]);
-    const dirError = ensureWorkingDir(
-      workingDir,
-      `working_dir does not exist: ${workingDir}`,
-    );
-    if (dirError) return jsonResponse(dirError, 400, origin);
-    const scheduleType = asString(
-      body["schedule_type"] ?? task["schedule_type"],
-    );
-    const cronExpr = asString(body["cron_expr"] ?? task["cron_expr"]);
-    if (scheduleType === "cron") {
-      if (!cronExpr.trim())
-        return jsonResponse(
-          { error: "cron_expr required for cron schedule", field: "cron_expr" },
-          400,
-          origin,
-        );
-      if (!cronValid(cronExpr))
-        return jsonResponse(
-          { error: `invalid cron expression: ${cronExpr}`, field: "cron_expr" },
-          400,
-          origin,
-        );
     }
+    const fields = validated.task!;
 
     const updates: Row = {};
     for (const field of [
@@ -2118,9 +2437,12 @@ async function handlePut(
         parseJsonList(body["image_paths"]),
       );
 
-    const newScheduleType = asString(
-      updates["schedule_type"] ?? task["schedule_type"],
-    );
+    if ("prompt" in body) updates["prompt"] = fields.prompt;
+    if ("working_dir" in body) updates["working_dir"] = fields.workingDir;
+    if ("schedule_type" in body) updates["schedule_type"] = fields.scheduleType;
+    if ("agent" in body) updates["agent"] = fields.agent;
+
+    const newScheduleType = fields.scheduleType;
     if (newScheduleType === "immediate") {
       Object.assign(updates, {
         status: "pending",
@@ -2133,28 +2455,19 @@ async function handlePut(
         status: "pending",
         next_run_at: null,
         cron_expr: null,
+        delay_seconds: fields.delaySeconds,
       });
     } else if (newScheduleType === "scheduled_at") {
-      const nextRunAt = body["next_run_at"] ?? task["next_run_at"];
-      if (!nextRunAt)
-        return jsonResponse(
-          {
-            error: "next_run_at required for scheduled_at",
-            field: "next_run_at",
-          },
-          400,
-          origin,
-        );
       Object.assign(updates, {
-        next_run_at: nextRunAt,
+        next_run_at: fields.nextRunAt,
         status: "scheduled",
         cron_expr: null,
         delay_seconds: null,
       });
     } else if (newScheduleType === "cron") {
-      const newCron = asString(updates["cron_expr"] ?? task["cron_expr"]);
       Object.assign(updates, {
-        next_run_at: cronNextIso(newCron),
+        cron_expr: fields.cronExpr,
+        next_run_at: cronNextIso(fields.cronExpr!),
         status: "scheduled",
         delay_seconds: null,
       });
