@@ -1128,6 +1128,68 @@ describe("api handler", () => {
     expect(db.get_setting("default_agent")).toBe("claude");
   });
 
+  test("POST and PUT settings reject invalid editable values without partial writes", async () => {
+    const invalidCases = [
+      [{ default_agent: "other" }, "default_agent"],
+      [{ skill_sweep_agent: "other" }, "skill_sweep_agent"],
+      [{ timeout: "abc" }, "timeout"],
+      [{ timeout: 0 }, "timeout"],
+      [{ skill_library_enabled: "maybe" }, "skill_library_enabled"],
+      [{ skill_sweep_cron: "not cron" }, "skill_sweep_cron"],
+      [{ im_digest_channels: "not-json" }, "im_digest_channels"],
+      [{ im_digest_channels: [{ channel: "telegram" }] }, "im_digest_channels"],
+    ] as const;
+
+    for (const [body, field] of invalidCases) {
+      const res = await handleApiRequest(
+        ctx,
+        new Request("http://127.0.0.1:9712/api/settings", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        }),
+      );
+      expect(res.status).toBe(400);
+      expect(await res.json()).toMatchObject({ field });
+      expect(db.get_setting(field)).toBeNull();
+    }
+
+    const partial = await handleApiRequest(
+      ctx,
+      new Request("http://127.0.0.1:9712/api/settings", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ timeout: 60, default_agent: "other" }),
+      }),
+    );
+    expect(partial.status).toBe(400);
+    expect(db.get_setting("timeout")).toBeNull();
+    expect(db.get_setting("default_agent")).toBeNull();
+
+    const valid = await handleApiRequest(
+      ctx,
+      new Request("http://127.0.0.1:9712/api/settings", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          timeout: "60",
+          default_agent: "codex",
+          skill_library_enabled: true,
+          im_digest_enabled: "false",
+          im_digest_channels: [{ channel: "telegram", target: "42" }],
+        }),
+      }),
+    );
+    expect(valid.status).toBe(200);
+    expect(db.get_setting("timeout")).toBe("60");
+    expect(db.get_setting("default_agent")).toBe("codex");
+    expect(db.get_setting("skill_library_enabled")).toBe("1");
+    expect(db.get_setting("im_digest_enabled")).toBe("0");
+    expect(db.get_setting("im_digest_channels")).toBe(
+      JSON.stringify([{ channel: "telegram", target: "42" }]),
+    );
+  });
+
   test("task detail routes expose runs, events, messages, and dependency metadata", async () => {
     const upstream = await json(
       new Request("http://127.0.0.1:9712/api/tasks", {

@@ -394,6 +394,132 @@ function validateTaskInput(
   };
 }
 
+function settingValidationError(key: string, reason: string): ResponseData {
+  return [{ error: `invalid setting ${key}: ${reason}`, field: key }, 400];
+}
+
+function normalizePositiveIntegerSetting(
+  key: string,
+  value: unknown,
+): { value?: string; response?: ResponseData } {
+  const raw =
+    typeof value === "string"
+      ? value.trim()
+      : value === null
+        ? ""
+        : String(value);
+  if (!raw) {
+    return {
+      response: settingValidationError(key, "must be a positive integer"),
+    };
+  }
+  const parsed = Number(raw);
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    return {
+      response: settingValidationError(key, "must be a positive integer"),
+    };
+  }
+  return { value: String(parsed) };
+}
+
+function normalizeBooleanSetting(
+  key: string,
+  value: unknown,
+): { value?: string; response?: ResponseData } {
+  if (typeof value === "boolean") return { value: value ? "1" : "0" };
+  if (typeof value === "number" && (value === 0 || value === 1)) {
+    return { value: value ? "1" : "0" };
+  }
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    if (["1", "true"].includes(normalized)) return { value: "1" };
+    if (["0", "false"].includes(normalized)) return { value: "0" };
+  }
+  return { response: settingValidationError(key, "must be a boolean") };
+}
+
+function normalizeAgentSetting(
+  key: string,
+  value: unknown,
+): { value?: string; response?: ResponseData } {
+  const agent = typeof value === "string" ? value.trim() : "";
+  if (!SUPPORTED_AGENTS.has(agent)) {
+    return {
+      response: settingValidationError(
+        key,
+        `must be one of ${[...SUPPORTED_AGENTS].join(", ")}`,
+      ),
+    };
+  }
+  return { value: agent };
+}
+
+function normalizeCronSetting(
+  key: string,
+  value: unknown,
+): { value?: string; response?: ResponseData } {
+  const expr = typeof value === "string" ? value.trim() : "";
+  if (!expr || !cronValid(expr)) {
+    return {
+      response: settingValidationError(key, "must be a valid cron expression"),
+    };
+  }
+  return { value: expr };
+}
+
+function normalizeRecipientListSetting(
+  key: string,
+  value: unknown,
+): { value?: string; response?: ResponseData } {
+  let raw: unknown = value;
+  if (typeof value === "string") {
+    try {
+      raw = JSON.parse(value);
+    } catch {
+      return { response: settingValidationError(key, "must be a JSON array") };
+    }
+  }
+  if (!Array.isArray(raw)) {
+    return { response: settingValidationError(key, "must be an array") };
+  }
+  const recipients = parse_im_digest_recipients(raw);
+  if (recipients.length !== raw.length) {
+    return {
+      response: settingValidationError(
+        key,
+        "must contain channel and target for every recipient",
+      ),
+    };
+  }
+  return { value: JSON.stringify(recipients) };
+}
+
+function normalizeEditableSetting(
+  key: string,
+  value: unknown,
+): { value?: string; response?: ResponseData } {
+  switch (key) {
+    case "default_agent":
+    case "skill_sweep_agent":
+      return normalizeAgentSetting(key, value);
+    case "timeout":
+    case "im_attention_digest_minutes":
+      return normalizePositiveIntegerSetting(key, value);
+    case "skill_library_enabled":
+    case "im_digest_enabled":
+    case "im_skill_suggestions_enabled":
+      return normalizeBooleanSetting(key, value);
+    case "skill_sweep_cron":
+    case "im_digest_cron":
+      return normalizeCronSetting(key, value);
+    case "im_digest_channels":
+    case "im_skill_suggestion_channels":
+      return normalizeRecipientListSetting(key, value);
+    default:
+      return { response: settingValidationError(key, "unsupported setting") };
+  }
+}
+
 function updateEditableSettings(
   ctx: ApiContext,
   body: Row,
@@ -410,8 +536,14 @@ function updateEditableSettings(
       400,
     ];
   }
+  const normalized: Array<[string, string]> = [];
   for (const [key, value] of Object.entries(body)) {
-    ctx.db.set_setting(key, String(value));
+    const result = normalizeEditableSetting(key, value);
+    if (result.response) return result.response;
+    normalized.push([key, result.value ?? ""]);
+  }
+  for (const [key, value] of normalized) {
+    ctx.db.set_setting(key, value);
   }
   return null;
 }
