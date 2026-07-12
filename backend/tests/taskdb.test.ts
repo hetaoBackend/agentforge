@@ -26,7 +26,7 @@ describe("TaskDB", () => {
   });
 
   afterEach(() => {
-    db.conn.close();
+    db.close();
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
@@ -138,6 +138,99 @@ describe("TaskDB", () => {
     expect(run1_events.map((e) => e["content"])).toEqual(["hello", "done"]); // ASC order
     const run2_events = db.get_run_output_events(run2);
     expect(run2_events.map((e) => e["content"])).toEqual(["second run"]);
+  });
+
+  test("test_output_event_batches_preserve_every_event_in_order", () => {
+    const tid = db.add_task(
+      makeTask({ title: "stream", prompt: "p", working_dir: "." }),
+    );
+    const rid = db.add_run(tid);
+    const contents = Array.from(
+      { length: TaskDB.OUTPUT_EVENT_BATCH_SIZE * 2 + 7 },
+      (_, index) => `event-${index}`,
+    );
+
+    for (const content of contents) {
+      db.add_output_event(tid, rid, "assistant", content);
+    }
+    db.flush_output_events();
+
+    expect(
+      db.get_run_output_events(rid, contents.length).map((e) => e["content"]),
+    ).toEqual(contents);
+  });
+
+  test("test_partial_output_event_batch_flushes_within_latency_bound", async () => {
+    const tid = db.add_task(
+      makeTask({ title: "stream", prompt: "p", working_dir: "." }),
+    );
+    const rid = db.add_run(tid);
+    db.add_output_event(tid, rid, "assistant", "visible soon");
+
+    expect(TaskDB.OUTPUT_EVENT_FLUSH_MS).toBe(50);
+    await Bun.sleep(TaskDB.OUTPUT_EVENT_FLUSH_MS + 25);
+    const persisted = db.conn
+      .query(
+        "SELECT content FROM task_output_events WHERE task_id = ? ORDER BY id",
+      )
+      .all(tid) as Array<{ content: string }>;
+    expect(persisted.map((event) => event.content)).toEqual(["visible soon"]);
+  });
+
+  test("test_finishing_run_flushes_partial_output_event_batch", () => {
+    const tid = db.add_task(
+      makeTask({ title: "stream", prompt: "p", working_dir: "." }),
+    );
+    const rid = db.add_run(tid);
+    db.add_output_event(tid, rid, "assistant", "final event");
+
+    db.finish_run(rid, "completed", "done");
+
+    const persisted = db.conn
+      .query("SELECT content FROM task_output_events WHERE run_id = ?")
+      .all(rid) as Array<{ content: string }>;
+    expect(persisted.map((event) => event.content)).toEqual(["final event"]);
+  });
+
+  test("test_output_event_batches_isolate_tasks_and_keep_per_run_order", () => {
+    const task1 = db.add_task(
+      makeTask({ title: "one", prompt: "p", working_dir: "." }),
+    );
+    const task2 = db.add_task(
+      makeTask({ title: "two", prompt: "p", working_dir: "." }),
+    );
+    const run1 = db.add_run(task1);
+    const run2 = db.add_run(task2);
+
+    db.add_output_event(task1, run1, "assistant", "one-a");
+    db.add_output_event(task2, run2, "assistant", "two-a");
+    db.add_output_event(task1, run1, "assistant", "one-b");
+    db.add_output_event(task2, run2, "assistant", "two-b");
+    db.flush_output_events();
+
+    expect(
+      db.get_run_output_events(run1).map((event) => event["content"]),
+    ).toEqual(["one-a", "one-b"]);
+    expect(
+      db.get_run_output_events(run2).map((event) => event["content"]),
+    ).toEqual(["two-a", "two-b"]);
+  });
+
+  test("test_close_flushes_and_cancels_output_event_timer", async () => {
+    const dbPath = path.join(tmpDir, "taskdb-test.db");
+    const tid = db.add_task(
+      makeTask({ title: "close", prompt: "p", working_dir: "." }),
+    );
+    const rid = db.add_run(tid);
+    db.add_output_event(tid, rid, "assistant", "before close");
+
+    db.close();
+    await Bun.sleep(TaskDB.OUTPUT_EVENT_FLUSH_MS + 25);
+    db = new TaskDB(dbPath);
+
+    expect(
+      db.get_run_output_events(rid).map((event) => event["content"]),
+    ).toEqual(["before close"]);
   });
 
   // ── completed-run queries (skill sweep inputs) ─────────────────────────────

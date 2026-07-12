@@ -120,7 +120,7 @@ describe("scheduler more", () => {
     if (savedSkillCreatorDir === undefined)
       delete process.env.AGENTFORGE_SKILL_CREATOR_DIR;
     else process.env.AGENTFORGE_SKILL_CREATOR_DIR = savedSkillCreatorDir;
-    db.conn.close();
+    db.close();
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
@@ -745,6 +745,36 @@ describe("scheduler more", () => {
     sched.cancel_task(tid);
     expect(killed).toEqual([424242]);
     expect(db.get_task(tid)!["status"]).toBe("cancelled");
+  });
+
+  test("test_cancel_task_flushes_pending_output_events", () => {
+    const tid = db.add_task(
+      makeTask({ title: "t", prompt: "p", working_dir: "." }),
+    );
+    const rid = db.add_run(tid);
+    db.add_output_event(tid, rid, "assistant", "before cancel");
+
+    sched.cancel_task(tid);
+
+    const events = db.conn
+      .query("SELECT content FROM task_output_events WHERE run_id = ?")
+      .all(rid) as Row[];
+    expect(events.map((event) => event["content"])).toEqual(["before cancel"]);
+  });
+
+  test("test_stop_flushes_pending_output_events", async () => {
+    const tid = db.add_task(
+      makeTask({ title: "t", prompt: "p", working_dir: "." }),
+    );
+    const rid = db.add_run(tid);
+    db.add_output_event(tid, rid, "assistant", "before stop");
+
+    await sched.stop();
+
+    const events = db.conn
+      .query("SELECT content FROM task_output_events WHERE run_id = ?")
+      .all(rid) as Row[];
+    expect(events.map((event) => event["content"])).toEqual(["before stop"]);
   });
 
   test("test_cancel_task_pgid_killpg_oserror_swallowed", () => {

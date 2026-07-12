@@ -631,6 +631,7 @@ export class TaskScheduler extends BusAwareSchedulerMixin {
   async stop(): Promise<void> {
     this._shutting_down = true;
     this._running = false;
+    this.db.flush_output_events();
     if (this._loop_promise) {
       await joinWithTimeout(this._loop_promise, 5);
     }
@@ -694,6 +695,15 @@ export class TaskScheduler extends BusAwareSchedulerMixin {
         }
       }
     }
+    // Give killed task readers a final chance to drain their pipes and flush
+    // parsed events before the server closes SQLite after stop() resolves.
+    deadline = Date.now() / 1000 + 2;
+    for (const [, handle] of [...running, ...heartbeat_running]) {
+      if (!handle.is_alive() || !handle.promise) continue;
+      const remaining = Math.max(0, deadline - Date.now() / 1000);
+      await joinWithTimeout(handle.promise, remaining);
+    }
+    this.db.flush_output_events();
     logger.info("Scheduler stopped");
   }
 
@@ -1628,7 +1638,7 @@ export class TaskScheduler extends BusAwareSchedulerMixin {
     const hid = heartbeat["id"];
     const tick_id = this.db.add_heartbeat_tick(hid);
     const now = new Date();
-    const output_chunks: string[] = [];
+    let live_output = "";
     this._live_heartbeat_output.set(tick_id, "");
     const next_run_at = this.db._compute_heartbeat_next_run_at(
       makeHeartbeat({
@@ -1650,8 +1660,8 @@ export class TaskScheduler extends BusAwareSchedulerMixin {
     );
     try {
       const _append_tick_output = (line: string): void => {
-        output_chunks.push(line);
-        this._live_heartbeat_output.set(tick_id, output_chunks.join(""));
+        live_output += line;
+        this._live_heartbeat_output.set(tick_id, live_output);
       };
 
       const agent = heartbeat["default_agent"] || DEFAULT_AGENT;
@@ -1733,9 +1743,7 @@ export class TaskScheduler extends BusAwareSchedulerMixin {
             decision_type,
             decision,
             task_id,
-            output_chunks.length
-              ? output_chunks.join("").slice(0, 500000)
-              : null,
+            live_output ? live_output.slice(0, 500000) : null,
           );
           return;
         }
@@ -1754,7 +1762,7 @@ export class TaskScheduler extends BusAwareSchedulerMixin {
         decision_type,
         decision,
         null,
-        output_chunks.length ? output_chunks.join("").slice(0, 500000) : null,
+        live_output ? live_output.slice(0, 500000) : null,
       );
     } catch (e) {
       logger.error(`Heartbeat ${hid} failed: ${errStr(e)}`);
@@ -1770,7 +1778,7 @@ export class TaskScheduler extends BusAwareSchedulerMixin {
         HeartbeatDecisionType.ERROR,
         null,
         null,
-        output_chunks.length ? output_chunks.join("").slice(0, 500000) : null,
+        live_output ? live_output.slice(0, 500000) : null,
         errStr(e),
       );
     } finally {
@@ -2671,10 +2679,12 @@ export class TaskScheduler extends BusAwareSchedulerMixin {
       const timer = setTimeout(_kill, timeout_secs * 1000);
 
       const chunks: string[] = [];
+      let live_output = "";
       try {
         for await (const line of proc.stdout) {
           chunks.push(line);
-          this._live_output.set(tid, chunks.join(""));
+          live_output += line;
+          this._live_output.set(tid, live_output);
           // Parse and store each line as an event
           this._parse_and_store_event(tid, run_id, line, agent);
         }
@@ -2711,7 +2721,7 @@ export class TaskScheduler extends BusAwareSchedulerMixin {
           }
           this._live_output.set(
             tid,
-            chunks.join("") + "\n[⏳ Waiting for sub-agents to complete...]",
+            live_output + "\n[⏳ Waiting for sub-agents to complete...]",
           );
           await this._sleep(1);
         }
@@ -2814,6 +2824,9 @@ export class TaskScheduler extends BusAwareSchedulerMixin {
       }
     }
 
+    // Make every parsed event durable before publishing the terminal task
+    // state. This covers success, cancellation, timeout and subprocess errors.
+    this.db.flush_output_events();
     this._live_output.delete(tid);
     if (agent === "codex") {
       this._clear_codex_run_state(run_id);
@@ -3185,6 +3198,7 @@ export class TaskScheduler extends BusAwareSchedulerMixin {
         // ≙ except OSError: pass
       }
     }
+    this.db.flush_output_events();
     this.db.update_task(task_id, { status: "cancelled" });
     this._notify(task_id);
   }

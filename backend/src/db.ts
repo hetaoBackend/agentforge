@@ -39,20 +39,49 @@ export class TaskBriefConflictError extends Error {
   }
 }
 
+interface PendingOutputEvent {
+  task_id: number;
+  run_id: number;
+  event_type: string;
+  content: string;
+}
+
 function expandUser(p: string): string {
   return p.startsWith("~") ? path.join(os.homedir(), p.slice(1)) : p;
 }
 
 export class TaskDB {
+  static readonly OUTPUT_EVENT_BATCH_SIZE = 32;
+  static readonly OUTPUT_EVENT_FLUSH_MS = 50;
+
   db_path: string;
   conn: Database;
   private transaction_depth = 0;
+  private _pending_output_events: PendingOutputEvent[] = [];
+  private _output_event_flush_timer: ReturnType<typeof setTimeout> | null =
+    null;
+  private _output_event_insert: ReturnType<Database["query"]>;
+  private _closed = false;
 
   constructor(db_path: string = "~/.agentforge/tasks.db") {
     this.db_path = expandUser(db_path);
     fs.mkdirSync(path.dirname(this.db_path), { recursive: true });
     this.conn = new Database(this.db_path, { create: true });
     this._init_db();
+    this._output_event_insert = this.conn.query(`
+      INSERT INTO task_output_events (task_id, run_id, event_type, content)
+      VALUES (?, ?, ?, ?)
+    `);
+  }
+
+  /** Flush pending output events and close SQLite exactly once. */
+  close(): void {
+    if (this._closed) {
+      return;
+    }
+    this.flush_output_events();
+    this._closed = true;
+    this.conn.close();
   }
 
   /** Run a migration statement, ignoring "column already exists" errors. */
@@ -276,6 +305,14 @@ export class TaskDB {
     this.conn.run(`
       CREATE INDEX IF NOT EXISTS idx_task_output_events_task_timestamp
       ON task_output_events(task_id, timestamp DESC)
+    `);
+    this.conn.run(`
+      CREATE INDEX IF NOT EXISTS idx_task_output_events_task_id_id
+      ON task_output_events(task_id, id DESC)
+    `);
+    this.conn.run(`
+      CREATE INDEX IF NOT EXISTS idx_task_output_events_run_id_id
+      ON task_output_events(run_id, id ASC)
     `);
 
     // DAG dependency table
@@ -1405,6 +1442,7 @@ export class TaskDB {
     error: string | null = null,
     raw_output: string | null = null,
   ): void {
+    this.flush_output_events();
     this.conn
       .query(
         `
@@ -1426,6 +1464,7 @@ export class TaskDB {
     run_error: string | null = null,
     raw_output: string | null = null,
   ): void {
+    this.flush_output_events();
     const updates: Record<string, unknown> = { ...task_updates };
     updates["updated_at"] = nowIso();
     const sets = Object.keys(updates)
@@ -1460,35 +1499,95 @@ export class TaskDB {
     return rows.map((r) => ({ ...r }));
   }
 
-  /** Add a new output event to the database. */
+  /**
+   * Queue an output event for a small batched insert.
+   *
+   * A full batch is written synchronously. Partial batches are written within
+   * OUTPUT_EVENT_FLUSH_MS, bounding API visibility latency while avoiding one
+   * SQLite transaction and statement preparation per NDJSON line.
+   */
   add_output_event(
     task_id: number,
     run_id: number,
     event_type: string,
     content: string,
   ): void {
-    this.conn
-      .query(
-        `
-        INSERT INTO task_output_events (task_id, run_id, event_type, content)
-        VALUES (?, ?, ?, ?)
-    `,
-      )
-      .run(task_id, run_id, event_type, content);
+    if (this._closed) {
+      throw new Error("TaskDB is closed");
+    }
+    this._pending_output_events.push({
+      task_id,
+      run_id,
+      event_type,
+      content,
+    });
+    if (this._pending_output_events.length >= TaskDB.OUTPUT_EVENT_BATCH_SIZE) {
+      this.flush_output_events();
+      return;
+    }
+    this._schedule_output_event_flush();
   }
 
-  /** Get output events for a task, ordered by timestamp. */
+  private _schedule_output_event_flush(): void {
+    if (
+      this._pending_output_events.length === 0 ||
+      this._output_event_flush_timer !== null
+    ) {
+      return;
+    }
+    this._output_event_flush_timer = setTimeout(() => {
+      this._output_event_flush_timer = null;
+      try {
+        this.flush_output_events();
+      } catch (e) {
+        logger.error(`Failed to flush output events: ${String(e)}`);
+        this._schedule_output_event_flush();
+      }
+    }, TaskDB.OUTPUT_EVENT_FLUSH_MS);
+  }
+
+  /** Persist every queued output event in insertion order. */
+  flush_output_events(): void {
+    if (this._output_event_flush_timer !== null) {
+      clearTimeout(this._output_event_flush_timer);
+      this._output_event_flush_timer = null;
+    }
+    if (this._pending_output_events.length === 0) {
+      return;
+    }
+
+    const batch = this._pending_output_events;
+    this._pending_output_events = [];
+    try {
+      this.transaction(() => {
+        for (const event of batch) {
+          this._output_event_insert.run(
+            event.task_id,
+            event.run_id,
+            event.event_type,
+            event.content,
+          );
+        }
+      });
+    } catch (e) {
+      this._pending_output_events = [...batch, ...this._pending_output_events];
+      throw e;
+    }
+  }
+
+  /** Get output events for a task, newest insertion first. */
   get_output_events(
     task_id: number,
     limit: number = 1000,
     offset: number = 0,
   ): Row[] {
+    this.flush_output_events();
     const rows = this.conn
       .query(
         `
         SELECT * FROM task_output_events
         WHERE task_id = ?
-        ORDER BY timestamp DESC
+        ORDER BY id DESC
         LIMIT ? OFFSET ?
     `,
       )
@@ -1498,12 +1597,13 @@ export class TaskDB {
 
   /** Get output events for a specific run. */
   get_run_output_events(run_id: number, limit: number = 1000): Row[] {
+    this.flush_output_events();
     const rows = this.conn
       .query(
         `
         SELECT * FROM task_output_events
         WHERE run_id = ?
-        ORDER BY timestamp ASC
+        ORDER BY id ASC
         LIMIT ?
     `,
       )
@@ -2239,6 +2339,9 @@ export class TaskDB {
   }
 
   delete_task(task_id: number): void {
+    // Do not let a delayed insert recreate output rows after their task/run
+    // records have been deleted.
+    this.flush_output_events();
     this.transaction(() => {
       this.conn
         .query("DELETE FROM task_output_events WHERE task_id = ?")

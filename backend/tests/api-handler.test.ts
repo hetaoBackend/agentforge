@@ -33,7 +33,7 @@ describe("api handler", () => {
   });
 
   afterEach(() => {
-    db.conn.close();
+    db.close();
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
@@ -249,6 +249,108 @@ describe("api handler", () => {
       new Request(`http://127.0.0.1:9712/api/tasks/${taskId}/output`),
     );
     expect(output).toEqual({ output: "raw output", is_running: false });
+  });
+
+  test("GET task output supports character and byte offsets plus resets", async () => {
+    const created = await json(
+      new Request("http://127.0.0.1:9712/api/tasks", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title: "Streaming",
+          prompt: "do it",
+          working_dir: ".",
+        }),
+      }),
+    );
+    const taskId = Number(created["id"]);
+    scheduler._live_output.set(taskId, "A你🙂");
+
+    expect(
+      await json(
+        new Request(
+          `http://127.0.0.1:9712/api/tasks/${taskId}/output?offset=1`,
+        ),
+      ),
+    ).toEqual({
+      output: "你🙂",
+      is_running: true,
+      next_offset: 4,
+      reset: false,
+    });
+    expect(
+      await json(
+        new Request(
+          `http://127.0.0.1:9712/api/tasks/${taskId}/output?offset=1&unit=bytes`,
+        ),
+      ),
+    ).toEqual({
+      output: "你🙂",
+      is_running: true,
+      next_offset: 8,
+      reset: false,
+    });
+
+    // Byte 2 is inside 你, so the server returns a clean full snapshot.
+    expect(
+      await json(
+        new Request(
+          `http://127.0.0.1:9712/api/tasks/${taskId}/output?offset=2&unit=bytes`,
+        ),
+      ),
+    ).toEqual({
+      output: "A你🙂",
+      is_running: true,
+      next_offset: 8,
+      reset: true,
+    });
+
+    scheduler._live_output.set(taskId, "x");
+    expect(
+      await json(
+        new Request(
+          `http://127.0.0.1:9712/api/tasks/${taskId}/output?offset=4`,
+        ),
+      ),
+    ).toEqual({
+      output: "x",
+      is_running: true,
+      next_offset: 1,
+      reset: true,
+    });
+
+    scheduler._live_output.delete(taskId);
+    const runId = db.add_run(taskId);
+    db.finish_run(runId, "completed", "done", null, "旧🙂raw");
+    expect(
+      await json(
+        new Request(
+          `http://127.0.0.1:9712/api/tasks/${taskId}/output?offset=1`,
+        ),
+      ),
+    ).toEqual({
+      output: "🙂raw",
+      is_running: false,
+      next_offset: 6,
+      reset: false,
+    });
+    expect(
+      await json(
+        new Request(
+          `http://127.0.0.1:9712/api/tasks/${taskId}/output?offset=99`,
+        ),
+      ),
+    ).toEqual({
+      output: "旧🙂raw",
+      is_running: false,
+      next_offset: 6,
+      reset: true,
+    });
+    expect(
+      await json(
+        new Request(`http://127.0.0.1:9712/api/tasks/${taskId}/output`),
+      ),
+    ).toEqual({ output: "旧🙂raw", is_running: false });
   });
 
   test("task brief API creates lists updates reads and discards drafts", async () => {

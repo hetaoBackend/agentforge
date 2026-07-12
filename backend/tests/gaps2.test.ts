@@ -112,7 +112,7 @@ describe("taskboard gaps2", () => {
     else process.env.HOME = savedHome;
     if (savedCodexHome === undefined) delete process.env.CODEX_HOME;
     else process.env.CODEX_HOME = savedCodexHome;
-    db.conn.close();
+    db.close();
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
