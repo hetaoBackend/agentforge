@@ -1,4 +1,4 @@
-export type MainView = "tasks" | "heartbeats" | "skills";
+export type MainView = "home" | "tasks" | "heartbeats" | "skills";
 
 export interface MainViewData {
   tasks?: any[];
@@ -24,6 +24,9 @@ export async function fetchMainViewData(
   apiBase: string,
   fetchImpl: FetchLike = fetch,
 ): Promise<MainViewData> {
+  if (activeView === "home") {
+    return {};
+  }
   if (activeView === "tasks") {
     return { tasks: await getJson(fetchImpl, `${apiBase}/tasks?mode=summary`) };
   }

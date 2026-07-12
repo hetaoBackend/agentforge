@@ -10,6 +10,7 @@ function response(payload: unknown): Response {
 
 describe("fetchMainViewData", () => {
   test.each([
+    ["home", []],
     ["tasks", ["/tasks?mode=summary"]],
     ["heartbeats", ["/heartbeats"]],
     ["skills", ["/skill-patterns", "/skills", "/tasks?mode=summary"]],
