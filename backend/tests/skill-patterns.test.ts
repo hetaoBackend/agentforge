@@ -110,20 +110,32 @@ describe("skill patterns", () => {
     const sched = new TaskScheduler(db);
     const arr =
       '[{"pattern_key":"x","kind":"recipe","summary":"s","task_id":1}]';
-    expect((sched._parse_sweep_output(arr)[0] as any)["pattern_key"]).toBe("x");
     expect(
-      (sched._parse_sweep_output("```json\n" + arr + "\n```")[0] as any)[
+      (sched._parse_sweep_output(arr).items[0] as any)["pattern_key"],
+    ).toBe("x");
+    expect(
+      (sched._parse_sweep_output("```json\n" + arr + "\n```").items[0] as any)[
         "pattern_key"
       ],
     ).toBe("x");
     expect(
-      (sched._parse_sweep_output("Here you go:\n" + arr + "\nDone.")[0] as any)[
-        "pattern_key"
-      ],
+      (
+        sched._parse_sweep_output("Here you go:\n" + arr + "\nDone.")
+          .items[0] as any
+      )["pattern_key"],
     ).toBe("x");
-    expect(sched._parse_sweep_output("nonsense")).toEqual([]);
-    expect(sched._parse_sweep_output("[]")).toEqual([]);
-    expect(sched._parse_sweep_output("")).toEqual([]);
+    expect(sched._parse_sweep_output("nonsense")).toEqual({
+      ok: false,
+      items: [],
+    });
+    expect(sched._parse_sweep_output("[]")).toEqual({
+      ok: true,
+      items: [],
+    });
+    expect(sched._parse_sweep_output("")).toEqual({
+      ok: false,
+      items: [],
+    });
   });
 
   // ── full sweep (mocked agent) ──────────────────────────────────────────
@@ -248,6 +260,50 @@ describe("skill patterns", () => {
     );
     // failed sweep must not advance the watermark
     expect(db.get_setting("skill_sweep_watermark", "")).toBe("");
+  });
+
+  test("test_run_skill_sweep_parse_failure_does_not_advance_watermark", async () => {
+    const sched = new TaskScheduler(db);
+    add_completed_task();
+    (sched as any)._run_agent_command = async (): Promise<
+      [boolean, string]
+    > => [true, "not valid json"];
+
+    await expect(sched.run_skill_sweep("claude")).rejects.toThrow(
+      /invalid JSON array/,
+    );
+    expect(db.get_setting("skill_sweep_watermark", "")).toBe("");
+  });
+
+  test("test_run_skill_sweep_valid_empty_result_advances_watermark", async () => {
+    const sched = new TaskScheduler(db);
+    const tid = add_completed_task();
+    const finishedAt = db.get_task_runs(tid)[0]!["finished_at"];
+    (sched as any)._run_agent_command = async (): Promise<
+      [boolean, string]
+    > => [true, "[]"];
+
+    const result = await sched.run_skill_sweep("claude");
+
+    expect(result["detected"]).toBe(0);
+    expect(result["watermark"]).toBe(finishedAt);
+    expect(db.get_setting("skill_sweep_watermark", "")).toBe(finishedAt);
+  });
+
+  test("test_scheduled_sweep_advances_next_run_only_when_started", () => {
+    const sched = new TaskScheduler(db);
+    const due = "2000-01-01T00:00:00";
+    db.set_setting("skill_library_enabled", "1");
+    db.set_setting("skill_sweep_cron", "0 3 * * *");
+    db.set_setting("skill_sweep_next_run", due);
+
+    (sched as any).trigger_skill_sweep = () => false;
+    sched._maybe_run_scheduled_sweep();
+    expect(db.get_setting("skill_sweep_next_run", "")).toBe(due);
+
+    (sched as any).trigger_skill_sweep = () => true;
+    sched._maybe_run_scheduled_sweep();
+    expect(db.get_setting("skill_sweep_next_run", "")).not.toBe(due);
   });
 
   test("test_trigger_skill_sweep_guards_concurrency", () => {

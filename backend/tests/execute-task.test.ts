@@ -668,7 +668,7 @@ describe("execute task", () => {
         prompt: "render",
         working_dir: ".",
         agent: "codex",
-        image_paths: [img],
+        image_paths: [img, "/etc/shadow"],
       }),
     );
     const task = db.get_task(tid)!;
@@ -686,6 +686,8 @@ describe("execute task", () => {
     const cmd: string[] = captured["cmd"];
     expect(cmd).toContain("--image");
     expect(cmd[cmd.indexOf("--image") + 1]).toBe(img);
+    expect(cmd).not.toContain("/etc/shadow");
+    expect(cmd.filter((arg) => arg === "--image")).toHaveLength(1);
   });
 
   test("test_execute_task_claude_resume_appends_session_flag", async () => {
