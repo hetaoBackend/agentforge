@@ -747,6 +747,50 @@ describe("Feishu outbound dispatch", () => {
       alt: { tag: "plain_text", content: "generated image 1" },
     });
   });
+
+  test("hides image bullets written relative to the task working dir", async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "agentforge-feishu-"));
+    const image = path.join(tmpDir, "relative.png");
+    fs.writeFileSync(
+      image,
+      Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    );
+    const real_image = fs.realpathSync(image);
+    const { channel, db } = makeChannel();
+    db.settings["feishu_default_chat_id"] = "oc_default";
+    db.tasks.set(12, {
+      id: 12,
+      title: "Rel",
+      prompt: "p",
+      agent: "codex",
+      working_dir: tmpDir,
+    });
+    channel._stop_streaming = mock(() => null) as any;
+    channel._collect_generated_image_paths = mock(() => [real_image]) as any;
+    channel._upload_image_entries = mock(async () => [
+      [real_image, "img_key_1"],
+    ]) as any;
+    channel._send_message = mock(async () => "om_sent") as any;
+
+    try {
+      await channel._send(
+        makeOutboundMessage({
+          type: OutboundMessageType.TASK_COMPLETED,
+          task_id: 12,
+          payload: { result: `Done\n- ${path.basename(image)}` },
+        }),
+      );
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+
+    // Resolving the bullet needs the task's working_dir; without it the
+    // relative name never matches an uploaded path and survives into the card.
+    const card = (channel._send_message as any).mock.calls[0][2];
+    const rendered = JSON.stringify(card);
+    expect(rendered).toContain("Done");
+    expect(rendered).not.toContain(path.basename(image));
+  });
 });
 
 describe("Feishu SDK wrappers", () => {

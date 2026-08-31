@@ -676,6 +676,7 @@ export class FeishuChannel extends Channel {
           content,
           image_keys.length,
           uploaded_images.map(([image_path]) => image_path),
+          (task["working_dir"] as string | null | undefined) ?? null,
         );
       }
     }

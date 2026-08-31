@@ -431,6 +431,7 @@ export class WeixinChannel extends Channel {
           body,
           image_paths.length,
           image_paths,
+          (task["working_dir"] as string | null | undefined) ?? null,
         );
       }
       text = body;

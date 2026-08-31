@@ -510,6 +510,54 @@ describe("Weixin bridge events and commands", () => {
     expect(channel._task_origin.has(7)).toBe(false);
     expect(channel._task_origin.has(8)).toBe(false);
   });
+
+  test("hides image bullets written relative to the task working dir", () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "agentforge-weixin-"));
+    const image = writeImage(
+      path.join(tmpDir, "relative.png"),
+      [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a],
+    );
+    const proc = fakeBridgeProcess();
+    const { channel, db } = makeChannel();
+    channel._bridge_proc = proc;
+    channel._running = true;
+    db.tasks.set(9, { id: 9, title: "Rel", working_dir: tmpDir });
+    db.runs = [{ id: 90 }];
+    db.events = [
+      {
+        event_type: "generated_image",
+        content: JSON.stringify({ path: image }),
+      },
+    ];
+    channel._task_origin.set(9, {
+      account_id: "acct",
+      peer_id: "peer",
+      context_token: "ctx",
+      message_id: "origin-rel",
+    });
+
+    try {
+      channel.send(
+        makeOutboundMessage({
+          type: OutboundMessageType.TASK_COMPLETED,
+          task_id: 9,
+          payload: {
+            title: "Rel",
+            result: `Done\n- ${path.basename(image)}`,
+          },
+        }),
+      );
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+
+    const commands = writtenCommands(proc);
+    expect(commands).toHaveLength(1);
+    expect(commands[0]!["image_paths"]).toEqual([image]);
+    // Resolving the bullet needs the task's working_dir; without it the
+    // relative name never matches an uploaded path and survives into the reply.
+    expect(commands[0]!["text"]).toBe("Done");
+  });
 });
 
 describe("Weixin inbound messages", () => {
