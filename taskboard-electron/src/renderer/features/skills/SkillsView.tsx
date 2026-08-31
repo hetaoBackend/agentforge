@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
 import { theme } from "../../theme/tokens.ts";
+import type { Skill, SkillData, SkillPattern, Task } from "../../types.ts";
 import { API } from "../../api/client.ts";
 
-function parseSkillFrontmatter(body) {
+function parseSkillFrontmatter(body: string) {
   const m = (body || "").match(/^---\s*\n([\s\S]*?)\n---/);
   if (!m) return { name: "", description: "" };
   const out = { name: "", description: "" };
@@ -17,7 +18,7 @@ function parseSkillFrontmatter(body) {
   return out;
 }
 
-function SkillKindBadge({ kind }) {
+function SkillKindBadge({ kind }: { kind: string | null | undefined }) {
   const isPitfall = kind === "pitfall";
   return (
     <span
@@ -36,8 +37,20 @@ function SkillKindBadge({ kind }) {
   );
 }
 
-function SkillPatternCard({ p, tasks, onDraft, onApprove, onDismiss }) {
-  let taskIds = [];
+function SkillPatternCard({
+  p,
+  tasks,
+  onDraft,
+  onApprove,
+  onDismiss,
+}: {
+  p: SkillPattern;
+  tasks: Task[] | null | undefined;
+  onDraft: (id: number) => void;
+  onApprove: (id: number, payload: { body: string }) => void;
+  onDismiss: (id: number) => void;
+}) {
+  let taskIds: number[] = [];
   try {
     taskIds = JSON.parse(p.contributing_task_ids || "[]");
   } catch {
@@ -58,7 +71,7 @@ function SkillPatternCard({ p, tasks, onDraft, onApprove, onDismiss }) {
     p.status === "promoted" ? theme.green : p.status === "candidate" ? theme.accent : theme.border;
   const muted = p.status === "dismissed";
 
-  const btn = (bg, color) => ({
+  const btn = (bg: string, color: string) => ({
     padding: "6px 14px",
     borderRadius: 7,
     border: bg === "transparent" ? `1px solid ${theme.border}` : "none",
@@ -157,8 +170,8 @@ function SkillPatternCard({ p, tasks, onDraft, onApprove, onDismiss }) {
           </div>
           <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
             {taskIds.length === 0 && <span style={{ color: theme.textDim }}>—</span>}
-            {taskIds.map((tid) => {
-              const t = (tasks || []).find((x) => x.id === tid);
+            {taskIds.map((tid: number) => {
+              const t = (tasks || []).find((x: Task) => x.id === tid);
               return (
                 <span key={tid} style={{ fontFamily: "monospace" }}>
                   #{tid} {t ? t.title : <span style={{ color: theme.textDim }}>(deleted)</span>}
@@ -307,12 +320,22 @@ function SkillPatternCard({ p, tasks, onDraft, onApprove, onDismiss }) {
   );
 }
 
-function SkillRegistryCard({ s, tasks, onToggle, onDelete }) {
+function SkillRegistryCard({
+  s,
+  tasks,
+  onToggle,
+  onDelete,
+}: {
+  s: Skill;
+  tasks: Task[] | null | undefined;
+  onToggle: (id: number, enabled: boolean) => void;
+  onDelete: (id: number) => void;
+}) {
   const [expanded, setExpanded] = useState(false);
-  const [content, setContent] = useState<any>(null);
+  const [content, setContent] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
-  let sourceTaskIds = [];
+  let sourceTaskIds: number[] = [];
   try {
     sourceTaskIds = JSON.parse(s.source_task_ids || "[]");
   } catch {
@@ -329,7 +352,7 @@ function SkillRegistryCard({ s, tasks, onToggle, onDelete }) {
         const d = await res.json();
         setContent(d.content ?? "");
       } catch (e) {
-        setContent(`(failed to load: ${e.message})`);
+        setContent(`(failed to load: ${(e as Error).message})`);
       } finally {
         setLoading(false);
       }
@@ -392,8 +415,8 @@ function SkillRegistryCard({ s, tasks, onToggle, onDelete }) {
                 {" "}
                 · Source tasks:{" "}
                 {sourceTaskIds
-                  .map((tid) => {
-                    const t = (tasks || []).find((x) => x.id === tid);
+                  .map((tid: number) => {
+                    const t = (tasks || []).find((x: Task) => x.id === tid);
                     return `#${tid}${t ? " (" + t.title + ")" : ""}`;
                   })
                   .join(", ")}
@@ -472,28 +495,38 @@ export function SkillsView({
   onDismiss,
   onToggleSkill,
   onDeleteSkill,
+}: {
+  skillData: SkillData;
+  skills: Skill[] | null | undefined;
+  tasks: Task[] | null | undefined;
+  filter: string;
+  onDraft: (id: number) => void;
+  onApprove: (id: number, payload: { body: string }) => void;
+  onDismiss: (id: number) => void;
+  onToggleSkill: (id: number, enabled: boolean) => void;
+  onDeleteSkill: (id: number) => void;
 }) {
   // Only recurrence >= 2 is worth surfacing; single-occurrence rows are noise.
   // (The backend still tracks them so the count can accumulate across sweeps.)
-  const patterns = (skillData.patterns || []).filter((p) => p.recurrence_count >= 2);
+  const patterns = (skillData.patterns || []).filter((p: SkillPattern) => p.recurrence_count >= 2);
   const skillQuery = (filter || "").trim().toLowerCase();
-  const matchesQuery = (values) => {
+  const matchesQuery = (values: unknown[]) => {
     if (!skillQuery) return true;
-    return values.some((value) =>
+    return values.some((value: unknown) =>
       String(value ?? "")
         .toLowerCase()
         .includes(skillQuery),
     );
   };
-  const taskTitle = (id) => (tasks || []).find((t) => t.id === id)?.title || "";
-  const parseIds = (raw) => {
+  const taskTitle = (id: number) => (tasks || []).find((t: Task) => t.id === id)?.title || "";
+  const parseIds = (raw: string | null | undefined): number[] => {
     try {
       return JSON.parse(raw || "[]");
     } catch {
       return [];
     }
   };
-  const filteredSkills = (skills || []).filter((s) =>
+  const filteredSkills = (skills || []).filter((s: Skill) =>
     matchesQuery([
       s.name,
       s.description,
@@ -533,7 +566,12 @@ export function SkillsView({
   const [showRegistry, setShowRegistry] = useState(true);
   const [showPatterns, setShowPatterns] = useState(true);
 
-  const sectionHeader = (label, count, open, toggle) => (
+  const sectionHeader = (
+    label: string,
+    count: string | number,
+    open: boolean,
+    toggle: () => void,
+  ) => (
     <button
       onClick={toggle}
       style={{
@@ -577,7 +615,7 @@ export function SkillsView({
         <div style={{ marginBottom: 26 }}>
           {sectionHeader(
             "Installed Skills",
-            skillQuery ? `${filteredSkills.length}/${skills.length}` : skills.length,
+            skillQuery ? `${filteredSkills.length}/${skills?.length ?? 0}` : (skills?.length ?? 0),
             showRegistry,
             () => setShowRegistry((v) => !v),
           )}
@@ -606,7 +644,7 @@ export function SkillsView({
                   justifyContent: "start",
                 }}
               >
-                {filteredSkills.map((s) => (
+                {filteredSkills.map((s: Skill) => (
                   <SkillRegistryCard
                     key={s.id}
                     s={s}
@@ -653,7 +691,7 @@ export function SkillsView({
               justifyContent: "start",
             }}
           >
-            {filteredPatterns.map((p) => (
+            {filteredPatterns.map((p: SkillPattern) => (
               <SkillPatternCard
                 key={p.id}
                 p={p}

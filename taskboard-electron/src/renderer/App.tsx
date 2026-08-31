@@ -1,4 +1,12 @@
 import { useState, useEffect, useCallback } from "react";
+import type { LucideIcon } from "lucide-react";
+import type { ActionHandler, Heartbeat, HeartbeatTick, Skill, SkillData, Task } from "./types.ts";
+import type { ChannelsSavePayload, ChannelsStatusUpdate } from "./channelsSettings.ts";
+import type { FeishuSettings } from "./features/settings/types.ts";
+
+/** Which top-level board the header and filter bar are showing. */
+type ViewKey = "tasks" | "heartbeats" | "skills";
+type ColorMode = "system" | "light" | "dark";
 import {
   HeartPulse,
   KanbanSquare,
@@ -40,7 +48,6 @@ import {
   fetchTasks,
   fetchWithTimeout,
   pauseHeartbeat,
-  respondToTask,
   resumeHeartbeatApi,
   retryTask,
   runHeartbeatNow,
@@ -63,35 +70,42 @@ import { SettingsModal } from "./features/settings/SettingsModal.tsx";
 // ─── App ───
 
 export default function App() {
-  const [tasks, setTasks] = useState<any[]>([]);
-  const [heartbeats, setHeartbeats] = useState<any[]>([]);
-  const [heartbeatTicks, setHeartbeatTicks] = useState<any[]>([]);
-  const [skillData, setSkillData] = useState({
+  const [tasks, setTasks] = useState<Task[]>([]);
+  const [heartbeats, setHeartbeats] = useState<Heartbeat[]>([]);
+  const [heartbeatTicks, setHeartbeatTicks] = useState<HeartbeatTick[]>([]);
+  const [skillData, setSkillData] = useState<SkillData>({
     patterns: [],
     sweep: { running: false, last: null },
   });
-  const [skills, setSkills] = useState<any[]>([]);
-  const [activeView, setActiveView] = useState("tasks");
+  const [skills, setSkills] = useState<Skill[]>([]);
+  const [activeView, setActiveView] = useState<ViewKey>("tasks");
   const [showNew, setShowNew] = useState(false);
   const [showNewHeartbeat, setShowNewHeartbeat] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
-  const [detail, setDetail] = useState<any>(null);
-  const [heartbeatDetail, setHeartbeatDetail] = useState<any>(null);
+  const [detail, setDetail] = useState<Task | null>(null);
+  const [heartbeatDetail, setHeartbeatDetail] = useState<Heartbeat | null>(null);
   const [connected, setConnected] = useState(false);
   const [filters, setFilters] = useState({ tasks: "", heartbeats: "", skills: "" });
   const [taskTimeout, setTaskTimeout] = useState(DEFAULT_TIMEOUT_SECONDS);
   const [defaultAgent, setDefaultAgent] = useState(DEFAULT_AGENT);
-  const [feishuSettings, setFeishuSettings] = useState<any>({});
-  const [channelsStatus, setChannelsStatus] = useState<any>({});
+  const [feishuSettings, setFeishuSettings] = useState<Partial<FeishuSettings>>({});
+  // onChannelsSave hands back the flat save payload rather than the nested
+  // status shape, so this holds either. The value is only a seed for the modal,
+  // which re-fetches the real status on open, so the two never have to agree.
+  const [channelsStatus, setChannelsStatus] = useState<ChannelsStatusUpdate | ChannelsSavePayload>(
+    {},
+  );
   const [backendReady, setBackendReady] = useState(false);
-  const [backendError, setBackendError] = useState<any>(null);
-  const [apiError, setApiError] = useState<any>(null);
-  const [editingTask, setEditingTask] = useState<any>(null);
-  const [forkingTask, setForkingTask] = useState<any>(null);
-  const [editingHeartbeat, setEditingHeartbeat] = useState<any>(null);
+  const [backendError, setBackendError] = useState<string | null>(null);
+  const [apiError, setApiError] = useState<string | null>(null);
+  const [editingTask, setEditingTask] = useState<Task | null>(null);
+  const [forkingTask, setForkingTask] = useState<Task | null>(null);
+  const [editingHeartbeat, setEditingHeartbeat] = useState<Heartbeat | null>(null);
 
   // ─── Color mode ───
-  const [colorMode, setColorMode] = useState(() => localStorage.getItem("colorMode") || "system");
+  const [colorMode, setColorMode] = useState<ColorMode>(
+    () => (localStorage.getItem("colorMode") as ColorMode) || "system",
+  );
   const [systemDark, setSystemDark] = useState(
     () => window.matchMedia("(prefers-color-scheme: dark)").matches,
   );
@@ -105,7 +119,7 @@ export default function App() {
 
   useEffect(() => {
     const mq = window.matchMedia("(prefers-color-scheme: dark)");
-    const handler = (e) => setSystemDark(e.matches);
+    const handler = (e: MediaQueryListEvent) => setSystemDark(e.matches);
     mq.addEventListener("change", handler);
     return () => mq.removeEventListener("change", handler);
   }, []);
@@ -152,7 +166,7 @@ export default function App() {
       setApiError(null);
     } catch (err) {
       setConnected(false);
-      setApiError(`Failed to fetch tasks: ${err.message}`);
+      setApiError(`Failed to fetch tasks: ${(err as Error).message}`);
     }
   }, []);
 
@@ -173,7 +187,7 @@ export default function App() {
     fetchChannelsStatus().then((s) => setChannelsStatus(s));
   }, [backendReady]);
 
-  const handleAction = async (action, id) => {
+  const handleAction: ActionHandler = async (action, id) => {
     try {
       if (action === "cancel") await cancelTask(id);
       else if (action === "retry") await retryTask(id);
@@ -191,11 +205,11 @@ export default function App() {
       }
       poll();
     } catch (e) {
-      setApiError(`${action} failed: ${e.message}`);
+      setApiError(`${action} failed: ${(e as Error).message}`);
     }
   };
 
-  const handleHeartbeatAction = async (action, id) => {
+  const handleHeartbeatAction: ActionHandler = async (action, id) => {
     try {
       if (action === "run") {
         await runHeartbeatNow(id);
@@ -224,7 +238,7 @@ export default function App() {
         setHeartbeatTicks(ticks);
       }
     } catch (e) {
-      setApiError(`Heartbeat ${action} failed: ${e.message}`);
+      setApiError(`Heartbeat ${action} failed: ${(e as Error).message}`);
     }
   };
 
@@ -235,91 +249,83 @@ export default function App() {
       setSkillData((prev) => ({ ...prev, sweep: { ...prev.sweep, running: true } }));
       setTimeout(poll, 1500);
     } catch (e) {
-      setApiError(`Sweep failed: ${e.message}`);
+      setApiError(`Sweep failed: ${(e as Error).message}`);
     }
   };
 
-  const handleSkillDraft = async (id) => {
+  const handleSkillDraft = async (id: number) => {
     try {
       await triggerSkillDraft(id);
       setTimeout(poll, 1500);
     } catch (e) {
-      setApiError(`Distill failed: ${e.message}`);
+      setApiError(`Distill failed: ${(e as Error).message}`);
     }
   };
 
-  const handleSkillApprove = async (id, data) => {
+  const handleSkillApprove = async (id: number, data: Record<string, unknown>) => {
     try {
       await approveSkill(id, data);
       poll();
     } catch (e) {
-      setApiError(`Approve failed: ${e.message}`);
+      setApiError(`Approve failed: ${(e as Error).message}`);
     }
   };
 
-  const handleSkillDismiss = async (id) => {
+  const handleSkillDismiss = async (id: number) => {
     try {
       await dismissSkillPattern(id);
       poll();
     } catch (e) {
-      setApiError(`Dismiss failed: ${e.message}`);
+      setApiError(`Dismiss failed: ${(e as Error).message}`);
     }
   };
 
-  const handleSkillToggle = async (id, enabled) => {
+  const handleSkillToggle = async (id: number, enabled: boolean) => {
     try {
       await setSkillEnabledApi(id, enabled);
       poll();
     } catch (e) {
-      setApiError(`Toggle skill failed: ${e.message}`);
+      setApiError(`Toggle skill failed: ${(e as Error).message}`);
     }
   };
 
-  const handleSkillDelete = async (id) => {
+  const handleSkillDelete = async (id: number) => {
     try {
       await deleteSkillApi(id);
       poll();
     } catch (e) {
-      setApiError(`Delete skill failed: ${e.message}`);
+      setApiError(`Delete skill failed: ${(e as Error).message}`);
     }
   };
 
-  const handleCreate = async (data) => {
+  const handleCreate = async (data: Record<string, unknown>) => {
     try {
       await createTask(data);
       setShowNew(false);
       poll();
     } catch (e) {
-      setApiError(`Create task failed: ${e.message}`);
+      setApiError(`Create task failed: ${(e as Error).message}`);
     }
   };
 
-  const handleEdit = async (data) => {
+  const handleEdit = async (data: Record<string, unknown>) => {
     try {
+      if (!editingTask) return;
       await updateTask(editingTask.id, data);
       setEditingTask(null);
       poll();
     } catch (e) {
-      setApiError(`Edit task failed: ${e.message}`);
+      setApiError(`Edit task failed: ${(e as Error).message}`);
     }
   };
 
-  const handleFork = async (data) => {
+  const handleFork = async (data: Record<string, unknown>) => {
     try {
       await createTask(data);
       setForkingTask(null);
       poll();
     } catch (e) {
-      setApiError(`Fork task failed: ${e.message}`);
-    }
-  };
-
-  const handleRespond = async (id, answer) => {
-    try {
-      await respondToTask(id, answer);
-      poll();
-    } catch (e) {
-      setApiError(`Respond failed: ${e.message}`);
+      setApiError(`Fork task failed: ${(e as Error).message}`);
     }
   };
 
@@ -327,33 +333,34 @@ export default function App() {
     poll();
   };
 
-  const handleCreateHeartbeat = async (data) => {
+  const handleCreateHeartbeat = async (data: Record<string, unknown>) => {
     try {
       await createHeartbeat(data);
       setShowNewHeartbeat(false);
       poll();
     } catch (e) {
-      setApiError(`Create heartbeat failed: ${e.message}`);
+      setApiError(`Create heartbeat failed: ${(e as Error).message}`);
     }
   };
 
-  const handleEditHeartbeat = async (data) => {
+  const handleEditHeartbeat = async (data: Record<string, unknown>) => {
     try {
+      if (!editingHeartbeat) return;
       await updateHeartbeat(editingHeartbeat.id, data);
       setEditingHeartbeat(null);
       poll();
     } catch (e) {
-      setApiError(`Edit heartbeat failed: ${e.message}`);
+      setApiError(`Edit heartbeat failed: ${(e as Error).message}`);
     }
   };
 
-  const openHeartbeatDetail = async (heartbeat) => {
+  const openHeartbeatDetail = async (heartbeat: Heartbeat) => {
     setHeartbeatDetail(heartbeat);
     try {
       const ticks = await fetchHeartbeatTicks(heartbeat.id);
       setHeartbeatTicks(ticks);
     } catch (e) {
-      setApiError(`Failed to fetch heartbeat ticks: ${e.message}`);
+      setApiError(`Failed to fetch heartbeat ticks: ${(e as Error).message}`);
       setHeartbeatTicks([]);
     }
   };
@@ -364,7 +371,7 @@ export default function App() {
       : activeView === "heartbeats"
         ? filters.heartbeats
         : filters.skills;
-  const setActiveFilter = (value) => {
+  const setActiveFilter = (value: string) => {
     setFilters((prev) =>
       activeView === "tasks"
         ? { ...prev, tasks: value }
@@ -627,9 +634,9 @@ export default function App() {
               }}
             >
               {[
-                { key: "tasks", label: "Tasks", icon: KanbanSquare },
-                { key: "heartbeats", label: "Heartbeats", icon: HeartPulse },
-                { key: "skills", label: "Skills", icon: Sparkles },
+                { key: "tasks" as const, label: "Tasks", icon: KanbanSquare },
+                { key: "heartbeats" as const, label: "Heartbeats", icon: HeartPulse },
+                { key: "skills" as const, label: "Skills", icon: Sparkles },
               ].map((tab) => (
                 <button
                   key={tab.key}
@@ -690,9 +697,21 @@ export default function App() {
             </div>
 
             {(() => {
-              const cycle = { system: "light", light: "dark", dark: "system" };
-              const icons = { system: MonitorCog, light: Sun, dark: Moon };
-              const labels = { system: "System theme", light: "Light mode", dark: "Dark mode" };
+              const cycle: Record<ColorMode, ColorMode> = {
+                system: "light",
+                light: "dark",
+                dark: "system",
+              };
+              const icons: Record<ColorMode, LucideIcon> = {
+                system: MonitorCog,
+                light: Sun,
+                dark: Moon,
+              };
+              const labels: Record<ColorMode, string> = {
+                system: "System theme",
+                light: "Light mode",
+                dark: "Dark mode",
+              };
               const ThemeIcon = icons[colorMode];
               return (
                 <HeaderButton
@@ -860,7 +879,7 @@ export default function App() {
         <NewTaskModal
           onClose={() => setShowNew(false)}
           onSubmit={handleCreate}
-          initialData={{ agent: defaultAgent }}
+          initialData={{ agent: defaultAgent } as Partial<Task>}
         />
       )}
       {showNewHeartbeat && (
@@ -906,7 +925,10 @@ export default function App() {
           }}
           feishu={feishuSettings}
           onFeishuSave={(updated) => setFeishuSettings(updated)}
-          channelsStatus={channelsStatus}
+          // A flat save payload has none of the nested channel keys, so the
+          // modal's initial state just comes out empty and the open-time fetch
+          // fills it in — the same thing that happened before this was typed.
+          channelsStatus={channelsStatus as ChannelsStatusUpdate}
           onChannelsSave={(updated) => setChannelsStatus(updated)}
         />
       )}
@@ -914,7 +936,6 @@ export default function App() {
         <DetailPanel
           task={tasks.find((t) => t.id === detail.id) || detail}
           onClose={() => setDetail(null)}
-          onRespond={handleRespond}
           onResume={handleResume}
         />
       )}

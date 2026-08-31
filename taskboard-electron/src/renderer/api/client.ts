@@ -7,20 +7,27 @@
 
 export const API = "http://127.0.0.1:9712/api";
 
+/**
+ * JSON request body sent to the backend; keys mirror the REST snake_case
+ * schema. Declared as `object` rather than `Record<string, unknown>` so the
+ * typed payload interfaces in the renderer pass without an index signature.
+ */
+export type Payload = object;
+
 // ─── CSRF token ───
 // Fetched once at startup; reused for all state-changing requests.
-let _csrfTokenPromise = null;
+let _csrfTokenPromise: Promise<string> | null = null;
 function getCsrfToken() {
   if (!_csrfTokenPromise) {
     _csrfTokenPromise = fetch(`${API}/csrf-token`)
       .then((r) => r.json())
-      .then((d) => d.csrf_token || "")
+      .then((d: { csrf_token?: string }) => d.csrf_token || "")
       .catch(() => "");
   }
   return _csrfTokenPromise;
 }
 
-async function csrfHeaders(extra = {}) {
+async function csrfHeaders(extra: Record<string, string> = {}) {
   const token = await getCsrfToken();
   return { "Content-Type": "application/json", "X-CSRF-Token": token, ...extra };
 }
@@ -64,7 +71,7 @@ export async function fetchHeartbeats() {
   return res.json();
 }
 
-export async function createTask(data) {
+export async function createTask(data: Payload) {
   const res = await fetch(`${API}/tasks`, {
     method: "POST",
     headers: await csrfHeaders(),
@@ -90,7 +97,7 @@ export async function triggerSkillSweep(agent?: string) {
   return payload;
 }
 
-export async function triggerSkillDraft(id, agent?: string) {
+export async function triggerSkillDraft(id: number, agent?: string) {
   const res = await fetch(`${API}/skill-patterns/${id}/draft`, {
     method: "POST",
     headers: await csrfHeaders(),
@@ -101,7 +108,7 @@ export async function triggerSkillDraft(id, agent?: string) {
   return payload;
 }
 
-export async function approveSkill(id, data) {
+export async function approveSkill(id: number, data: Payload) {
   const res = await fetch(`${API}/skill-patterns/${id}/approve`, {
     method: "POST",
     headers: await csrfHeaders(),
@@ -112,7 +119,7 @@ export async function approveSkill(id, data) {
   return payload;
 }
 
-export async function dismissSkillPattern(id) {
+export async function dismissSkillPattern(id: number) {
   const res = await fetch(`${API}/skill-patterns/${id}/dismiss`, {
     method: "POST",
     headers: await csrfHeaders(),
@@ -129,7 +136,7 @@ export async function fetchSkills() {
   return res.json();
 }
 
-export async function setSkillEnabledApi(id, enabled) {
+export async function setSkillEnabledApi(id: number, enabled: boolean) {
   const res = await fetch(`${API}/skills/${id}`, {
     method: "PUT",
     headers: await csrfHeaders(),
@@ -140,7 +147,7 @@ export async function setSkillEnabledApi(id, enabled) {
   return payload;
 }
 
-export async function deleteSkillApi(id) {
+export async function deleteSkillApi(id: number) {
   const res = await fetch(`${API}/skills/${id}`, {
     method: "DELETE",
     headers: await csrfHeaders(),
@@ -150,7 +157,7 @@ export async function deleteSkillApi(id) {
   return payload;
 }
 
-export async function createHeartbeat(data) {
+export async function createHeartbeat(data: Payload) {
   const res = await fetch(`${API}/heartbeats`, {
     method: "POST",
     headers: await csrfHeaders(),
@@ -161,7 +168,7 @@ export async function createHeartbeat(data) {
   return payload;
 }
 
-export async function updateHeartbeat(id, data) {
+export async function updateHeartbeat(id: number, data: Payload) {
   const res = await fetch(`${API}/heartbeats/${id}`, {
     method: "PUT",
     headers: await csrfHeaders(),
@@ -172,7 +179,7 @@ export async function updateHeartbeat(id, data) {
   return payload;
 }
 
-export async function deleteHeartbeat(id) {
+export async function deleteHeartbeat(id: number) {
   const res = await fetch(`${API}/heartbeats/${id}`, {
     method: "DELETE",
     headers: await csrfHeaders(),
@@ -180,7 +187,7 @@ export async function deleteHeartbeat(id) {
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
 }
 
-export async function runHeartbeatNow(id) {
+export async function runHeartbeatNow(id: number) {
   const res = await fetch(`${API}/heartbeats/${id}/run-now`, {
     method: "POST",
     headers: await csrfHeaders(),
@@ -190,7 +197,7 @@ export async function runHeartbeatNow(id) {
   return payload;
 }
 
-export async function pauseHeartbeat(id) {
+export async function pauseHeartbeat(id: number) {
   const res = await fetch(`${API}/heartbeats/${id}/pause`, {
     method: "POST",
     headers: await csrfHeaders(),
@@ -200,7 +207,7 @@ export async function pauseHeartbeat(id) {
   return payload;
 }
 
-export async function resumeHeartbeatApi(id) {
+export async function resumeHeartbeatApi(id: number) {
   const res = await fetch(`${API}/heartbeats/${id}/resume`, {
     method: "POST",
     headers: await csrfHeaders(),
@@ -210,32 +217,32 @@ export async function resumeHeartbeatApi(id) {
   return payload;
 }
 
-export async function fetchHeartbeatTicks(id) {
+export async function fetchHeartbeatTicks(id: number) {
   const res = await fetch(`${API}/heartbeats/${id}/ticks?limit=20`);
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   const payload = await res.json();
   return payload.ticks || [];
 }
 
-export async function fetchHeartbeatTickOutput(heartbeatId, tickId) {
+export async function fetchHeartbeatTickOutput(heartbeatId: number, tickId: number) {
   const res = await fetch(`${API}/heartbeats/${heartbeatId}/ticks/${tickId}/output`);
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   return res.json();
 }
 
-export async function cancelTask(id) {
+export async function cancelTask(id: number) {
   await fetch(`${API}/tasks/${id}/cancel`, { method: "POST", headers: await csrfHeaders() });
 }
 
-export async function retryTask(id) {
+export async function retryTask(id: number) {
   await fetch(`${API}/tasks/${id}/retry`, { method: "POST", headers: await csrfHeaders() });
 }
 
-export async function deleteTask(id) {
+export async function deleteTask(id: number) {
   await fetch(`${API}/tasks/${id}`, { method: "DELETE", headers: await csrfHeaders() });
 }
 
-export async function updateTask(id, data) {
+export async function updateTask(id: number, data: Payload) {
   const res = await fetch(`${API}/tasks/${id}`, {
     method: "PUT",
     headers: await csrfHeaders(),
@@ -248,7 +255,7 @@ export async function updateTask(id, data) {
   return res.json();
 }
 
-export async function respondToTask(id, answer) {
+export async function respondToTask(id: number, answer: string) {
   await fetch(`${API}/tasks/${id}/respond`, {
     method: "POST",
     headers: await csrfHeaders(),
@@ -256,7 +263,7 @@ export async function respondToTask(id, answer) {
   });
 }
 
-export async function resumeTask(id, message) {
+export async function resumeTask(id: number, message: string) {
   const res = await fetch(`${API}/tasks/${id}/resume`, {
     method: "POST",
     headers: await csrfHeaders(),
@@ -265,7 +272,7 @@ export async function resumeTask(id, message) {
   return res.json();
 }
 
-export async function fetchTaskMessages(id) {
+export async function fetchTaskMessages(id: number) {
   try {
     const res = await fetch(`${API}/tasks/${id}/messages`);
     return res.ok ? await res.json() : [];
@@ -274,7 +281,7 @@ export async function fetchTaskMessages(id) {
   }
 }
 
-export async function fetchTaskEvents(id) {
+export async function fetchTaskEvents(id: number) {
   try {
     const res = await fetch(`${API}/tasks/${id}/events?limit=1000`);
     if (res.ok) {
@@ -296,7 +303,7 @@ export async function fetchSettings() {
   }
 }
 
-export async function updateSettings(data) {
+export async function updateSettings(data: Payload) {
   await fetch(`${API}/settings`, {
     method: "PUT",
     headers: await csrfHeaders(),
@@ -313,7 +320,7 @@ export async function fetchFeishuSettings() {
   }
 }
 
-export async function updateFeishuSettings(data) {
+export async function updateFeishuSettings(data: Payload) {
   await fetch(`${API}/feishu/settings`, {
     method: "POST",
     headers: await csrfHeaders(),
@@ -330,7 +337,7 @@ export async function fetchChannelsStatus() {
   }
 }
 
-export async function updateChannelsSettings(data) {
+export async function updateChannelsSettings(data: Payload) {
   await fetch(`${API}/channels/settings`, {
     method: "POST",
     headers: await csrfHeaders(),
@@ -338,7 +345,7 @@ export async function updateChannelsSettings(data) {
   });
 }
 
-export async function runWeixinAction(action) {
+export async function runWeixinAction(action: string) {
   const res = await fetch(`${API}/channels/weixin/action`, {
     method: "POST",
     headers: await csrfHeaders(),

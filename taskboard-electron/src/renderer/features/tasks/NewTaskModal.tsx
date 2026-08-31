@@ -16,8 +16,34 @@ import {
   uiField,
   uiLabel,
 } from "../../theme/styles.ts";
+import type { PromptImage, Task, TaskDependency } from "../../types.ts";
 
-export function NewTaskModal({ onClose, onSubmit, initialData, mode = "create" }) {
+/** An image staged in the composer: base64 payload plus its data-URL preview. */
+interface PromptImageDraft {
+  name: string;
+  media_type: string;
+  data: string;
+  preview: string;
+}
+
+/** One upstream-dependency row; `_input` is the raw text box value. */
+interface DepRow {
+  task_id: number | null;
+  inject_result: boolean;
+  _input: string;
+}
+
+export function NewTaskModal({
+  onClose,
+  onSubmit,
+  initialData,
+  mode = "create",
+}: {
+  onClose: () => void;
+  onSubmit: (data: Record<string, unknown>) => void;
+  initialData?: Partial<Task> | null;
+  mode?: "create" | "edit" | "fork";
+}) {
   const savedDir = localStorage.getItem("agentforge_working_dir") || "~/papers";
   const [form, setForm] = useState(() => {
     if (initialData) {
@@ -51,9 +77,9 @@ export function NewTaskModal({ onClose, onSubmit, initialData, mode = "create" }
       dag_id: "",
     };
   });
-  const [promptImages, setPromptImages] = useState(() => {
+  const [promptImages, setPromptImages] = useState<PromptImageDraft[]>(() => {
     if (initialData?.prompt_images && Array.isArray(initialData.prompt_images)) {
-      return initialData.prompt_images.map((img) => ({
+      return initialData.prompt_images.map((img: PromptImage) => ({
         name: img.name || "image",
         media_type: img.media_type || "image/jpeg",
         data: img.data || "",
@@ -63,9 +89,9 @@ export function NewTaskModal({ onClose, onSubmit, initialData, mode = "create" }
     return [];
   });
   // DAG dependencies: [{task_id, inject_result, _input}] — _input is the text box value
-  const [depRows, setDepRows] = useState(() => {
+  const [depRows, setDepRows] = useState<DepRow[]>(() => {
     if (initialData?.dependencies && Array.isArray(initialData.dependencies)) {
-      return initialData.dependencies.map((dep) => ({
+      return initialData.dependencies.map((dep: TaskDependency) => ({
         task_id: dep.depends_on_task_id,
         inject_result: !!dep.inject_result,
         _input: String(dep.depends_on_task_id),
@@ -75,17 +101,17 @@ export function NewTaskModal({ onClose, onSubmit, initialData, mode = "create" }
   });
   const [scheduledAtError, setScheduledAtError] = useState("");
 
-  const set = (k, v) => setForm((prev) => ({ ...prev, [k]: v }));
+  const set = (k: string, v: unknown) => setForm((prev) => ({ ...prev, [k]: v }));
 
-  const handleImageSelect = (e) => {
+  const handleImageSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files || []);
-    files.forEach((file: any) => {
+    files.forEach((file: File) => {
       const reader = new FileReader();
       reader.onload = (ev) => {
-        const dataUrl = ev.target.result as string; // "data:image/jpeg;base64,..."
+        const dataUrl = ev.target?.result as string; // "data:image/jpeg;base64,..."
         const [meta, data] = dataUrl.split(",");
         const media_type = meta.match(/:(.*?);/)?.[1] || "image/jpeg";
-        setPromptImages((prev) => [
+        setPromptImages((prev: PromptImageDraft[]) => [
           ...prev,
           { name: file.name, media_type, data, preview: dataUrl },
         ]);
@@ -95,7 +121,7 @@ export function NewTaskModal({ onClose, onSubmit, initialData, mode = "create" }
     e.target.value = "";
   };
 
-  const removeImage = (idx) => setPromptImages((prev) => prev.filter((_, i) => i !== idx));
+  const removeImage = (idx: number) => setPromptImages((prev) => prev.filter((_, i) => i !== idx));
 
   const handleSubmit = () => {
     if (!form.prompt.trim()) return;
@@ -103,16 +129,21 @@ export function NewTaskModal({ onClose, onSubmit, initialData, mode = "create" }
 
     // Build depends_on list (only valid numeric IDs)
     const depends_on = depRows
-      .filter((r) => r.task_id)
-      .map((r) => ({ task_id: r.task_id, inject_result: r.inject_result }));
+      .filter((r: DepRow) => r.task_id)
+      .map((r: DepRow) => ({ task_id: r.task_id, inject_result: r.inject_result }));
 
-    const data: any = {
+    const data: Record<string, unknown> = {
       ...form,
       title: form.title || form.prompt.slice(0, 60),
-      delay_seconds: form.schedule_type === "delayed" ? parseInt(form.delay_seconds) || 60 : null,
+      delay_seconds:
+        form.schedule_type === "delayed" ? parseInt(String(form.delay_seconds)) || 60 : null,
       cron_expr: form.schedule_type === "cron" ? form.cron_expr : null,
-      max_runs: form.max_runs ? parseInt(form.max_runs) : null,
-      prompt_images: promptImages.map(({ name, media_type, data }) => ({ name, media_type, data })),
+      max_runs: form.max_runs ? parseInt(String(form.max_runs)) : null,
+      prompt_images: promptImages.map(({ name, media_type, data }: PromptImageDraft) => ({
+        name,
+        media_type,
+        data,
+      })),
       depends_on: mode === "edit" ? depends_on : depends_on.length > 0 ? depends_on : undefined,
       dag_id: form.dag_id || undefined,
     };
@@ -178,7 +209,7 @@ export function NewTaskModal({ onClose, onSubmit, initialData, mode = "create" }
                 marginBottom: promptImages.length ? 8 : 0,
               }}
             >
-              {promptImages.map((img, idx) => (
+              {promptImages.map((img: PromptImageDraft, idx: number) => (
                 <div key={idx} style={{ position: "relative", width: 72, height: 72 }}>
                   <img
                     src={img.preview}
@@ -260,7 +291,7 @@ export function NewTaskModal({ onClose, onSubmit, initialData, mode = "create" }
               {window.electronAPI?.selectDirectory && (
                 <button
                   onClick={async () => {
-                    const dir = await window.electronAPI.selectDirectory();
+                    const dir = await window.electronAPI?.selectDirectory();
                     if (dir) set("working_dir", dir);
                   }}
                   style={{
@@ -375,7 +406,7 @@ export function NewTaskModal({ onClose, onSubmit, initialData, mode = "create" }
             <div style={{ fontSize: 10, color: theme.textDim, marginBottom: 8 }}>
               This task will be blocked until all upstream tasks complete.
             </div>
-            {depRows.map((row, idx) => (
+            {depRows.map((row: DepRow, idx: number) => (
               <div
                 key={idx}
                 style={{ display: "flex", gap: 6, alignItems: "center", marginBottom: 6 }}

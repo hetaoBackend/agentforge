@@ -4,8 +4,9 @@ import { formatTaskDateTime } from "../../dateTime.ts";
 import { ActionBtn, AgentBadge, Tag } from "../../components/common.tsx";
 import { DISPLAY_FONT_STACK, theme } from "../../theme/tokens.ts";
 import { fetchHeartbeatTickOutput } from "../../api/client.ts";
+import type { ActionHandler, Heartbeat, HeartbeatTick } from "../../types.ts";
 
-function HeartbeatBadge({ enabled }) {
+function HeartbeatBadge({ enabled }: { enabled: number | boolean }) {
   return (
     <span
       style={{
@@ -27,8 +28,16 @@ function HeartbeatBadge({ enabled }) {
   );
 }
 
-export function HeartbeatCard({ heartbeat, onAction, onViewDetail }) {
-  const tags = [];
+export function HeartbeatCard({
+  heartbeat,
+  onAction,
+  onViewDetail,
+}: {
+  heartbeat: Heartbeat;
+  onAction: ActionHandler;
+  onViewDetail: (heartbeat: Heartbeat) => void;
+}) {
+  const tags: string[] = [];
   if (heartbeat.schedule_type === "interval" && heartbeat.interval_seconds)
     tags.push(`every ${heartbeat.interval_seconds}s`);
   if (heartbeat.schedule_type === "cron" && heartbeat.cron_expr)
@@ -147,11 +156,19 @@ export function HeartbeatCard({ heartbeat, onAction, onViewDetail }) {
   );
 }
 
-export function HeartbeatDetailPanel({ heartbeat, ticks, onClose }) {
-  const [selectedTickId, setSelectedTickId] = useState<any>(null);
+export function HeartbeatDetailPanel({
+  heartbeat,
+  ticks,
+  onClose,
+}: {
+  heartbeat: Heartbeat;
+  ticks: HeartbeatTick[];
+  onClose: () => void;
+}) {
+  const [selectedTickId, setSelectedTickId] = useState<number | null>(null);
   const [tickOutput, setTickOutput] = useState("");
   const [tickRunning, setTickRunning] = useState(false);
-  const outputRef = useRef<any>(null);
+  const outputRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     setSelectedTickId(ticks[0]?.id || null);
@@ -343,7 +360,7 @@ export function HeartbeatDetailPanel({ heartbeat, ticks, onClose }) {
             Recent Ticks
           </div>
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-            {ticks.map((tick) => {
+            {ticks.map((tick: HeartbeatTick) => {
               let payload = null;
               try {
                 payload = tick.decision_payload ? JSON.parse(tick.decision_payload) : null;

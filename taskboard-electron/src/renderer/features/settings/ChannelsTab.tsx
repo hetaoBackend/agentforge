@@ -1,3 +1,6 @@
+import type { Dispatch, SetStateAction } from "react";
+import type { ChannelsState } from "../../channelsSettings.ts";
+import type { CollapsedChannels, PanelStyles, SaveMessage } from "./types.ts";
 import { TelegramPanel } from "./TelegramPanel.tsx";
 import { SlackPanel } from "./SlackPanel.tsx";
 import { WeixinPanel } from "./WeixinPanel.tsx";
@@ -18,6 +21,18 @@ export function ChannelsTab({
   fieldStyle,
   labelStyle,
   hintStyle,
+}: PanelStyles & {
+  onClose: () => void;
+  channels: ChannelsState;
+  setChannels: Dispatch<SetStateAction<ChannelsState>>;
+  channelsSaving: boolean;
+  channelsMsg: SaveMessage | null;
+  weixinQrSrc: string;
+  weixinActionBusy: boolean;
+  collapsedChannels: CollapsedChannels;
+  setCollapsedChannels: Dispatch<SetStateAction<CollapsedChannels>>;
+  onWeixinAction: (action: string) => void;
+  onSave: () => void;
 }) {
   return (
     <>

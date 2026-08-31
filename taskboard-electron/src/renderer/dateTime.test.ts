@@ -7,7 +7,7 @@ import {
 } from "./dateTime.ts";
 
 test("parseTaskDateTime keeps naive timestamps in local wall time", () => {
-  const parsed = parseTaskDateTime("2026-03-19T18:04:00");
+  const parsed = parseTaskDateTime("2026-03-19T18:04:00")!;
 
   expect(parsed.getFullYear()).toBe(2026);
   expect(parsed.getMonth()).toBe(2);

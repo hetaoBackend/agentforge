@@ -5,7 +5,7 @@
  * because Tooltip and Badge are their only callers.
  */
 
-import { useState, useEffect, useRef, type CSSProperties } from "react";
+import { useState, useEffect, useRef, type CSSProperties, type ReactNode } from "react";
 import type { LucideIcon } from "lucide-react";
 import { DISPLAY_FONT_STACK, MONO_FONT_STACK, theme } from "../theme/tokens.ts";
 import { AGENTS } from "../constants.ts";
@@ -30,7 +30,7 @@ export function getStatusConfig() {
   };
 }
 
-export function Tooltip({ text, children }) {
+export function Tooltip({ text, children }: { text: ReactNode; children: ReactNode }) {
   const [visible, setVisible] = useState(false);
   const [position, setPosition] = useState<{
     arrowLeft: number;
@@ -235,7 +235,17 @@ export function IconWell({
   );
 }
 
-export function HeaderButton({ children, onClick, title, active = false }) {
+export function HeaderButton({
+  children,
+  onClick,
+  title,
+  active = false,
+}: {
+  children: ReactNode;
+  onClick: () => void;
+  title: string;
+  active?: boolean;
+}) {
   return (
     <Tooltip text={title}>
       <button
@@ -262,7 +272,17 @@ export function HeaderButton({ children, onClick, title, active = false }) {
   );
 }
 
-export function StatusPill({ connected, label, tone = theme.green, background = theme.greenBg }) {
+export function StatusPill({
+  connected,
+  label,
+  tone = theme.green,
+  background = theme.greenBg,
+}: {
+  connected: boolean;
+  label: string;
+  tone?: string;
+  background?: string;
+}) {
   const activeTone = connected ? tone : theme.red;
   const activeBackground = connected ? background : theme.redBg;
 
@@ -296,7 +316,15 @@ export function StatusPill({ connected, label, tone = theme.green, background = 
   );
 }
 
-export function MetricTile({ label, value, tone = theme.text }) {
+export function MetricTile({
+  label,
+  value,
+  tone = theme.text,
+}: {
+  label: string;
+  value: ReactNode;
+  tone?: string;
+}) {
   return (
     <div
       style={{
@@ -324,8 +352,9 @@ export function MetricTile({ label, value, tone = theme.text }) {
   );
 }
 
-export function Badge({ status }) {
-  const cfg = getStatusConfig()[status] || getStatusConfig().pending;
+export function Badge({ status }: { status: string }) {
+  const config = getStatusConfig();
+  const cfg = config[status as keyof typeof config] || config.pending;
   return (
     <span
       style={{
@@ -355,7 +384,7 @@ export function Badge({ status }) {
   );
 }
 
-export function Tag({ children }) {
+export function Tag({ children }: { children: ReactNode }) {
   return (
     <span
       style={{
@@ -373,8 +402,8 @@ export function Tag({ children }) {
   );
 }
 
-export function AgentBadge({ agent }) {
-  const cfg = AGENTS[agent] || AGENTS.claude;
+export function AgentBadge({ agent }: { agent: string }) {
+  const cfg = AGENTS[agent as keyof typeof AGENTS] || AGENTS.claude;
   return (
     <span
       style={{
@@ -412,7 +441,17 @@ export function AgentBadge({ agent }) {
   );
 }
 
-export function ActionBtn({ icon, title, onClick, color }) {
+export function ActionBtn({
+  icon,
+  title,
+  onClick,
+  color,
+}: {
+  icon: LucideIcon;
+  title: string;
+  onClick: () => void;
+  color: string;
+}) {
   const [hovered, setHovered] = useState(false);
   return (
     <button

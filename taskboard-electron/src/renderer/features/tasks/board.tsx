@@ -3,8 +3,18 @@ import { GitFork, Pencil, RotateCcw, Square, Trash2 } from "lucide-react";
 import { formatTaskDateTime, formatTaskTime } from "../../dateTime.ts";
 import { ActionBtn, AgentBadge, Badge, IconWell, Tag } from "../../components/common.tsx";
 import { DISPLAY_FONT_STACK, MONO_FONT_STACK, theme } from "../../theme/tokens.ts";
+import type { BoardColumn } from "../../constants.ts";
+import type { ActionHandler, Task, TaskDependency } from "../../types.ts";
 
-export function TaskCard({ task, onAction, onViewDetail }) {
+export function TaskCard({
+  task,
+  onAction,
+  onViewDetail,
+}: {
+  task: Task;
+  onAction: ActionHandler;
+  onViewDetail: (task: Task) => void;
+}) {
   const [hovered, setHovered] = useState(false);
   const tags = task.tags ? task.tags.split(",").filter(Boolean) : [];
 
@@ -160,12 +170,13 @@ export function TaskCard({ task, onAction, onViewDetail }) {
 
         {task.status === "blocked" && task.dependencies && task.dependencies.length > 0 && (
           <div style={{ fontSize: 10, color: theme.textDim, fontFamily: MONO_FONT_STACK }}>
-            waiting for {task.dependencies.map((d) => `#${d.depends_on_task_id}`).join(", ")}
+            waiting for{" "}
+            {task.dependencies.map((d: TaskDependency) => `#${d.depends_on_task_id}`).join(", ")}
           </div>
         )}
         {task.dependents && task.dependents.length > 0 && task.status === "completed" && (
           <div style={{ fontSize: 10, color: theme.textDim, fontFamily: MONO_FONT_STACK }}>
-            unlocks {task.dependents.map((id) => `#${id}`).join(", ")}
+            unlocks {task.dependents.map((id: number) => `#${id}`).join(", ")}
           </div>
         )}
         {task.dag_id && (
@@ -185,7 +196,17 @@ export function TaskCard({ task, onAction, onViewDetail }) {
   );
 }
 
-export function Column({ col, tasks, onAction, onViewDetail }) {
+export function Column({
+  col,
+  tasks,
+  onAction,
+  onViewDetail,
+}: {
+  col: BoardColumn;
+  tasks: Task[];
+  onAction: ActionHandler;
+  onViewDetail: (task: Task) => void;
+}) {
   const iconColor = theme[col.tone] || theme.accent;
   const iconBackground = theme[`${col.tone}Bg`] || theme.field;
 

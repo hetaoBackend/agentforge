@@ -1,3 +1,5 @@
+import type { ChannelsSavePayload, ChannelsStatusUpdate } from "../../channelsSettings.ts";
+import type { FeishuSettings, SaveMessage } from "./types.ts";
 import { GeneralTab } from "./GeneralTab.tsx";
 import { ChannelsTab } from "./ChannelsTab.tsx";
 import { FeishuTab } from "./FeishuTab.tsx";
@@ -32,9 +34,21 @@ export function SettingsModal({
   onFeishuSave,
   channelsStatus: initialChannelsStatus,
   onChannelsSave,
+}: {
+  onClose: () => void;
+  timeout?: number | string;
+  defaultAgent?: string;
+  onSave: (timeout: number, defaultAgent: string) => void;
+  feishu?: Partial<FeishuSettings>;
+  onFeishuSave?: (settings: FeishuSettings) => void;
+  channelsStatus?: ChannelsStatusUpdate;
+  onChannelsSave?: (payload: ChannelsSavePayload) => void;
 }) {
   const [tab, setTab] = useState("general");
-  const [timeout, setTimeout] = useState(initialTimeout ?? DEFAULT_TIMEOUT_SECONDS);
+  // The number input writes back a raw string, so this holds either form.
+  const [timeout, setTimeout] = useState<string | number>(
+    initialTimeout ?? DEFAULT_TIMEOUT_SECONDS,
+  );
   const [defaultAgent, setDefaultAgent] = useState(initialDefaultAgent ?? DEFAULT_AGENT);
   const [skillEnabled, setSkillEnabled] = useState(false);
   const [skillSweepAgent, setSkillSweepAgent] = useState(DEFAULT_AGENT);
@@ -48,10 +62,10 @@ export function SettingsModal({
     ...initialFeishu,
   });
   const [feishuSaving, setFeishuSaving] = useState(false);
-  const [feishuMsg, setFeishuMsg] = useState<any>(null); // {ok, text}
+  const [feishuMsg, setFeishuMsg] = useState<SaveMessage | null>(null);
   const [channels, setChannels] = useState(createInitialChannelsState(initialChannelsStatus));
   const [channelsSaving, setChannelsSaving] = useState(false);
-  const [channelsMsg, setChannelsMsg] = useState<any>(null);
+  const [channelsMsg, setChannelsMsg] = useState<SaveMessage | null>(null);
   const [weixinQrSrc, setWeixinQrSrc] = useState("");
   const [weixinActionBusy, setWeixinActionBusy] = useState(false);
   const [collapsedChannels, setCollapsedChannels] = useState({
@@ -76,7 +90,7 @@ export function SettingsModal({
     refreshChannels(false); // initial load: full merge to populate fields
     const intervalId = setInterval(refreshChannels, 2000); // polling: preserve edits
     fetchFeishuSettings().then((s) => {
-      if (s && Object.keys(s).length) setFeishu((f) => ({ ...f, ...s }));
+      if (s && Object.keys(s).length) setFeishu((f: FeishuSettings) => ({ ...f, ...s }));
     });
     fetchSettings().then((s) => {
       if (s && typeof s === "object") {
@@ -113,10 +127,10 @@ export function SettingsModal({
       margin: 2,
       width: 440,
     })
-      .then((dataUrl) => {
+      .then((dataUrl: string) => {
         if (!cancelled) setWeixinQrSrc(dataUrl);
       })
-      .catch((error) => {
+      .catch((error: unknown) => {
         console.error("Failed to generate Weixin QR code", error);
         if (!cancelled) setWeixinQrSrc("");
       });
@@ -126,7 +140,7 @@ export function SettingsModal({
     };
   }, [channels.weixin?.qr_code_url]);
 
-  const handleWeixinAction = async (action) => {
+  const handleWeixinAction = async (action: string) => {
     setWeixinActionBusy(true);
     setChannelsMsg(null);
     try {
@@ -147,13 +161,13 @@ export function SettingsModal({
 
   const handleSaveGeneral = async () => {
     await updateSettings({
-      timeout: parseInt(timeout) || DEFAULT_TIMEOUT_SECONDS,
+      timeout: parseInt(String(timeout)) || DEFAULT_TIMEOUT_SECONDS,
       default_agent: defaultAgent,
       skill_library_enabled: skillEnabled ? "1" : "0",
       skill_sweep_agent: skillSweepAgent,
       skill_sweep_cron: skillSweepCron,
     });
-    onSave(parseInt(timeout) || DEFAULT_TIMEOUT_SECONDS, defaultAgent);
+    onSave(parseInt(String(timeout)) || DEFAULT_TIMEOUT_SECONDS, defaultAgent);
     onClose();
   };
 
@@ -236,7 +250,7 @@ export function SettingsModal({
                 color: tab === t ? theme.text : theme.textMuted,
               }}
             >
-              {tabLabel[t]}
+              {tabLabel[t as keyof typeof tabLabel]}
             </button>
           ))}
         </div>

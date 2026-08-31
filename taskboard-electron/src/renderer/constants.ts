@@ -29,6 +29,8 @@ export const COLUMNS = [
   },
 ];
 
+export type BoardColumn = (typeof COLUMNS)[number];
+
 export const AGENTS = {
   claude: { label: "Claude Code", icon: "C", color: "#ff9f0a" },
   codex: { label: "Codex CLI", icon: "X", color: "#00c7be" },

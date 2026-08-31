@@ -1,3 +1,5 @@
+import type { Dispatch, SetStateAction } from "react";
+import type { FeishuSettings, PanelStyles, SaveMessage } from "./types.ts";
 import { theme } from "../../theme/tokens.ts";
 
 export function FeishuTab({
@@ -10,6 +12,13 @@ export function FeishuTab({
   fieldStyle,
   labelStyle,
   hintStyle,
+}: PanelStyles & {
+  onClose: () => void;
+  feishu: FeishuSettings;
+  setFeishu: Dispatch<SetStateAction<FeishuSettings>>;
+  feishuSaving: boolean;
+  feishuMsg: SaveMessage | null;
+  onSave: () => void;
 }) {
   return (
     <>

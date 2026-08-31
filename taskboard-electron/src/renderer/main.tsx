@@ -5,7 +5,7 @@ import { installElectrobunBridge } from "./electrobunBridge.ts";
 
 installElectrobunBridge();
 
-createRoot(document.getElementById("root")).render(
+createRoot(document.getElementById("root")!).render(
   <StrictMode>
     <App />
   </StrictMode>,

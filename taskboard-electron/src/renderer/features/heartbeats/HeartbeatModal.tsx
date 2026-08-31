@@ -11,6 +11,7 @@ import {
   uiField,
   uiLabel,
 } from "../../theme/styles.ts";
+import type { Heartbeat } from "../../types.ts";
 
 export function HeartbeatModal({
   onClose,
@@ -18,7 +19,13 @@ export function HeartbeatModal({
   initialData,
   defaultAgent,
   mode = "create",
-}: any) {
+}: {
+  onClose: () => void;
+  onSubmit: (data: Record<string, unknown>) => void;
+  initialData?: Partial<Heartbeat> | null;
+  defaultAgent?: string;
+  mode?: "create" | "edit";
+}) {
   const savedDir = localStorage.getItem("agentforge_working_dir") || "~/papers";
   const [form, setForm] = useState(() => ({
     name: initialData?.name || "",
@@ -33,7 +40,7 @@ export function HeartbeatModal({
     enabled: initialData?.enabled ?? true,
   }));
 
-  const set = (k, v) => setForm((prev) => ({ ...prev, [k]: v }));
+  const set = (k: string, v: unknown) => setForm((prev) => ({ ...prev, [k]: v }));
 
   const inputStyle = uiField();
   const labelStyle = uiLabel();
@@ -44,8 +51,8 @@ export function HeartbeatModal({
       ...form,
       name: form.name || "Untitled heartbeat",
       interval_seconds:
-        form.schedule_type === "interval" ? parseInt(form.interval_seconds) || 600 : null,
-      cooldown_seconds: parseInt(form.cooldown_seconds) || 0,
+        form.schedule_type === "interval" ? parseInt(String(form.interval_seconds)) || 600 : null,
+      cooldown_seconds: parseInt(String(form.cooldown_seconds)) || 0,
       cron_expr: form.schedule_type === "cron" ? form.cron_expr : null,
     });
   };
@@ -80,7 +87,7 @@ export function HeartbeatModal({
               {window.electronAPI?.selectDirectory && (
                 <button
                   onClick={async () => {
-                    const dir = await window.electronAPI.selectDirectory();
+                    const dir = await window.electronAPI?.selectDirectory();
                     if (dir) set("working_dir", dir);
                   }}
                   style={{

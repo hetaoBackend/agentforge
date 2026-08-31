@@ -1,3 +1,4 @@
+import type { PanelStyles } from "./types.ts";
 import { theme } from "../../theme/tokens.ts";
 import { primaryButton, secondaryButton } from "../../theme/styles.ts";
 
@@ -17,6 +18,19 @@ export function GeneralTab({
   fieldStyle,
   labelStyle,
   hintStyle,
+}: PanelStyles & {
+  onClose: () => void;
+  timeout: number | string;
+  setTimeout: (value: string) => void;
+  defaultAgent: string;
+  setDefaultAgent: (value: string) => void;
+  skillEnabled: boolean;
+  setSkillEnabled: (value: boolean) => void;
+  skillSweepAgent: string;
+  setSkillSweepAgent: (value: string) => void;
+  skillSweepCron: string;
+  setSkillSweepCron: (value: string) => void;
+  onSave: () => void;
 }) {
   return (
     <>

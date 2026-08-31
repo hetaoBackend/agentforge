@@ -1,3 +1,6 @@
+import type { Dispatch, SetStateAction } from "react";
+import type { ChannelsState } from "../../channelsSettings.ts";
+import type { CollapsedChannels, PanelStyles } from "./types.ts";
 import { theme } from "../../theme/tokens.ts";
 
 export function WeixinPanel({
@@ -11,6 +14,14 @@ export function WeixinPanel({
   fieldStyle,
   labelStyle,
   hintStyle,
+}: PanelStyles & {
+  channels: ChannelsState;
+  setChannels: Dispatch<SetStateAction<ChannelsState>>;
+  collapsedChannels: CollapsedChannels;
+  setCollapsedChannels: Dispatch<SetStateAction<CollapsedChannels>>;
+  weixinQrSrc: string;
+  weixinActionBusy: boolean;
+  onWeixinAction: (action: string) => void;
 }) {
   const ch = channels.weixin;
   const collapsed = collapsedChannels.weixin;
@@ -22,9 +33,15 @@ export function WeixinPanel({
     error: "Error",
   };
   const statusDot = ch.running
-    ? { bg: theme.green, label: statusLabelMap[ch.login_status] || "Connected" }
+    ? {
+        bg: theme.green,
+        label: statusLabelMap[ch.login_status as keyof typeof statusLabelMap] || "Connected",
+      }
     : ch.login_status === "waiting_for_scan" || ch.login_status === "scanned"
-      ? { bg: theme.orange || "#f59e0b", label: statusLabelMap[ch.login_status] }
+      ? {
+          bg: theme.orange || "#f59e0b",
+          label: statusLabelMap[ch.login_status as keyof typeof statusLabelMap],
+        }
       : ch.login_status === "error"
         ? { bg: theme.red, label: "Error" }
         : ch.configured
@@ -255,7 +272,7 @@ export function WeixinPanel({
                   marginBottom: ch.qr_code_url ? 10 : 0,
                 }}
               >
-                {statusLabelMap[ch.login_status] || "Idle"}
+                {statusLabelMap[ch.login_status as keyof typeof statusLabelMap] || "Idle"}
                 {ch.user_id ? ` · ${ch.user_id}` : ""}
               </div>
               {ch.account_id && (

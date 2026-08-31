@@ -1,3 +1,6 @@
+import type { Dispatch, SetStateAction } from "react";
+import type { ChannelsState } from "../../channelsSettings.ts";
+import type { CollapsedChannels, PanelStyles } from "./types.ts";
 import { theme } from "../../theme/tokens.ts";
 
 export function SlackPanel({
@@ -8,6 +11,11 @@ export function SlackPanel({
   fieldStyle,
   labelStyle,
   hintStyle,
+}: PanelStyles & {
+  channels: ChannelsState;
+  setChannels: Dispatch<SetStateAction<ChannelsState>>;
+  collapsedChannels: CollapsedChannels;
+  setCollapsedChannels: Dispatch<SetStateAction<CollapsedChannels>>;
 }) {
   const ch = channels.slack;
   const collapsed = collapsedChannels.slack;

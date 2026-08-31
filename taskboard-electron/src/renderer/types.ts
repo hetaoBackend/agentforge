@@ -33,6 +33,30 @@ export interface Task {
   agent: string;
   question: string | null;
   answer: string | null;
+  session_id?: string | null;
+  dag_id?: string | null;
+  image_paths?: string[];
+  prompt_images?: PromptImage[];
+  feishu_root_msg_id?: string | null;
+  /** Only present on the task-detail payload, which joins the dependency graph. */
+  dependencies?: TaskDependency[];
+  /** Only present on the task-detail payload: ids of tasks this one unblocks. */
+  dependents?: number[];
+}
+
+export interface PromptImage {
+  media_type: string;
+  data: string;
+  name?: string;
+}
+
+export interface TaskDependency {
+  id?: number;
+  task_id: number;
+  depends_on_task_id: number;
+  inject_result?: number | boolean;
+  depends_on_title?: string;
+  depends_on_status?: string;
 }
 
 export interface TaskRun {
@@ -85,4 +109,72 @@ declare global {
   interface Window {
     electronAPI?: DesktopBridgeAPI;
   }
+}
+
+/** Board/heartbeat card action dispatched up to App. */
+export type ActionHandler = (action: string, id: number) => void;
+
+export interface HeartbeatTick {
+  id: number;
+  heartbeat_id: number;
+  started_at: string;
+  finished_at: string | null;
+  status: string;
+  decision_type: string | null;
+  decision_payload: string | null;
+  task_id: number | null;
+  raw_output: string | null;
+  error: string | null;
+}
+
+export interface Skill {
+  id: number;
+  name: string;
+  description: string;
+  path: string;
+  source_pattern_key: string | null;
+  source_task_ids: string | null;
+  kind: string | null;
+  enabled: number | boolean;
+  created_at: string;
+}
+
+export interface SkillPattern {
+  id: number;
+  pattern_key: string;
+  kind: string;
+  summary: string;
+  recurrence_count: number;
+  first_seen: string;
+  last_seen: string;
+  contributing_task_ids: string;
+  contributing_run_ids: string;
+  status: string;
+  promoted_skill_id: number | null;
+  created_at: string;
+  updated_at: string;
+  /** Joined from skill_drafts when a distilled SKILL.md exists for this pattern. */
+  draft_status?: string | null;
+  draft_body?: string | null;
+  draft_error?: string | null;
+  draft_worthy?: boolean | null;
+  draft_worthiness_reason?: string | null;
+}
+
+/** Sweep progress reported alongside the pattern list. */
+export interface SkillSweepState {
+  running?: boolean;
+  last?: {
+    agent?: string;
+    scanned?: number;
+    new?: number;
+    candidates?: number;
+    error?: string | null;
+  } | null;
+}
+
+/** Payload of the skills view: patterns plus the last sweep summary. */
+export interface SkillData {
+  patterns?: SkillPattern[];
+  sweep?: SkillSweepState;
 }

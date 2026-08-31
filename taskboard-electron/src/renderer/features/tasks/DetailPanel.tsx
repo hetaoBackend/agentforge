@@ -1,12 +1,21 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { formatTaskDateTime } from "../../dateTime.ts";
 import { ExecutionTimeline, FormattedOutput } from "../../components/output.tsx";
 import { DEFAULT_AGENT } from "../../constants.ts";
 import { Badge } from "../../components/common.tsx";
 import { theme } from "../../theme/tokens.ts";
 import { API, fetchTaskEvents, fetchTaskMessages, resumeTask } from "../../api/client.ts";
+import type { PromptImage, Task, TaskDependency } from "../../types.ts";
 
-export function DetailPanel({ task, onClose, onResume }: any) {
+export function DetailPanel({
+  task,
+  onClose,
+  onResume,
+}: {
+  task: Task;
+  onClose: () => void;
+  onResume: () => void;
+}) {
   // `task` is always truthy here — the only caller renders this inside
   // `{detail && <DetailPanel task={... || detail} />}`. Hooks must stay
   // unconditional, so do not early-return before them.
@@ -19,9 +28,9 @@ export function DetailPanel({ task, onClose, onResume }: any) {
   const [showMessages, setShowMessages] = useState(false);
   const [showEvents, setShowEvents] = useState(false);
   const [showLiveOutput, setShowLiveOutput] = useState(true);
-  const liveOutputRef = useRef<any>(null);
-  const messagesRef = useRef<any>(null);
-  const eventsRef = useRef<any>(null);
+  const liveOutputRef = useRef<HTMLDivElement | null>(null);
+  const messagesRef = useRef<HTMLDivElement | null>(null);
+  const eventsRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     if (task.status !== "running") {
@@ -195,7 +204,7 @@ export function DetailPanel({ task, onClose, onResume }: any) {
               Attached Images ({task.prompt_images.length})
             </div>
             <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
-              {task.prompt_images.map((img, i) => (
+              {task.prompt_images.map((img: PromptImage, i: number) => (
                 <img
                   key={i}
                   src={`data:${img.media_type};base64,${img.data}`}
@@ -233,7 +242,7 @@ export function DetailPanel({ task, onClose, onResume }: any) {
       {/* DAG dependency info */}
       {task.dependencies && task.dependencies.length > 0 && (
         <Section title="Upstream Dependencies">
-          {task.dependencies.map((dep) => (
+          {task.dependencies.map((dep: TaskDependency) => (
             <div
               key={dep.id}
               style={{
@@ -276,7 +285,7 @@ export function DetailPanel({ task, onClose, onResume }: any) {
       {task.dependents && task.dependents.length > 0 && (
         <Section title="Downstream Tasks">
           <div style={{ fontSize: 12, color: theme.textMuted, fontFamily: "monospace" }}>
-            {task.dependents.map((id) => `#${id}`).join(", ")}
+            {task.dependents.map((id: number) => `#${id}`).join(", ")}
           </div>
         </Section>
       )}
@@ -656,7 +665,7 @@ export function DetailPanel({ task, onClose, onResume }: any) {
   );
 }
 
-function Section({ title, children }) {
+function Section({ title, children }: { title: ReactNode; children: ReactNode }) {
   return (
     <div style={{ marginBottom: 20 }}>
       <div
@@ -676,7 +685,7 @@ function Section({ title, children }) {
   );
 }
 
-function InfoRow({ label, value }) {
+function InfoRow({ label, value }: { label: string; value: ReactNode }) {
   return (
     <div
       style={{

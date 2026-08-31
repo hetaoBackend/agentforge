@@ -6,21 +6,41 @@
  * prop (shadowing the module binding) exactly as it did before.
  */
 
-import { useState } from "react";
+import { useState, type CSSProperties } from "react";
 import { theme } from "../theme/tokens.ts";
 import { formatTaskTime } from "../dateTime.ts";
-import { buildExecutionSteps } from "../traceSteps.ts";
+import {
+  buildExecutionSteps,
+  buildTraceRows,
+  type ExecutionStep,
+  type TraceEventInput,
+  type TraceRow,
+} from "../traceSteps.ts";
 
 // ─── Formatted Output Component ───
-export function FormattedOutput({ content, theme }) {
+interface ParsedLine {
+  type: string;
+  text?: string;
+  style?: CSSProperties;
+  /** Only set for inline base64 images extracted from the stream. */
+  src?: string;
+}
+
+export function FormattedOutput({
+  content,
+  theme,
+}: {
+  content: string | null | undefined;
+  theme: Record<string, string>;
+}) {
   if (!content) return null;
 
   // Parse the JSON stream and render only the useful signal.
-  const parseStreamJSON = (text) => {
+  const parseStreamJSON = (text: string): ParsedLine[] => {
     const lines = text.split("\n");
-    const parsedLines = [];
+    const parsedLines: ParsedLine[] = [];
 
-    lines.forEach((line) => {
+    lines.forEach((line: string) => {
       if (!line.trim()) return;
 
       try {
@@ -83,7 +103,7 @@ export function FormattedOutput({ content, theme }) {
                       tool_use_id: c.tool_use_id,
                       content: Array.isArray(c.content)
                         ? c.content
-                            .map((part) =>
+                            .map((part: any) =>
                               part && part.type === "text" ? part.text || "" : JSON.stringify(part),
                             )
                             .join("")
@@ -192,10 +212,10 @@ export function FormattedOutput({ content, theme }) {
                 if (msg.content && Array.isArray(msg.content)) {
                   const textContent = msg.content
                     .filter(
-                      (c) =>
+                      (c: any) =>
                         typeof c === "string" || (c && typeof c === "object" && c.type === "text"),
                     )
-                    .map((c) => (typeof c === "string" ? c : c.text || ""))
+                    .map((c: any) => (typeof c === "string" ? c : c.text || ""))
                     .join("");
                   if (textContent.trim()) {
                     displayText = textContent.slice(0, 200);
@@ -285,7 +305,7 @@ export function FormattedOutput({ content, theme }) {
   );
 }
 
-export function ExecutionTimeline({ events }) {
+export function ExecutionTimeline({ events }: { events: TraceEventInput[] | null | undefined }) {
   const [expanded, setExpanded] = useState(true);
   const steps = buildExecutionSteps(events);
 
@@ -332,7 +352,7 @@ export function ExecutionTimeline({ events }) {
           </span>
         </span>
         <span style={{ color: theme.textDim, fontSize: 10, whiteSpace: "nowrap" }}>
-          {events.length} events
+          {events?.length ?? 0} events
         </span>
       </button>
 
@@ -351,7 +371,7 @@ export function ExecutionTimeline({ events }) {
   );
 }
 
-function ExecutionTimelineStep({ step, isLast }) {
+function ExecutionTimelineStep({ step, isLast }: { step: ExecutionStep; isLast: boolean }) {
   const config = getExecutionStepConfig(step.type);
   const detail = (step.detail || "").trim();
   const hasRows = step.rows && step.rows.length > 0;
@@ -472,7 +492,7 @@ function ExecutionTimelineStep({ step, isLast }) {
               overflow: "auto",
             }}
           >
-            {step.rows.map((row, i) => (
+            {step.rows.map((row: TraceRow, i: number) => (
               <div
                 key={i}
                 style={{ display: "grid", gridTemplateColumns: "72px 1fr", gap: 8, minWidth: 0 }}
@@ -514,7 +534,7 @@ function ExecutionTimelineStep({ step, isLast }) {
   );
 }
 
-function getExecutionStepConfig(type) {
+function getExecutionStepConfig(type: string) {
   switch (type) {
     case "thinking":
       return { label: "Thinking", icon: "⌁", color: theme.textMuted, bg: "rgba(107,107,138,0.08)" };
@@ -543,71 +563,4 @@ function getExecutionStepConfig(type) {
     default:
       return { label: "Event", icon: "•", color: theme.textMuted, bg: "rgba(107,107,138,0.08)" };
   }
-}
-
-function formatTraceValue(value) {
-  if (value === undefined || value === null) return "";
-  if (typeof value === "string") return value;
-  return JSON.stringify(value, null, 2);
-}
-
-function buildTraceRows(eventType, payload, rawContent) {
-  const row = (label, value) => {
-    const formatted = formatTraceValue(value);
-    return formatted === "" ? null : { label, value: formatted };
-  };
-  const compact = (rows) => rows.filter(Boolean);
-
-  if (eventType === "tool_call") {
-    const name = payload.server
-      ? `${payload.server}.${payload.name || payload.tool || "unknown"}`
-      : payload.name || payload.tool || "unknown";
-    return compact([
-      row("Tool", name),
-      row("Input", payload.input || payload.arguments),
-      row("Result", payload.result),
-      row("Status", payload.status),
-      row("Error", payload.error),
-    ]);
-  }
-
-  if (eventType === "tool_result") {
-    return compact([
-      row(payload.is_error ? "Tool Error" : "Tool Result", payload.tool_use_id || "result"),
-      row("Content", payload.content),
-    ]);
-  }
-
-  if (eventType === "command_execution") {
-    return compact([
-      row("Command", payload.command),
-      row("Output", payload.output),
-      row("Exit", payload.exit_code),
-      row("Status", payload.status),
-    ]);
-  }
-
-  if (eventType === "file_change") {
-    const changes = Array.isArray(payload.changes)
-      ? payload.changes
-          .map((change) => {
-            if (!change || typeof change !== "object") return formatTraceValue(change);
-            const kind = change.kind || change.type || "changed";
-            const path = change.path || change.file || "";
-            return path ? `${kind}: ${path}` : kind;
-          })
-          .join("\n")
-      : payload.changes;
-    return compact([row("Changes", changes), row("Status", payload.status)]);
-  }
-
-  if (eventType === "web_search") {
-    return compact([
-      row("Query", payload.query),
-      row("Action", payload.action),
-      row("Status", payload.status),
-    ]);
-  }
-
-  return [{ label: eventType, value: rawContent }];
 }
