@@ -31,7 +31,6 @@ import path from "node:path";
 
 import {
   Channel,
-  InboundMessageType,
   MessageBus,
   OutboundMessageType,
   type InboundMessage,
@@ -50,16 +49,6 @@ import {
   type SettingsDB,
 } from "./agent_utils.ts";
 import {
-  build_brief_payload,
-  build_runbook_payload,
-  format_brief_created_reply,
-  format_brief_discarded_reply,
-  format_brief_help,
-  format_brief_started_reply,
-  format_runbook_brief_reply,
-  format_runbook_created_reply,
-  format_skill_suggestion_action_reply,
-  format_skill_suggestion_help,
   parse_brief_command,
   parse_runbook_fallback,
   parse_skill_suggestion_command,
@@ -67,6 +56,22 @@ import {
   type ParsedRunbookCommand,
   type SkillSuggestionCommand,
 } from "./brief_utils.ts";
+import {
+  handle_brief_command,
+  handle_runbook_command,
+  handle_skill_suggestion_command,
+  type ChannelCommandContext,
+  type TaskCommandContext,
+} from "./command_handlers.ts";
+
+/** The originating-message fields the shared command flows need. */
+interface WeixinCommandSource {
+  account_id: string;
+  peer_id: string;
+  context_token: string;
+  message_id: string;
+  peer_key: string;
+}
 import { handle_dir_command, resolve_working_dir } from "./dir_utils.ts";
 import { is_plain_object } from "./path_utils.ts";
 
@@ -703,98 +708,10 @@ export class WeixinChannel extends Channel {
       peer_key: string;
     },
   ): Promise<void> {
-    if (command.action === "help") {
-      this._reply_to_event(event, format_brief_help(command.reason));
-      return;
-    }
-    if (!this.scheduler.handle_inbound_message) {
-      this._reply_to_event(
-        event,
-        "❌ Draft task flow is not available in this scheduler.",
-      );
-      return;
-    }
-
-    const metadata = this._brief_source_metadata(source);
-    const source_ref = source.message_id || source.peer_key;
-    try {
-      if (command.action === "create") {
-        const payload = build_brief_payload({
-          channel: "weixin",
-          goal: command.goal,
-          source_ref,
-          source_metadata: metadata,
-          working_dir: await resolve_working_dir(
-            command.goal,
-            "weixin",
-            this.db,
-          ),
-          agent: resolve_agent("weixin", this.db),
-        });
-        const result = this.scheduler.handle_inbound_message(
-          this._make_inbound(
-            InboundMessageType.CREATE_BRIEF,
-            payload,
-            source.peer_id,
-            metadata,
-          ),
-        );
-        const brief_id = Number(result["brief_id"]);
-        this._reply_to_event(
-          event,
-          format_brief_created_reply(brief_id, String(payload["title"])),
-        );
-        return;
-      }
-
-      if (command.action === "confirm") {
-        const result = this.scheduler.handle_inbound_message(
-          this._make_inbound(
-            InboundMessageType.CONFIRM_BRIEF,
-            { brief_id: command.brief_id },
-            source.peer_id,
-            metadata,
-          ),
-        );
-        const task_id = Number(result["task_id"]);
-        if (!Number.isInteger(task_id) || task_id <= 0) {
-          this._reply_to_event(event, "❌ Draft task confirmation failed.");
-          return;
-        }
-
-        this._task_origin.set(task_id, {
-          account_id: source.account_id,
-          peer_id: source.peer_id,
-          context_token: source.context_token,
-          message_id: source.message_id,
-        });
-        this._remember_task_source(task_id);
-        this._set_peer_current_task(source.peer_key, task_id);
-        this._reply_to_event(
-          event,
-          format_brief_started_reply(command.brief_id, task_id),
-        );
-        return;
-      }
-
-      const result = this.scheduler.handle_inbound_message(
-        this._make_inbound(
-          InboundMessageType.DISCARD_BRIEF,
-          { brief_id: command.brief_id },
-          source.peer_id,
-          metadata,
-        ),
-      );
-      this._reply_to_event(
-        event,
-        format_brief_discarded_reply(Number(result["brief_id"])),
-      );
-    } catch (exc) {
-      this._reply_to_event(
-        event,
-        `❌ ${exc instanceof Error ? exc.message : String(exc)}`,
-      );
-    }
+    await handle_brief_command(
+      this._task_command_context(event, source),
+      command,
+    );
   }
 
   async _handle_runbook_command(
@@ -808,67 +725,10 @@ export class WeixinChannel extends Channel {
       peer_key: string;
     },
   ): Promise<void> {
-    if (!this.scheduler.handle_inbound_message) {
-      this._reply_to_event(
-        event,
-        "❌ Custom command flow is not available in this scheduler.",
-      );
-      return;
-    }
-
-    const metadata = this._brief_source_metadata(source);
-    const source_ref = source.message_id || source.peer_key;
-    try {
-      const payload = build_runbook_payload({
-        channel: "weixin",
-        command,
-        source_ref,
-        source_metadata: metadata,
-        working_dir: await resolve_working_dir(
-          command.raw_args || command.name,
-          "weixin",
-          this.db,
-        ),
-        agent: resolve_agent("weixin", this.db),
-      });
-      const result = this.scheduler.handle_inbound_message(
-        this._make_inbound(
-          InboundMessageType.RUN_RUNBOOK,
-          payload,
-          source.peer_id,
-          metadata,
-        ),
-      );
-      if (result["status"] === "created") {
-        const task_id = Number(result["task_id"]);
-        this._task_origin.set(task_id, {
-          account_id: source.account_id,
-          peer_id: source.peer_id,
-          context_token: source.context_token,
-          message_id: source.message_id,
-        });
-        this._remember_task_source(task_id);
-        this._set_peer_current_task(source.peer_key, task_id);
-        this._reply_to_event(
-          event,
-          format_runbook_created_reply(task_id, command.name),
-        );
-        return;
-      }
-      if (result["status"] === "draft") {
-        this._reply_to_event(
-          event,
-          format_runbook_brief_reply(Number(result["brief_id"]), command.name),
-        );
-        return;
-      }
-      this._reply_to_event(event, "❌ Custom command failed.");
-    } catch (exc) {
-      this._reply_to_event(
-        event,
-        `❌ ${exc instanceof Error ? exc.message : String(exc)}`,
-      );
-    }
+    await handle_runbook_command(
+      this._task_command_context(event, source),
+      command,
+    );
   }
 
   async _handle_skill_suggestion_command(
@@ -882,41 +742,59 @@ export class WeixinChannel extends Channel {
       peer_key: string;
     },
   ): Promise<void> {
-    if (command.action === "help") {
-      this._reply_to_event(event, format_skill_suggestion_help(command.reason));
-      return;
-    }
-    if (!this.scheduler.handle_inbound_message) {
-      this._reply_to_event(
-        event,
-        "❌ Skill suggestion flow is not available in this scheduler.",
-      );
-      return;
-    }
+    await handle_skill_suggestion_command(
+      this._command_context(event, source),
+      command,
+    );
+  }
 
-    const metadata = this._brief_source_metadata(source);
-    try {
-      const result = this.scheduler.handle_inbound_message(
-        this._make_inbound(
-          InboundMessageType.SKILL_SUGGESTION_ACTION,
-          {
-            action: command.action,
-            pattern_id: command.pattern_id,
-            source_channel: "weixin",
-            target: source.peer_id,
-            source_metadata: metadata,
-          },
-          source.peer_id,
-          metadata,
-        ),
-      );
-      this._reply_to_event(event, format_skill_suggestion_action_reply(result));
-    } catch (exc) {
-      this._reply_to_event(
-        event,
-        `❌ ${exc instanceof Error ? exc.message : String(exc)}`,
-      );
-    }
+  /** Shared-flow context for a command that arrived on `event`. */
+  _command_context(
+    event: Record<string, unknown>,
+    source: WeixinCommandSource,
+  ): ChannelCommandContext {
+    return {
+      channel: this.name,
+      db: this.db,
+      scheduler: this.scheduler,
+      make_inbound: (msg_type, payload, target, metadata) =>
+        this._make_inbound(msg_type, payload, target, metadata),
+      error_prefix: "❌",
+      metadata: this._brief_source_metadata(source),
+      target: source.peer_id,
+      reply: (text) => this._reply_to_event(event, text),
+    };
+  }
+
+  /** As `_command_context`, for the flows that can start a task. */
+  _task_command_context(
+    event: Record<string, unknown>,
+    source: WeixinCommandSource,
+  ): TaskCommandContext {
+    return {
+      ...this._command_context(event, source),
+      source_ref: source.message_id || source.peer_key,
+      on_task_started: (task_id, announcement) =>
+        this._announce_task_started(task_id, announcement, event, source),
+    };
+  }
+
+  /** Bind a new task to the message that started it, then announce it. */
+  _announce_task_started(
+    task_id: number,
+    announcement: string,
+    event: Record<string, unknown>,
+    source: WeixinCommandSource,
+  ): void {
+    this._task_origin.set(task_id, {
+      account_id: source.account_id,
+      peer_id: source.peer_id,
+      context_token: source.context_token,
+      message_id: source.message_id,
+    });
+    this._remember_task_source(task_id);
+    this._set_peer_current_task(source.peer_key, task_id);
+    this._reply_to_event(event, announcement);
   }
 
   _brief_source_metadata(source: {

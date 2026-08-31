@@ -43,7 +43,6 @@ import path from "node:path";
 
 import {
   Channel,
-  InboundMessageType,
   MessageBus,
   OutboundMessageType,
   type InboundMessage,
@@ -57,16 +56,6 @@ import {
   type SettingsDB,
 } from "./agent_utils.ts";
 import {
-  build_brief_payload,
-  build_runbook_payload,
-  format_brief_created_reply,
-  format_brief_discarded_reply,
-  format_brief_help,
-  format_brief_started_reply,
-  format_runbook_brief_reply,
-  format_runbook_created_reply,
-  format_skill_suggestion_action_reply,
-  format_skill_suggestion_help,
   parse_brief_command,
   parse_runbook_fallback,
   parse_skill_suggestion_command,
@@ -74,6 +63,13 @@ import {
   type ParsedRunbookCommand,
   type SkillSuggestionCommand,
 } from "./brief_utils.ts";
+import {
+  handle_brief_command,
+  handle_runbook_command,
+  handle_skill_suggestion_command,
+  type ChannelCommandContext,
+  type TaskCommandContext,
+} from "./command_handlers.ts";
 import { handle_dir_command, resolve_working_dir } from "./dir_utils.ts";
 
 import {
@@ -815,226 +811,87 @@ export class TelegramChannel extends Channel {
     command: BriefCommand,
     update: TgUpdate,
   ): Promise<void> {
-    if (command.action === "help") {
-      await this._reply_text(update, format_brief_help(command.reason));
-      return;
-    }
-    if (!this.scheduler.handle_inbound_message) {
-      await this._reply_text(
-        update,
-        "❌ Draft task flow is not available in this scheduler.",
-      );
-      return;
-    }
-
-    const msg = update.message!;
-    const chat_id = msg.chat.id;
-    const message_id = msg.message_id;
-    const metadata = this._brief_source_metadata(update);
-    try {
-      if (command.action === "create") {
-        const payload = build_brief_payload({
-          channel: "telegram",
-          goal: command.goal,
-          source_ref: `${chat_id}:${message_id}`,
-          source_metadata: metadata,
-          working_dir: await resolve_working_dir(
-            command.goal,
-            "telegram",
-            this.db,
-          ),
-          agent: resolve_agent("telegram", this.db),
-        });
-        const result = this.scheduler.handle_inbound_message(
-          this._make_inbound(
-            InboundMessageType.CREATE_BRIEF,
-            payload,
-            String(chat_id),
-            metadata,
-          ),
-        );
-        const brief_id = Number(result["brief_id"]);
-        await this._reply_text(
-          update,
-          format_brief_created_reply(brief_id, String(payload["title"])),
-        );
-        return;
-      }
-
-      if (command.action === "confirm") {
-        const result = this.scheduler.handle_inbound_message(
-          this._make_inbound(
-            InboundMessageType.CONFIRM_BRIEF,
-            { brief_id: command.brief_id },
-            String(chat_id),
-            metadata,
-          ),
-        );
-        const task_id = Number(result["task_id"]);
-        if (!Number.isInteger(task_id) || task_id <= 0) {
-          await this._reply_text(update, "❌ Draft task confirmation failed.");
-          return;
-        }
-
-        this._task_origin.set(task_id, [chat_id, message_id, message_id]);
-        this._remember_task_source(task_id);
-        this._set_chat_current_task(chat_id, task_id);
-        try {
-          await this._api!("setMessageReaction", {
-            chat_id,
-            message_id,
-            reaction: [{ type: "emoji", emoji: "👀" }],
-          });
-        } catch (e) {
-          console.log(`[Telegram] Failed to set brief reaction: ${e}`);
-        }
-        await this._reply_text(
-          update,
-          format_brief_started_reply(command.brief_id, task_id),
-        );
-        return;
-      }
-
-      const result = this.scheduler.handle_inbound_message(
-        this._make_inbound(
-          InboundMessageType.DISCARD_BRIEF,
-          { brief_id: command.brief_id },
-          String(chat_id),
-          metadata,
-        ),
-      );
-      await this._reply_text(
-        update,
-        format_brief_discarded_reply(Number(result["brief_id"])),
-      );
-    } catch (e) {
-      await this._reply_text(
-        update,
-        `❌ ${e instanceof Error ? e.message : String(e)}`,
-      );
-    }
+    await handle_brief_command(
+      this._task_command_context(update, "brief"),
+      command,
+    );
   }
 
   async _handle_runbook_command(
     command: ParsedRunbookCommand,
     update: TgUpdate,
   ): Promise<void> {
-    if (!this.scheduler.handle_inbound_message) {
-      await this._reply_text(
-        update,
-        "❌ Custom command flow is not available in this scheduler.",
-      );
-      return;
-    }
-
-    const msg = update.message!;
-    const chat_id = msg.chat.id;
-    const message_id = msg.message_id;
-    const metadata = this._brief_source_metadata(update);
-    try {
-      const payload = build_runbook_payload({
-        channel: "telegram",
-        command,
-        source_ref: `${chat_id}:${message_id}`,
-        source_metadata: metadata,
-        working_dir: await resolve_working_dir(
-          command.raw_args || command.name,
-          "telegram",
-          this.db,
-        ),
-        agent: resolve_agent("telegram", this.db),
-      });
-      const result = this.scheduler.handle_inbound_message(
-        this._make_inbound(
-          InboundMessageType.RUN_RUNBOOK,
-          payload,
-          String(chat_id),
-          metadata,
-        ),
-      );
-      if (result["status"] === "created") {
-        const task_id = Number(result["task_id"]);
-        this._task_origin.set(task_id, [chat_id, message_id, message_id]);
-        this._remember_task_source(task_id);
-        this._set_chat_current_task(chat_id, task_id);
-        try {
-          await this._api!("setMessageReaction", {
-            chat_id,
-            message_id,
-            reaction: [{ type: "emoji", emoji: "👀" }],
-          });
-        } catch (e) {
-          console.log(`[Telegram] Failed to set runbook reaction: ${e}`);
-        }
-        await this._reply_text(
-          update,
-          format_runbook_created_reply(task_id, command.name),
-        );
-        return;
-      }
-      if (result["status"] === "draft") {
-        await this._reply_text(
-          update,
-          format_runbook_brief_reply(Number(result["brief_id"]), command.name),
-        );
-        return;
-      }
-      await this._reply_text(update, "❌ Custom command failed.");
-    } catch (e) {
-      await this._reply_text(
-        update,
-        `❌ ${e instanceof Error ? e.message : String(e)}`,
-      );
-    }
+    await handle_runbook_command(
+      this._task_command_context(update, "runbook"),
+      command,
+    );
   }
 
   async _handle_skill_suggestion_command(
     command: SkillSuggestionCommand,
     update: TgUpdate,
   ): Promise<void> {
-    if (command.action === "help") {
-      await this._reply_text(
-        update,
-        format_skill_suggestion_help(command.reason),
-      );
-      return;
-    }
-    if (!this.scheduler.handle_inbound_message) {
-      await this._reply_text(
-        update,
-        "❌ Skill suggestion flow is not available in this scheduler.",
-      );
-      return;
-    }
+    await handle_skill_suggestion_command(
+      this._command_context(update),
+      command,
+    );
+  }
 
+  /** Shared-flow context for a command that arrived in `update`. */
+  _command_context(update: TgUpdate): ChannelCommandContext {
+    const msg = update.message!;
+    return {
+      channel: this.name,
+      db: this.db,
+      scheduler: this.scheduler,
+      make_inbound: (msg_type, payload, target, metadata) =>
+        this._make_inbound(msg_type, payload, target, metadata),
+      error_prefix: "❌",
+      metadata: this._brief_source_metadata(update),
+      target: String(msg.chat.id),
+      reply: (text) => this._reply_text(update, text),
+    };
+  }
+
+  /**
+   * As `_command_context`, for the flows that can start a task.
+   *
+   * `kind` only labels the reaction failure log, which names the command that
+   * was being handled.
+   */
+  _task_command_context(update: TgUpdate, kind: string): TaskCommandContext {
+    const msg = update.message!;
+    return {
+      ...this._command_context(update),
+      source_ref: `${msg.chat.id}:${msg.message_id}`,
+      on_task_started: (task_id, announcement) =>
+        this._announce_task_started(task_id, announcement, update, kind),
+    };
+  }
+
+  /** Bind a new task to the message that started it, then announce it. */
+  async _announce_task_started(
+    task_id: number,
+    announcement: string,
+    update: TgUpdate,
+    kind: string,
+  ): Promise<void> {
     const msg = update.message!;
     const chat_id = msg.chat.id;
-    const metadata = this._brief_source_metadata(update);
+    const message_id = msg.message_id;
+    this._task_origin.set(task_id, [chat_id, message_id, message_id]);
+    this._remember_task_source(task_id);
+    this._set_chat_current_task(chat_id, task_id);
     try {
-      const result = this.scheduler.handle_inbound_message(
-        this._make_inbound(
-          InboundMessageType.SKILL_SUGGESTION_ACTION,
-          {
-            action: command.action,
-            pattern_id: command.pattern_id,
-            source_channel: "telegram",
-            target: String(chat_id),
-            source_metadata: metadata,
-          },
-          String(chat_id),
-          metadata,
-        ),
-      );
-      await this._reply_text(
-        update,
-        format_skill_suggestion_action_reply(result),
-      );
+      await this._api!("setMessageReaction", {
+        chat_id,
+        message_id,
+        reaction: [{ type: "emoji", emoji: "👀" }],
+      });
     } catch (e) {
-      await this._reply_text(
-        update,
-        `❌ ${e instanceof Error ? e.message : String(e)}`,
-      );
+      console.log(`[Telegram] Failed to set ${kind} reaction: ${e}`);
     }
+    await this._reply_text(update, announcement);
   }
 
   _brief_source_metadata(update: TgUpdate): Record<string, unknown> {

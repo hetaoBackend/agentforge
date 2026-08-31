@@ -25,7 +25,7 @@
  *   event loop).
  */
 
-import { Channel, InboundMessageType, OutboundMessageType } from "../bus.ts";
+import { Channel, OutboundMessageType } from "../bus.ts";
 import type {
   InboundMessage,
   MessageBus,
@@ -36,16 +36,6 @@ import { makeTask, ScheduleType } from "../types.ts";
 import { handle_agent_command, resolve_agent } from "./agent_utils.ts";
 import type { SettingsDB } from "./agent_utils.ts";
 import {
-  build_brief_payload,
-  build_runbook_payload,
-  format_brief_created_reply,
-  format_brief_discarded_reply,
-  format_brief_help,
-  format_brief_started_reply,
-  format_runbook_brief_reply,
-  format_runbook_created_reply,
-  format_skill_suggestion_action_reply,
-  format_skill_suggestion_help,
   parse_brief_command,
   parse_runbook_fallback,
   parse_skill_suggestion_command,
@@ -53,6 +43,13 @@ import {
   type BriefCommand,
   type SkillSuggestionCommand,
 } from "./brief_utils.ts";
+import {
+  handle_brief_command,
+  handle_runbook_command,
+  handle_skill_suggestion_command,
+  type ChannelCommandContext,
+  type TaskCommandContext,
+} from "./command_handlers.ts";
 import { handle_dir_command, resolve_working_dir } from "./dir_utils.ts";
 import type { Task } from "../types.ts";
 
@@ -677,100 +674,10 @@ export class SlackChannel extends Channel {
     channel_id: string,
     msg_ts: string,
   ): Promise<void> {
-    if (command.action === "help") {
-      await this._reply(channel_id, msg_ts, format_brief_help(command.reason));
-      return;
-    }
-    if (!this.scheduler.handle_inbound_message) {
-      await this._reply(
-        channel_id,
-        msg_ts,
-        ":x: Draft task flow is not available in this scheduler.",
-      );
-      return;
-    }
-
-    try {
-      if (command.action === "create") {
-        const payload = build_brief_payload({
-          channel: "slack",
-          goal: command.goal,
-          source_ref: `${channel_id}:${msg_ts}`,
-          source_metadata: { channel_id, message_ts: msg_ts },
-          working_dir: await resolve_working_dir(
-            command.goal,
-            "slack",
-            this.db,
-          ),
-          agent: resolve_agent("slack", this.db),
-        });
-        const result = this.scheduler.handle_inbound_message(
-          this._make_inbound(
-            InboundMessageType.CREATE_BRIEF,
-            payload,
-            channel_id,
-            { channel_id, message_ts: msg_ts },
-          ),
-        );
-        const brief_id = Number(result["brief_id"]);
-        await this._reply(
-          channel_id,
-          msg_ts,
-          format_brief_created_reply(brief_id, String(payload["title"])),
-        );
-        return;
-      }
-
-      if (command.action === "confirm") {
-        const result = this.scheduler.handle_inbound_message(
-          this._make_inbound(
-            InboundMessageType.CONFIRM_BRIEF,
-            { brief_id: command.brief_id },
-            channel_id,
-            { channel_id, message_ts: msg_ts },
-          ),
-        );
-        const task_id = Number(result["task_id"]);
-        if (Number.isInteger(task_id) && task_id > 0) {
-          this._task_origin.set(task_id, [channel_id, msg_ts, msg_ts]);
-          this._thread_ts_map.set(msg_ts, task_id);
-          this._remember_task_source(task_id);
-          this._add_reaction(channel_id, msg_ts, "eyes");
-          await this._reply(
-            channel_id,
-            msg_ts,
-            format_brief_started_reply(command.brief_id, task_id),
-          );
-        } else {
-          await this._reply(
-            channel_id,
-            msg_ts,
-            ":x: Draft task confirmation failed.",
-          );
-        }
-        return;
-      }
-
-      const result = this.scheduler.handle_inbound_message(
-        this._make_inbound(
-          InboundMessageType.DISCARD_BRIEF,
-          { brief_id: command.brief_id },
-          channel_id,
-          { channel_id, message_ts: msg_ts },
-        ),
-      );
-      await this._reply(
-        channel_id,
-        msg_ts,
-        format_brief_discarded_reply(Number(result["brief_id"])),
-      );
-    } catch (e) {
-      await this._reply(
-        channel_id,
-        msg_ts,
-        `:x: ${e instanceof Error ? e.message : String(e)}`,
-      );
-    }
+    await handle_brief_command(
+      this._task_command_context(channel_id, msg_ts),
+      command,
+    );
   }
 
   async _handle_runbook_command(
@@ -778,65 +685,10 @@ export class SlackChannel extends Channel {
     channel_id: string,
     msg_ts: string,
   ): Promise<void> {
-    if (!this.scheduler.handle_inbound_message) {
-      await this._reply(
-        channel_id,
-        msg_ts,
-        ":x: Custom command flow is not available in this scheduler.",
-      );
-      return;
-    }
-
-    try {
-      const payload = build_runbook_payload({
-        channel: "slack",
-        command,
-        source_ref: `${channel_id}:${msg_ts}`,
-        source_metadata: { channel_id, message_ts: msg_ts },
-        working_dir: await resolve_working_dir(
-          command.raw_args || command.name,
-          "slack",
-          this.db,
-        ),
-        agent: resolve_agent("slack", this.db),
-      });
-      const result = this.scheduler.handle_inbound_message(
-        this._make_inbound(
-          InboundMessageType.RUN_RUNBOOK,
-          payload,
-          channel_id,
-          { channel_id, message_ts: msg_ts },
-        ),
-      );
-      if (result["status"] === "created") {
-        const task_id = Number(result["task_id"]);
-        this._task_origin.set(task_id, [channel_id, msg_ts, msg_ts]);
-        this._thread_ts_map.set(msg_ts, task_id);
-        this._remember_task_source(task_id);
-        this._add_reaction(channel_id, msg_ts, "eyes");
-        await this._reply(
-          channel_id,
-          msg_ts,
-          format_runbook_created_reply(task_id, command.name),
-        );
-        return;
-      }
-      if (result["status"] === "draft") {
-        await this._reply(
-          channel_id,
-          msg_ts,
-          format_runbook_brief_reply(Number(result["brief_id"]), command.name),
-        );
-        return;
-      }
-      await this._reply(channel_id, msg_ts, ":x: Custom command failed.");
-    } catch (e) {
-      await this._reply(
-        channel_id,
-        msg_ts,
-        `:x: ${e instanceof Error ? e.message : String(e)}`,
-      );
-    }
+    await handle_runbook_command(
+      this._task_command_context(channel_id, msg_ts),
+      command,
+    );
   }
 
   async _handle_skill_suggestion_command(
@@ -844,50 +696,52 @@ export class SlackChannel extends Channel {
     channel_id: string,
     msg_ts: string,
   ): Promise<void> {
-    if (command.action === "help") {
-      await this._reply(
-        channel_id,
-        msg_ts,
-        format_skill_suggestion_help(command.reason),
-      );
-      return;
-    }
-    if (!this.scheduler.handle_inbound_message) {
-      await this._reply(
-        channel_id,
-        msg_ts,
-        ":x: Skill suggestion flow is not available in this scheduler.",
-      );
-      return;
-    }
+    await handle_skill_suggestion_command(
+      this._command_context(channel_id, msg_ts),
+      command,
+    );
+  }
 
-    try {
-      const result = this.scheduler.handle_inbound_message(
-        this._make_inbound(
-          InboundMessageType.SKILL_SUGGESTION_ACTION,
-          {
-            action: command.action,
-            pattern_id: command.pattern_id,
-            source_channel: "slack",
-            target: channel_id,
-            source_metadata: { channel_id, message_ts: msg_ts },
-          },
-          channel_id,
-          { channel_id, message_ts: msg_ts },
-        ),
-      );
-      await this._reply(
-        channel_id,
-        msg_ts,
-        format_skill_suggestion_action_reply(result),
-      );
-    } catch (e) {
-      await this._reply(
-        channel_id,
-        msg_ts,
-        `:x: ${e instanceof Error ? e.message : String(e)}`,
-      );
-    }
+  /** Shared-flow context for a command posted at `msg_ts`. */
+  _command_context(channel_id: string, msg_ts: string): ChannelCommandContext {
+    return {
+      channel: this.name,
+      db: this.db,
+      scheduler: this.scheduler,
+      make_inbound: (msg_type, payload, target, metadata) =>
+        this._make_inbound(msg_type, payload, target, metadata),
+      error_prefix: ":x:",
+      metadata: { channel_id, message_ts: msg_ts },
+      target: channel_id,
+      reply: (text) => this._reply(channel_id, msg_ts, text),
+    };
+  }
+
+  /** As `_command_context`, for the flows that can start a task. */
+  _task_command_context(
+    channel_id: string,
+    msg_ts: string,
+  ): TaskCommandContext {
+    return {
+      ...this._command_context(channel_id, msg_ts),
+      source_ref: `${channel_id}:${msg_ts}`,
+      on_task_started: (task_id, announcement) =>
+        this._announce_task_started(task_id, announcement, channel_id, msg_ts),
+    };
+  }
+
+  /** Bind a new task to the message that started it, then announce it. */
+  async _announce_task_started(
+    task_id: number,
+    announcement: string,
+    channel_id: string,
+    msg_ts: string,
+  ): Promise<void> {
+    this._task_origin.set(task_id, [channel_id, msg_ts, msg_ts]);
+    this._thread_ts_map.set(msg_ts, task_id);
+    this._remember_task_source(task_id);
+    this._add_reaction(channel_id, msg_ts, "eyes");
+    await this._reply(channel_id, msg_ts, announcement);
   }
 
   async _cmd_status(

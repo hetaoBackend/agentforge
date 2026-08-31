@@ -10,11 +10,9 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { errStr } from "../util.ts";
 
 import {
   Channel,
-  InboundMessageType,
   MessageBus,
   OutboundMessageType,
   type InboundMessage,
@@ -33,16 +31,6 @@ import {
   type SettingsDB,
 } from "./agent_utils.ts";
 import {
-  build_brief_payload,
-  build_runbook_payload,
-  format_brief_created_reply,
-  format_brief_discarded_reply,
-  format_brief_help,
-  format_brief_started_reply,
-  format_runbook_brief_reply,
-  format_runbook_created_reply,
-  format_skill_suggestion_action_reply,
-  format_skill_suggestion_help,
   parse_brief_command,
   parse_runbook_fallback,
   parse_skill_suggestion_command,
@@ -50,6 +38,13 @@ import {
   type ParsedRunbookCommand,
   type SkillSuggestionCommand,
 } from "./brief_utils.ts";
+import {
+  handle_brief_command,
+  handle_runbook_command,
+  handle_skill_suggestion_command,
+  type ChannelCommandContext,
+  type TaskCommandContext,
+} from "./command_handlers.ts";
 import { handle_dir_command, resolve_working_dir } from "./dir_utils.ts";
 import { is_plain_object } from "./path_utils.ts";
 
@@ -1695,103 +1690,10 @@ export class FeishuChannel extends Channel {
     message: Row,
     sender_id: string,
   ): Promise<void> {
-    if (command.action === "help") {
-      await this._send_message(reply_to, format_brief_help(command.reason));
-      return;
-    }
-    if (!this.scheduler.handle_inbound_message) {
-      await this._send_message(
-        reply_to,
-        "❌ Draft task flow is not available in this scheduler.",
-      );
-      return;
-    }
-
-    const message_id = asString(message["message_id"], reply_to);
-    const metadata = this._brief_source_metadata(message, sender_id);
-    try {
-      if (command.action === "create") {
-        const payload = build_brief_payload({
-          channel: "feishu",
-          goal: command.goal,
-          source_ref: message_id,
-          source_metadata: metadata,
-          working_dir: await resolve_working_dir(
-            command.goal,
-            "feishu",
-            this.db,
-          ),
-          agent: resolve_agent("feishu", this.db),
-        });
-        const result = this.scheduler.handle_inbound_message(
-          this._make_inbound(
-            InboundMessageType.CREATE_BRIEF,
-            payload,
-            reply_to,
-            metadata,
-          ),
-        );
-        const brief_id = Number(result["brief_id"]);
-        await this._send_message(
-          reply_to,
-          format_brief_created_reply(brief_id, String(payload["title"])),
-        );
-        return;
-      }
-
-      if (command.action === "confirm") {
-        const result = this.scheduler.handle_inbound_message(
-          this._make_inbound(
-            InboundMessageType.CONFIRM_BRIEF,
-            { brief_id: command.brief_id },
-            reply_to,
-            metadata,
-          ),
-        );
-        const task_id = Number(result["task_id"]);
-        if (!Number.isInteger(task_id) || task_id <= 0) {
-          await this._send_message(
-            reply_to,
-            "❌ Draft task confirmation failed.",
-          );
-          return;
-        }
-
-        this._task_origin.set(task_id, [reply_to, message_id, message_id]);
-        this._root_msg_map.set(message_id, task_id);
-        this._remember_task_source(task_id);
-        const title =
-          (this.db.get_task(task_id) as Row | null)?.["title"] ??
-          `Task #${task_id}`;
-        const running_msg_id = await this._create_reply(
-          message_id,
-          this._build_legacy_markdown_card(
-            format_brief_started_reply(command.brief_id, task_id),
-          ),
-        );
-        if (running_msg_id)
-          this._start_streaming(task_id, running_msg_id, String(title));
-        return;
-      }
-
-      const result = this.scheduler.handle_inbound_message(
-        this._make_inbound(
-          InboundMessageType.DISCARD_BRIEF,
-          { brief_id: command.brief_id },
-          reply_to,
-          metadata,
-        ),
-      );
-      await this._send_message(
-        reply_to,
-        format_brief_discarded_reply(Number(result["brief_id"])),
-      );
-    } catch (e) {
-      await this._send_message(
-        reply_to,
-        `❌ ${e instanceof Error ? e.message : String(e)}`,
-      );
-    }
+    await handle_brief_command(
+      this._task_command_context(reply_to, message, sender_id),
+      command,
+    );
   }
 
   async _handle_runbook_command(
@@ -1800,69 +1702,10 @@ export class FeishuChannel extends Channel {
     message: Row,
     sender_id: string,
   ): Promise<void> {
-    if (!this.scheduler.handle_inbound_message) {
-      await this._send_message(
-        reply_to,
-        "❌ Custom command flow is not available in this scheduler.",
-      );
-      return;
-    }
-
-    const message_id = asString(message["message_id"], reply_to);
-    const metadata = this._brief_source_metadata(message, sender_id);
-    try {
-      const payload = build_runbook_payload({
-        channel: "feishu",
-        command,
-        source_ref: message_id,
-        source_metadata: metadata,
-        working_dir: await resolve_working_dir(
-          command.raw_args || command.name,
-          "feishu",
-          this.db,
-        ),
-        agent: resolve_agent("feishu", this.db),
-      });
-      const result = this.scheduler.handle_inbound_message(
-        this._make_inbound(
-          InboundMessageType.RUN_RUNBOOK,
-          payload,
-          reply_to,
-          metadata,
-        ),
-      );
-      if (result["status"] === "created") {
-        const task_id = Number(result["task_id"]);
-        this._task_origin.set(task_id, [reply_to, message_id, message_id]);
-        this._root_msg_map.set(message_id, task_id);
-        this._remember_task_source(task_id);
-        const title =
-          (this.db.get_task(task_id) as Row | null)?.["title"] ??
-          `Task #${task_id}`;
-        const running_msg_id = await this._create_reply(
-          message_id,
-          this._build_legacy_markdown_card(
-            format_runbook_created_reply(task_id, command.name),
-          ),
-        );
-        if (running_msg_id)
-          this._start_streaming(task_id, running_msg_id, String(title));
-        return;
-      }
-      if (result["status"] === "draft") {
-        await this._send_message(
-          reply_to,
-          format_runbook_brief_reply(Number(result["brief_id"]), command.name),
-        );
-        return;
-      }
-      await this._send_message(reply_to, "❌ Custom command failed.");
-    } catch (e) {
-      await this._send_message(
-        reply_to,
-        `❌ ${e instanceof Error ? e.message : String(e)}`,
-      );
-    }
+    await handle_runbook_command(
+      this._task_command_context(reply_to, message, sender_id),
+      command,
+    );
   }
 
   async _handle_skill_suggestion_command(
@@ -1871,47 +1714,73 @@ export class FeishuChannel extends Channel {
     message: Row,
     sender_id: string,
   ): Promise<void> {
-    if (command.action === "help") {
-      await this._send_message(
-        reply_to,
-        format_skill_suggestion_help(command.reason),
-      );
-      return;
-    }
-    if (!this.scheduler.handle_inbound_message) {
-      await this._send_message(
-        reply_to,
-        "❌ Skill suggestion flow is not available in this scheduler.",
-      );
-      return;
-    }
+    await handle_skill_suggestion_command(
+      this._command_context(reply_to, message, sender_id),
+      command,
+    );
+  }
 
-    const metadata = this._brief_source_metadata(message, sender_id);
-    try {
-      const result = this.scheduler.handle_inbound_message(
-        this._make_inbound(
-          InboundMessageType.SKILL_SUGGESTION_ACTION,
-          {
-            action: command.action,
-            pattern_id: command.pattern_id,
-            source_channel: "feishu",
-            target: reply_to,
-            source_metadata: metadata,
-          },
+  /** Shared-flow context for a command that arrived on `message`. */
+  _command_context(
+    reply_to: string,
+    message: Row,
+    sender_id: string,
+  ): ChannelCommandContext {
+    return {
+      channel: this.name,
+      db: this.db,
+      scheduler: this.scheduler,
+      make_inbound: (msg_type, payload, target, metadata) =>
+        this._make_inbound(msg_type, payload, target, metadata),
+      error_prefix: "❌",
+      metadata: this._brief_source_metadata(message, sender_id),
+      target: reply_to,
+      reply: (text) => this._send_message(reply_to, text),
+    };
+  }
+
+  /** As `_command_context`, for the flows that can start a task. */
+  _task_command_context(
+    reply_to: string,
+    message: Row,
+    sender_id: string,
+  ): TaskCommandContext {
+    const message_id = asString(message["message_id"], reply_to);
+    return {
+      ...this._command_context(reply_to, message, sender_id),
+      source_ref: message_id,
+      on_task_started: (task_id, announcement) =>
+        this._announce_task_started(
+          task_id,
+          announcement,
           reply_to,
-          metadata,
+          message_id,
         ),
-      );
-      await this._send_message(
-        reply_to,
-        format_skill_suggestion_action_reply(result),
-      );
-    } catch (e) {
-      await this._send_message(
-        reply_to,
-        `❌ ${e instanceof Error ? e.message : String(e)}`,
-      );
-    }
+    };
+  }
+
+  /**
+   * Bind a new task to the message that started it, then open the streaming
+   * card that carries `announcement`.
+   */
+  async _announce_task_started(
+    task_id: number,
+    announcement: string,
+    reply_to: string,
+    message_id: string,
+  ): Promise<void> {
+    this._task_origin.set(task_id, [reply_to, message_id, message_id]);
+    this._root_msg_map.set(message_id, task_id);
+    this._remember_task_source(task_id);
+    const title =
+      (this.db.get_task(task_id) as Row | null)?.["title"] ??
+      `Task #${task_id}`;
+    const running_msg_id = await this._create_reply(
+      message_id,
+      this._build_legacy_markdown_card(announcement),
+    );
+    if (running_msg_id)
+      this._start_streaming(task_id, running_msg_id, String(title));
   }
 
   _brief_source_metadata(
