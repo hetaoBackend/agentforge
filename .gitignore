@@ -1,21 +1,15 @@
-# Python-generated files
-__pycache__/
-*.py[oc]
-.pytest_cache/
-.ruff_cache/
-.python-version
-build/
-dist/
-wheels/
-*.egg-info
-
-# JS/Bun dependencies
+# Dependencies
 node_modules/
 .worktrees/
 
-# Virtual environments
-.venv
-.coverage
-.coverage.*
-htmlcov/
-coverage.xml
+# Build output (all are `make clean` targets)
+build/
+dist/
+taskboard-electron/.bun/
+taskboard-electron/artifacts/
+
+# Test coverage
+coverage/
+
+# OS
+.DS_Store
