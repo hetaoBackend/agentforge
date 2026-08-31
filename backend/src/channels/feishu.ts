@@ -10,6 +10,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { errStr } from "../util.ts";
 
 import {
   Channel,
@@ -175,10 +176,6 @@ function responseImageKey(response: any): string | null {
 
 function callMaybeAsync<T>(value: T | Promise<T>): Promise<T> {
   return Promise.resolve(value);
-}
-
-function errStr(e: unknown): string {
-  return e instanceof Error ? e.message : String(e);
 }
 
 function getSenderOpenId(sender: Row): string {

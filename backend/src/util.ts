@@ -3,6 +3,11 @@
 
 import os from "node:os";
 
+/** Message text of an unknown thrown value (≙ `str(exc)` in the Python port). */
+export function errStr(e: unknown): string {
+  return e instanceof Error ? e.message : String(e);
+}
+
 /**
  * Return process.env augmented with common macOS tool install paths.
  * Desktop GUI launchers inherit a stripped PATH that often

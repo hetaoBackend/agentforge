@@ -59,7 +59,8 @@ The Electrobun Bun main process (`taskboard-electron/src/electrobun/main.ts`) st
 ### Bun backend (`backend/`)
 TypeScript modules served by `Bun.serve` (entry `backend/taskboard.ts`):
 - **`src/db.ts` — `TaskDB`** — SQLite layer (bun:sqlite) at `~/.agentforge/tasks.db`. Stores tasks, run history, and streaming output events. Method names keep the original Python snake_case spelling (they double as API JSON keys).
-- **`src/executor.ts` — `AgentExecutor`** — Runs the agent CLI: `claude -p … --output-format stream-json --verbose --permission-mode bypassPermissions`, or `codex exec --json …`. Parses the NDJSON stream and persists each event to `task_output_events`.
+- **`src/executor.ts` — `AgentExecutor`** — Subprocess seams (`subprocess_run` / `Popen` equivalents, injectable for tests) plus the one-shot `AgentExecutor.run()` used for short prompts.
+- **`src/agent_stream.ts` — `AgentStreamParser`** — Translates the agent NDJSON stream (`claude -p … --output-format stream-json --verbose --permission-mode bypassPermissions`, or `codex exec --json …`) into rows in `task_output_events`, and holds the per-run delta state the cumulative-text protocols need. `TaskScheduler` owns one instance and forwards to it.
 - **`src/scheduler.ts` — `TaskScheduler`** — Polls every 2 seconds for due tasks. Supports four schedule types:
   - `immediate`: runs as soon as scheduled
   - `delayed`: runs after N seconds (relative time)
