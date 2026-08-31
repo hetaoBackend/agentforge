@@ -50,6 +50,17 @@ import {
   type SkillSuggestionCommand,
 } from "./brief_utils.ts";
 import { handle_dir_command, resolve_working_dir } from "./dir_utils.ts";
+import {
+  expanduser,
+  file_url_path,
+  is_plain_object,
+  unquote,
+} from "./path_utils.ts";
+import {
+  is_uploadable_image,
+  markdown_image_refs,
+  replace_markdown_image_refs,
+} from "./image_utils.ts";
 
 type Row = Record<string, any>;
 
@@ -85,13 +96,6 @@ export const FEISHU_CARD_MAX_ELEMENTS = 200;
 export const FEISHU_PANEL_MAX_LINE_ELEMENTS = 80;
 export const FEISHU_PANEL_PLAIN_TEXT_CHUNK = 1800;
 export const FEISHU_THINKING_PREFIX = "[thinking] ";
-export const FEISHU_UPLOADABLE_IMAGE_SUFFIXES = new Set([
-  ".png",
-  ".jpg",
-  ".jpeg",
-  ".gif",
-  ".webp",
-]);
 export const FEISHU_STREAM_EVENT_TYPES = new Set([
   "assistant",
   "tool_call",
@@ -101,8 +105,6 @@ export const FEISHU_STREAM_EVENT_TYPES = new Set([
   "web_search",
   "error",
 ]);
-
-const FEISHU_MARKDOWN_IMAGE_RE = /!\[[^\]]*]\(([^)\n]+)\)/g;
 
 export let FEISHU_AVAILABLE = true;
 
@@ -137,7 +139,7 @@ export type OutputListener = (
 ) => void;
 
 function isPlainObject(value: unknown): value is Row {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
+  return is_plain_object(value);
 }
 
 function stringifyCard(card: Row): string {
@@ -194,27 +196,28 @@ function localImageMediaType(imagePath: string): string {
 }
 
 function expandUser(p: string): string {
-  if (p === "~") return os.homedir();
-  if (p.startsWith("~/")) return path.join(os.homedir(), p.slice(2));
-  return p;
+  return expanduser(p);
 }
 
+/**
+ * Feishu-only: prefer the URL parser, fall back to the shared slicing helper.
+ *
+ * Deliberately NOT folded into `path_utils.file_url_path`. The two agree on
+ * every real `file://` target (including percent-encoded and host-qualified
+ * forms, since callers run the result through `decodePath`), but diverge on the
+ * degenerate bare `file://`: `new URL()` yields "/" while the shared helper
+ * yields "". Unify only after confirming no caller depends on that.
+ */
 function fileUrlPath(target: string): string {
   try {
     return new URL(target).pathname;
   } catch {
-    const rest = target.slice("file://".length);
-    const slash = rest.indexOf("/");
-    return slash >= 0 ? rest.slice(slash) : "";
+    return file_url_path(target);
   }
 }
 
 function decodePath(target: string): string {
-  try {
-    return decodeURIComponent(target);
-  } catch {
-    return target;
-  }
+  return unquote(target);
 }
 
 function extractEvent(data: any): Row {
@@ -817,12 +820,8 @@ export class FeishuChannel extends Channel {
     working_dir: string | null = null,
   ): string[] {
     const paths: string[] = [];
-    FEISHU_MARKDOWN_IMAGE_RE.lastIndex = 0;
-    for (const match of content.matchAll(FEISHU_MARKDOWN_IMAGE_RE)) {
-      const imagePath = this._local_image_path_from_reference(
-        match[1] ?? "",
-        working_dir,
-      );
+    for (const ref of markdown_image_refs(content)) {
+      const imagePath = this._local_image_path_from_reference(ref, working_dir);
       if (imagePath) paths.push(imagePath);
     }
     return paths;
@@ -849,12 +848,7 @@ export class FeishuChannel extends Channel {
     let imagePath = expandUser(target);
     if (!path.isAbsolute(imagePath) && working_dir)
       imagePath = path.join(expandUser(working_dir), imagePath);
-    if (
-      !FEISHU_UPLOADABLE_IMAGE_SUFFIXES.has(
-        path.extname(imagePath).toLowerCase(),
-      )
-    )
-      return null;
+    if (!is_uploadable_image(imagePath)) return null;
     try {
       if (!fs.statSync(imagePath).isFile()) return null;
       return fs.realpathSync(imagePath);
@@ -996,7 +990,7 @@ export class FeishuChannel extends Channel {
     uploaded_paths: Set<string>,
   ): string {
     if (!uploaded_paths.size) return line;
-    return line.replace(FEISHU_MARKDOWN_IMAGE_RE, (full, target) => {
+    return replace_markdown_image_refs(line, (full, target) => {
       const imagePath = this._local_image_path_from_reference(target);
       const canonical = this._canonical_image_path(imagePath);
       return canonical && uploaded_paths.has(canonical) ? "" : full;

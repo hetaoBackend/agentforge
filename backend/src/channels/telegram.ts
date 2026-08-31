@@ -39,7 +39,6 @@
  */
 
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 
 import {
@@ -76,6 +75,17 @@ import {
   type SkillSuggestionCommand,
 } from "./brief_utils.ts";
 import { handle_dir_command, resolve_working_dir } from "./dir_utils.ts";
+import {
+  expanduser,
+  file_url_path,
+  is_plain_object,
+  unquote,
+} from "./path_utils.ts";
+import {
+  is_uploadable_image,
+  markdown_image_refs,
+  replace_markdown_image_refs,
+} from "./image_utils.ts";
 
 // ≙ Python's try/except ImportError guard around the telegram SDK import.
 // fetch is always available on Bun, so this is true by default; the setter is
@@ -248,15 +258,6 @@ function _telegram_api_body(
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
-
-export const TELEGRAM_UPLOADABLE_IMAGE_SUFFIXES = new Set([
-  ".png",
-  ".jpg",
-  ".jpeg",
-  ".gif",
-  ".webp",
-]);
-const TELEGRAM_MARKDOWN_IMAGE_RE = /!\[[^\]]*]\(([^)]+)\)/g;
 
 // ── TelegramChannel ───────────────────────────────────────────────
 
@@ -1310,7 +1311,7 @@ export class TelegramChannel extends Channel {
     }
 
     const first: unknown = runs[0];
-    const run_id = _is_plain_object(first) ? first["id"] : null;
+    const run_id = is_plain_object(first) ? first["id"] : null;
     if (!run_id) {
       return [];
     }
@@ -1330,7 +1331,7 @@ export class TelegramChannel extends Channel {
     const paths: string[] = [];
     for (const event of events) {
       if (
-        !_is_plain_object(event) ||
+        !is_plain_object(event) ||
         event["event_type"] !== "generated_image"
       ) {
         continue;
@@ -1341,7 +1342,7 @@ export class TelegramChannel extends Channel {
       } catch {
         continue;
       }
-      const p = _is_plain_object(payload) ? payload["path"] : null;
+      const p = is_plain_object(payload) ? payload["path"] : null;
       if (p) {
         paths.push(p as string);
       }
@@ -1354,9 +1355,9 @@ export class TelegramChannel extends Channel {
     working_dir: string | null = null,
   ): string[] {
     const paths: string[] = [];
-    for (const match of (content || "").matchAll(TELEGRAM_MARKDOWN_IMAGE_RE)) {
+    for (const ref of markdown_image_refs(content)) {
       const image_path = this._local_image_path_from_reference(
-        match[1]!,
+        ref,
         working_dir,
       );
       if (image_path) {
@@ -1380,18 +1381,18 @@ export class TelegramChannel extends Channel {
       return null;
     }
     if (target.startsWith("file://")) {
-      target = _file_url_path(target);
+      target = file_url_path(target);
     } else if (target.startsWith("sandbox:")) {
       target = target.slice("sandbox:".length);
     }
-    target = _unquote(target).trim();
+    target = unquote(target).trim();
     if (!target) {
       return null;
     }
 
-    let p = _expanduser(target);
+    let p = expanduser(target);
     if (!path.isAbsolute(p) && working_dir) {
-      p = path.join(_expanduser(working_dir), p);
+      p = path.join(expanduser(working_dir), p);
     }
     return this._canonical_image_path(p);
   }
@@ -1433,10 +1434,8 @@ export class TelegramChannel extends Channel {
 
   _canonical_image_path(image_path: string): string | null {
     try {
-      const p = _expanduser(image_path);
-      if (
-        !TELEGRAM_UPLOADABLE_IMAGE_SUFFIXES.has(path.extname(p).toLowerCase())
-      ) {
+      const p = expanduser(image_path);
+      if (!is_uploadable_image(p)) {
         return null;
       }
       const stat = fs.statSync(p, { throwIfNoEntry: false });
@@ -1516,7 +1515,7 @@ export class TelegramChannel extends Channel {
       return line;
     }
 
-    return line.replace(TELEGRAM_MARKDOWN_IMAGE_RE, (match, ref: string) => {
+    return replace_markdown_image_refs(line, (match, ref) => {
       const image_path = this._local_image_path_from_reference(
         ref,
         working_dir,
@@ -1530,33 +1529,6 @@ export class TelegramChannel extends Channel {
 }
 
 // ── helpers ──────────────────────────────────────────────────────────────────
-
-/** ≙ urlparse(target).path for file:// references (scheme + netloc dropped). */
-function _file_url_path(target: string): string {
-  const rest = target.slice("file://".length);
-  const slash = rest.indexOf("/");
-  return slash >= 0 ? rest.slice(slash) : "";
-}
-
-/** ≙ urllib.parse.unquote (left untouched when percent-decoding fails). */
-function _unquote(value: string): string {
-  try {
-    return decodeURIComponent(value);
-  } catch {
-    return value;
-  }
-}
-
-/** ≙ Path.expanduser(). */
-function _expanduser(p: string): string {
-  if (p === "~") return os.homedir();
-  if (p.startsWith("~/")) return path.join(os.homedir(), p.slice(2));
-  return p;
-}
-
-function _is_plain_object(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 /** Escape special MarkdownV2 characters. */
 export function _escape_md(text: string): string {
