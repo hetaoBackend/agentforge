@@ -51,17 +51,20 @@ import {
   type SkillSuggestionCommand,
 } from "./brief_utils.ts";
 import { handle_dir_command, resolve_working_dir } from "./dir_utils.ts";
+import { is_plain_object } from "./path_utils.ts";
+
 import {
-  expanduser,
-  file_url_path,
-  is_plain_object,
-  unquote,
-} from "./path_utils.ts";
-import {
-  is_uploadable_image,
-  markdown_image_refs,
-  replace_markdown_image_refs,
-} from "./image_utils.ts";
+  canonical_image_path,
+  collect_generated_image_paths,
+  dedupe_image_paths,
+  generated_image_paths_for_task,
+  generated_image_paths_from_markdown,
+  hide_generated_image_paths,
+  line_is_uploaded_image_path,
+  local_image_path_from_reference,
+  markdown_image_reference_target,
+  remove_uploaded_markdown_image_refs,
+} from "./generated_images.ts";
 
 type Row = Record<string, any>;
 
@@ -190,31 +193,6 @@ function localImageMediaType(imagePath: string): string {
   if (ext === ".gif") return "image/gif";
   if (ext === ".webp") return "image/webp";
   return "image/jpeg";
-}
-
-function expandUser(p: string): string {
-  return expanduser(p);
-}
-
-/**
- * Feishu-only: prefer the URL parser, fall back to the shared slicing helper.
- *
- * Deliberately NOT folded into `path_utils.file_url_path`. The two agree on
- * every real `file://` target (including percent-encoded and host-qualified
- * forms, since callers run the result through `decodePath`), but diverge on the
- * degenerate bare `file://`: `new URL()` yields "/" while the shared helper
- * yields "". Unify only after confirming no caller depends on that.
- */
-function fileUrlPath(target: string): string {
-  try {
-    return new URL(target).pathname;
-  } catch {
-    return file_url_path(target);
-  }
-}
-
-function decodePath(target: string): string {
-  return unquote(target);
 }
 
 function extractEvent(data: any): Row {
@@ -754,47 +732,7 @@ export class FeishuChannel extends Channel {
   };
 
   _generated_image_paths_for_task(task_id: number): string[] {
-    let runs: Row[];
-    try {
-      runs = this.db.get_task_runs(task_id, 1);
-    } catch (e) {
-      console.log(`[Feishu] Failed to load runs for generated images: ${e}`);
-      return [];
-    }
-    if (!Array.isArray(runs) || !runs.length) return [];
-    const run_id = runs[0]?.["id"];
-    if (!run_id) return [];
-    let events: Row[];
-    try {
-      events = this.db.get_run_output_events(run_id, 1000);
-    } catch (e) {
-      console.log(
-        `[Feishu] Failed to load output events for generated images: ${e}`,
-      );
-      return [];
-    }
-    const paths: string[] = [];
-    const seen = new Set<string>();
-    for (const event of events) {
-      if (!isPlainObject(event) || event["event_type"] !== "generated_image")
-        continue;
-      try {
-        const payload = JSON.parse(event["content"] || "{}");
-        const imagePath = payload?.path;
-        if (
-          imagePath &&
-          !seen.has(imagePath) &&
-          fs.existsSync(imagePath) &&
-          fs.statSync(imagePath).isFile()
-        ) {
-          seen.add(imagePath);
-          paths.push(imagePath);
-        }
-      } catch {
-        // Ignore malformed generated-image event payloads.
-      }
-    }
-    return paths;
+    return generated_image_paths_for_task(this.db, "Feishu", task_id);
   }
 
   _collect_generated_image_paths(
@@ -802,94 +740,39 @@ export class FeishuChannel extends Channel {
     content: string,
     task: Row | null = null,
   ): string[] {
-    const paths = this._generated_image_paths_for_task(task_id);
-    paths.push(
-      ...this._generated_image_paths_from_markdown(
-        content,
-        task?.["working_dir"],
-      ),
+    return collect_generated_image_paths(
+      this.db,
+      "Feishu",
+      task_id,
+      content,
+      task,
     );
-    return this._dedupe_image_paths(paths);
   }
 
   _generated_image_paths_from_markdown(
     content: string,
     working_dir: string | null = null,
   ): string[] {
-    const paths: string[] = [];
-    for (const ref of markdown_image_refs(content)) {
-      const imagePath = this._local_image_path_from_reference(ref, working_dir);
-      if (imagePath) paths.push(imagePath);
-    }
-    return paths;
+    return generated_image_paths_from_markdown(content, working_dir);
   }
 
   _local_image_path_from_reference(
     reference: string,
     working_dir: string | null = null,
   ): string | null {
-    let target = this._markdown_image_reference_target(reference);
-    if (
-      !target ||
-      target.startsWith("http://") ||
-      target.startsWith("https://") ||
-      target.startsWith("data:")
-    ) {
-      return null;
-    }
-    if (target.startsWith("file://")) target = fileUrlPath(target);
-    else if (target.startsWith("sandbox:"))
-      target = target.slice("sandbox:".length);
-    target = decodePath(target).trim();
-    if (!target) return null;
-    let imagePath = expandUser(target);
-    if (!path.isAbsolute(imagePath) && working_dir)
-      imagePath = path.join(expandUser(working_dir), imagePath);
-    if (!is_uploadable_image(imagePath)) return null;
-    try {
-      if (!fs.statSync(imagePath).isFile()) return null;
-      return fs.realpathSync(imagePath);
-    } catch {
-      return null;
-    }
+    return local_image_path_from_reference(reference, working_dir);
   }
 
   _markdown_image_reference_target(reference: string): string {
-    const raw = (reference || "").trim();
-    if (!raw) return "";
-    if (raw.startsWith("<")) {
-      const end = raw.indexOf(">");
-      if (end >= 0) return raw.slice(1, end).trim();
-    }
-    if (raw[0] === "'" || raw[0] === '"') {
-      const end = raw.indexOf(raw[0], 1);
-      if (end > 0) return raw.slice(1, end).trim();
-    }
-    const titled = raw.match(/(.+?)\s+['"][^'"]*['"]\s*$/);
-    return (titled ? titled[1]! : raw).trim();
+    return markdown_image_reference_target(reference);
   }
 
   _dedupe_image_paths(image_paths: string[]): string[] {
-    const deduped: string[] = [];
-    const seen = new Set<string>();
-    for (const imagePath of image_paths) {
-      const canonical = this._canonical_image_path(imagePath);
-      if (!canonical || seen.has(canonical)) continue;
-      seen.add(canonical);
-      deduped.push(canonical);
-    }
-    return deduped;
+    return dedupe_image_paths(image_paths);
   }
 
-  _canonical_image_path(imagePath: string | null): string | null {
-    if (!imagePath) return null;
-    try {
-      const expanded = expandUser(imagePath);
-      if (!fs.statSync(expanded).isFile()) return null;
-      return fs.realpathSync(expanded);
-    } catch {
-      return null;
-    }
+  _canonical_image_path(image_path: string | null): string | null {
+    return canonical_image_path(image_path);
   }
 
   async _upload_images(image_paths: string[]): Promise<string[]> {
@@ -944,54 +827,39 @@ export class FeishuChannel extends Channel {
   _hide_generated_image_paths(
     content: string,
     image_count: number,
-    uploaded_paths: string[] = [],
+    uploaded_paths: string[] | null = null,
+    working_dir: string | null = null,
   ): string {
-    const uploaded = new Set(
-      uploaded_paths
-        .map((p) => this._canonical_image_path(p))
-        .filter((p): p is string => Boolean(p)),
+    return hide_generated_image_paths(
+      content,
+      image_count,
+      uploaded_paths,
+      working_dir,
     );
-    const lines: string[] = [];
-    for (const line of (content || "").split(/\r?\n/)) {
-      const stripped = line.trim();
-      if (!stripped) {
-        lines.push("");
-        continue;
-      }
-      if (this._line_is_uploaded_image_path(stripped, uploaded)) continue;
-      const cleaned = this._remove_uploaded_markdown_image_refs(line, uploaded);
-      const visible = cleaned.trim();
-      if (visible && !["-", "*", "+"].includes(visible))
-        lines.push(cleaned.trimEnd());
-    }
-    const cleaned = lines.join("\n").trim();
-    if (!cleaned || cleaned.startsWith("已生成"))
-      return `已生成 ${image_count} 张图片。`;
-    return cleaned;
   }
 
   _line_is_uploaded_image_path(
     stripped_line: string,
     uploaded_paths: Set<string>,
+    working_dir: string | null = null,
   ): boolean {
-    if (!stripped_line.startsWith("- ")) return false;
-    const canonical = this._canonical_image_path(stripped_line.slice(2).trim());
-    return Boolean(
-      (canonical && uploaded_paths.has(canonical)) ||
-      stripped_line.includes("/.codex/generated_images/"),
+    return line_is_uploaded_image_path(
+      stripped_line,
+      uploaded_paths,
+      working_dir,
     );
   }
 
   _remove_uploaded_markdown_image_refs(
     line: string,
     uploaded_paths: Set<string>,
+    working_dir: string | null = null,
   ): string {
-    if (!uploaded_paths.size) return line;
-    return replace_markdown_image_refs(line, (full, target) => {
-      const imagePath = this._local_image_path_from_reference(target);
-      const canonical = this._canonical_image_path(imagePath);
-      return canonical && uploaded_paths.has(canonical) ? "" : full;
-    });
+    return remove_uploaded_markdown_image_refs(
+      line,
+      uploaded_paths,
+      working_dir,
+    );
   }
 
   async _send_message(

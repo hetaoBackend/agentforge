@@ -75,17 +75,19 @@ import {
   type SkillSuggestionCommand,
 } from "./brief_utils.ts";
 import { handle_dir_command, resolve_working_dir } from "./dir_utils.ts";
+
 import {
-  expanduser,
-  file_url_path,
-  is_plain_object,
-  unquote,
-} from "./path_utils.ts";
-import {
-  is_uploadable_image,
-  markdown_image_refs,
-  replace_markdown_image_refs,
-} from "./image_utils.ts";
+  canonical_image_path,
+  collect_generated_image_paths,
+  dedupe_image_paths,
+  generated_image_paths_for_task,
+  generated_image_paths_from_markdown,
+  hide_generated_image_paths,
+  line_is_uploaded_image_path,
+  local_image_path_from_reference,
+  markdown_image_reference_target,
+  remove_uploaded_markdown_image_refs,
+} from "./generated_images.ts";
 
 // ≙ Python's try/except ImportError guard around the telegram SDK import.
 // fetch is always available on Bun, so this is true by default; the setter is
@@ -1286,166 +1288,43 @@ export class TelegramChannel extends Channel {
     content: string,
     task: Record<string, unknown> | null = null,
   ): string[] {
-    const paths = this._generated_image_paths_for_task(task_id);
-    paths.push(
-      ...this._generated_image_paths_from_markdown(
-        content,
-        ((task ?? {})["working_dir"] as string | null | undefined) ?? null,
-      ),
+    return collect_generated_image_paths(
+      this.db,
+      "Telegram",
+      task_id,
+      content,
+      task,
     );
-    return this._dedupe_image_paths(paths);
   }
 
   _generated_image_paths_for_task(task_id: number): string[] {
-    let runs: unknown;
-    try {
-      runs = this.db.get_task_runs(task_id, 1);
-    } catch (exc) {
-      console.log(
-        `[Telegram] Failed to load runs for generated images: ${exc}`,
-      );
-      return [];
-    }
-    if (!Array.isArray(runs) || runs.length === 0) {
-      return [];
-    }
-
-    const first: unknown = runs[0];
-    const run_id = is_plain_object(first) ? first["id"] : null;
-    if (!run_id) {
-      return [];
-    }
-    let events: unknown;
-    try {
-      events = this.db.get_run_output_events(run_id as number, 1000);
-    } catch (exc) {
-      console.log(
-        `[Telegram] Failed to load output events for generated images: ${exc}`,
-      );
-      return [];
-    }
-    if (!Array.isArray(events)) {
-      return [];
-    }
-
-    const paths: string[] = [];
-    for (const event of events) {
-      if (
-        !is_plain_object(event) ||
-        event["event_type"] !== "generated_image"
-      ) {
-        continue;
-      }
-      let payload: unknown;
-      try {
-        payload = JSON.parse((event["content"] as string | undefined) || "{}");
-      } catch {
-        continue;
-      }
-      const p = is_plain_object(payload) ? payload["path"] : null;
-      if (p) {
-        paths.push(p as string);
-      }
-    }
-    return paths;
+    return generated_image_paths_for_task(this.db, "Telegram", task_id);
   }
 
   _generated_image_paths_from_markdown(
     content: string,
     working_dir: string | null = null,
   ): string[] {
-    const paths: string[] = [];
-    for (const ref of markdown_image_refs(content)) {
-      const image_path = this._local_image_path_from_reference(
-        ref,
-        working_dir,
-      );
-      if (image_path) {
-        paths.push(image_path);
-      }
-    }
-    return paths;
+    return generated_image_paths_from_markdown(content, working_dir);
   }
 
   _local_image_path_from_reference(
     reference: string,
     working_dir: string | null = null,
   ): string | null {
-    let target = this._markdown_image_reference_target(reference);
-    if (
-      !target ||
-      target.startsWith("http://") ||
-      target.startsWith("https://") ||
-      target.startsWith("data:")
-    ) {
-      return null;
-    }
-    if (target.startsWith("file://")) {
-      target = file_url_path(target);
-    } else if (target.startsWith("sandbox:")) {
-      target = target.slice("sandbox:".length);
-    }
-    target = unquote(target).trim();
-    if (!target) {
-      return null;
-    }
-
-    let p = expanduser(target);
-    if (!path.isAbsolute(p) && working_dir) {
-      p = path.join(expanduser(working_dir), p);
-    }
-    return this._canonical_image_path(p);
+    return local_image_path_from_reference(reference, working_dir);
   }
 
   _markdown_image_reference_target(reference: string): string {
-    const raw = (reference || "").trim();
-    if (!raw) {
-      return "";
-    }
-    if (raw.startsWith("<")) {
-      const end = raw.indexOf(">");
-      if (end >= 0) {
-        return raw.slice(1, end).trim();
-      }
-    }
-    if (raw[0] === "'" || raw[0] === '"') {
-      const end = raw.indexOf(raw[0]!, 1);
-      if (end > 0) {
-        return raw.slice(1, end).trim();
-      }
-    }
-    const titled = /^(.+?)\s+['"][^'"]*['"]\s*$/.exec(raw);
-    return (titled ? titled[1]! : raw).trim();
+    return markdown_image_reference_target(reference);
   }
 
   _dedupe_image_paths(image_paths: string[]): string[] {
-    const deduped: string[] = [];
-    const seen = new Set<string>();
-    for (const image_path of image_paths) {
-      const canonical = this._canonical_image_path(image_path);
-      if (!canonical || seen.has(canonical)) {
-        continue;
-      }
-      seen.add(canonical);
-      deduped.push(canonical);
-    }
-    return deduped;
+    return dedupe_image_paths(image_paths);
   }
 
-  _canonical_image_path(image_path: string): string | null {
-    try {
-      const p = expanduser(image_path);
-      if (!is_uploadable_image(p)) {
-        return null;
-      }
-      const stat = fs.statSync(p, { throwIfNoEntry: false });
-      if (!stat || !stat.isFile()) {
-        return null;
-      }
-      return fs.realpathSync(path.resolve(p));
-    } catch {
-      return null;
-    }
+  _canonical_image_path(image_path: string | null): string | null {
+    return canonical_image_path(image_path);
   }
 
   _hide_generated_image_paths(
@@ -1454,38 +1333,12 @@ export class TelegramChannel extends Channel {
     uploaded_paths: string[] | null = null,
     working_dir: string | null = null,
   ): string {
-    const uploaded = new Set<string>();
-    for (const p of uploaded_paths ?? []) {
-      const canonical = this._canonical_image_path(p);
-      if (canonical) {
-        uploaded.add(canonical);
-      }
-    }
-    const lines: string[] = [];
-    for (const line of (content || "").split(/\r\n|\r|\n/)) {
-      const stripped = line.trim();
-      if (!stripped) {
-        lines.push("");
-        continue;
-      }
-      if (this._line_is_uploaded_image_path(stripped, uploaded, working_dir)) {
-        continue;
-      }
-      const cleaned_line = this._remove_uploaded_markdown_image_refs(
-        line,
-        uploaded,
-        working_dir,
-      );
-      const visible = cleaned_line.trim();
-      if (visible && visible !== "-" && visible !== "*" && visible !== "+") {
-        lines.push(cleaned_line.replace(/\s+$/, ""));
-      }
-    }
-    const cleaned = lines.join("\n").trim();
-    if (!cleaned || cleaned.startsWith("已生成")) {
-      return `已生成 ${image_count} 张图片。`;
-    }
-    return cleaned;
+    return hide_generated_image_paths(
+      content,
+      image_count,
+      uploaded_paths,
+      working_dir,
+    );
   }
 
   _line_is_uploaded_image_path(
@@ -1493,17 +1346,11 @@ export class TelegramChannel extends Channel {
     uploaded_paths: Set<string>,
     working_dir: string | null = null,
   ): boolean {
-    if (!stripped_line.startsWith("- ")) {
-      return false;
-    }
-    const candidate = stripped_line.slice(2).trim();
-    const canonical =
-      this._local_image_path_from_reference(candidate, working_dir) ??
-      this._canonical_image_path(candidate);
-    if (canonical && uploaded_paths.has(canonical)) {
-      return true;
-    }
-    return stripped_line.includes("/.codex/generated_images/");
+    return line_is_uploaded_image_path(
+      stripped_line,
+      uploaded_paths,
+      working_dir,
+    );
   }
 
   _remove_uploaded_markdown_image_refs(
@@ -1511,20 +1358,11 @@ export class TelegramChannel extends Channel {
     uploaded_paths: Set<string>,
     working_dir: string | null = null,
   ): string {
-    if (uploaded_paths.size === 0) {
-      return line;
-    }
-
-    return replace_markdown_image_refs(line, (match, ref) => {
-      const image_path = this._local_image_path_from_reference(
-        ref,
-        working_dir,
-      );
-      const canonical = image_path
-        ? this._canonical_image_path(image_path)
-        : null;
-      return canonical !== null && uploaded_paths.has(canonical) ? "" : match;
-    });
+    return remove_uploaded_markdown_image_refs(
+      line,
+      uploaded_paths,
+      working_dir,
+    );
   }
 }
 
