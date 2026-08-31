@@ -1,0 +1,7 @@
+# Bun test configuration for the desktop app.
+#
+# Component tests render React into a DOM, which Bun's runtime does not
+# provide on its own. The preload installs happy-dom's globals (document,
+# window, HTMLElement, ...) before any test module is imported.
+[test]
+preload = ["./src/renderer/testSetup.ts"]
