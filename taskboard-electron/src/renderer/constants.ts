@@ -1,8 +1,21 @@
 /** Board columns, agent registry and form defaults shared across features. */
 
 import { CheckCircle2, Inbox, Play } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
 
-export const COLUMNS = [
+import type { TaskStatus } from "./types.ts";
+
+interface BoardColumnDef {
+  key: string;
+  label: string;
+  hint: string;
+  /** Typed against the backend union so a new status cannot go unrouted. */
+  statuses: TaskStatus[];
+  icon: LucideIcon;
+  tone: string;
+}
+
+export const COLUMNS: BoardColumnDef[] = [
   {
     key: "queued",
     label: "Queue",

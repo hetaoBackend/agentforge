@@ -1,24 +1,28 @@
 // Shared types for the renderer: backend REST payloads (snake_case JSON for
 // API compatibility) and the native desktop bridge surface.
+//
+// The closed value sets below are re-exported from the backend rather than
+// copied, so adding or renaming a status server-side breaks the renderer
+// build instead of drifting silently. The payload interfaces stay local on
+// purpose: they describe a row that has already been through SQLite, so `id`
+// and the timestamps are non-null and the joined fields the REST layer adds
+// (`dependencies`, `dependents`) have no backend counterpart.
+import type {
+  HeartbeatScheduleType,
+  PromptImage,
+  ScheduleType,
+  TaskStatus,
+} from "../../../backend/src/types.ts";
 
-export type TaskStatus =
-  | "pending"
-  | "scheduled"
-  | "blocked"
-  | "running"
-  | "completed"
-  | "failed"
-  | "cancelled";
-
-export type ScheduleType = "immediate" | "delayed" | "scheduled_at" | "cron";
+export type { HeartbeatScheduleType, PromptImage, ScheduleType, TaskStatus };
 
 export interface Task {
   id: number;
   title: string;
   prompt: string;
   working_dir: string;
-  status: TaskStatus | string;
-  schedule_type: ScheduleType | string;
+  status: TaskStatus;
+  schedule_type: ScheduleType;
   cron_expr: string | null;
   delay_seconds: number | null;
   next_run_at: string | null;
@@ -42,12 +46,6 @@ export interface Task {
   dependencies?: TaskDependency[];
   /** Only present on the task-detail payload: ids of tasks this one unblocks. */
   dependents?: number[];
-}
-
-export interface PromptImage {
-  media_type: string;
-  data: string;
-  name?: string;
 }
 
 export interface TaskDependency {
@@ -84,7 +82,7 @@ export interface Heartbeat {
   name: string;
   enabled: number | boolean;
   working_dir: string;
-  schedule_type: string;
+  schedule_type: HeartbeatScheduleType;
   cron_expr: string | null;
   interval_seconds: number | null;
   check_prompt: string;
