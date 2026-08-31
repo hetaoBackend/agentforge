@@ -40,6 +40,7 @@ import {
   type TelegramChannel,
 } from "./channels/telegram.ts";
 import { WeixinChannel } from "./channels/weixin.ts";
+import { Router, type Route } from "./api/router.ts";
 
 type Row = Record<string, any>;
 
@@ -1007,1200 +1008,1655 @@ async function restartChannels(ctx: ApiContext, body: Row): Promise<void> {
   }
 }
 
-async function handleGet(
-  ctx: ApiContext,
-  req: Request,
-  url: URL,
-  origin: string,
-): Promise<Response> {
-  const path = url.pathname;
-
-  if (path === "/api/heartbeats") {
-    return jsonResponse(ctx.db.get_all_heartbeats(), 200, origin);
-  }
-  if (
-    path.startsWith("/api/heartbeats/") &&
-    path.includes("/ticks/") &&
-    path.endsWith("/output")
-  ) {
-    const hid = idAt(path);
-    const tickId = idAt(path, 5);
-    if (hid === null || tickId === null)
-      return jsonResponse({ error: "not found" }, 404, origin);
-    const tick = ctx.db.get_heartbeat_tick(hid, tickId);
-    if (!tick) return jsonResponse({ error: "not found" }, 404, origin);
-    const output =
-      ctx.scheduler._live_heartbeat_output.get(tickId) ??
-      tick["raw_output"] ??
-      "";
-    return jsonResponse(
-      { output, is_running: ctx.scheduler._live_heartbeat_output.has(tickId) },
-      200,
-      origin,
-    );
-  }
-  if (path.startsWith("/api/heartbeats/") && path.endsWith("/ticks")) {
-    const hid = idAt(path);
-    if (hid === null) return jsonResponse({ error: "not found" }, 404, origin);
-    const limit = Number.parseInt(url.searchParams.get("limit") ?? "50", 10);
-    return jsonResponse(
-      { ticks: ctx.db.get_heartbeat_ticks(hid, limit) },
-      200,
-      origin,
-    );
-  }
-  if (path.startsWith("/api/heartbeats/")) {
-    const hid = idAt(path);
-    if (hid === null) return jsonResponse({ error: "not found" }, 404, origin);
-    const heartbeat = ctx.db.get_heartbeat(hid);
-    return heartbeat
-      ? jsonResponse(heartbeat, 200, origin)
-      : jsonResponse({ error: "not found" }, 404, origin);
-  }
-
-  if (path === "/api/task-briefs") {
-    const status = url.searchParams.get("status");
-    return jsonResponse(
-      { briefs: ctx.db.get_task_briefs(status || null) },
-      200,
-      origin,
-    );
-  }
-  if (path.startsWith("/api/task-briefs/")) {
-    const bid = idAt(path);
-    const brief = bid === null ? null : ctx.db.get_task_brief(bid);
-    return brief
-      ? jsonResponse(brief, 200, origin)
-      : jsonResponse({ error: "not found" }, 404, origin);
-  }
-
-  if (path === "/api/im-runbooks") {
-    return jsonResponse({ runbooks: allIMRunbooks(ctx) }, 200, origin);
-  }
-
-  if (path === "/api/tasks") {
-    return jsonResponse(
-      ctx.db.get_all_tasks().map((t) => attachDependencyMetadata(ctx.db, t)),
-      200,
-      origin,
-    );
-  }
-  if (path.startsWith("/api/tasks/") && path.endsWith("/runs")) {
-    const tid = idAt(path);
-    return tid === null
-      ? jsonResponse({ error: "not found" }, 404, origin)
-      : jsonResponse(ctx.db.get_task_runs(tid), 200, origin);
-  }
-  if (path.startsWith("/api/tasks/") && path.endsWith("/output")) {
-    const tid = idAt(path);
-    return tid === null
-      ? jsonResponse({ error: "not found" }, 404, origin)
-      : jsonResponse(taskOutputPayload(ctx, tid), 200, origin);
-  }
-  if (path.startsWith("/api/tasks/") && path.endsWith("/events")) {
-    const tid = idAt(path);
-    if (tid === null) return jsonResponse({ error: "not found" }, 404, origin);
-    const limit = Number.parseInt(url.searchParams.get("limit") ?? "1000", 10);
-    const offset = Number.parseInt(url.searchParams.get("offset") ?? "0", 10);
-    const events = ctx.db.get_output_events(tid, limit, offset);
-    return jsonResponse({ events, total: events.length }, 200, origin);
-  }
-  if (path.startsWith("/api/tasks/") && path.endsWith("/messages")) {
-    const tid = idAt(path);
-    return tid === null
-      ? jsonResponse({ error: "not found" }, 404, origin)
-      : jsonResponse(taskMessages(ctx, tid), 200, origin);
-  }
-  if (path.startsWith("/api/tasks/") && path.endsWith("/dependencies")) {
-    const tid = idAt(path);
-    return tid === null
-      ? jsonResponse({ error: "not found" }, 404, origin)
-      : jsonResponse(ctx.db.get_dependencies(tid), 200, origin);
-  }
-  if (path.startsWith("/api/tasks/") && path.endsWith("/dependents")) {
-    const tid = idAt(path);
-    return tid === null
-      ? jsonResponse({ error: "not found" }, 404, origin)
-      : jsonResponse(ctx.db.get_dependents(tid), 200, origin);
-  }
-  if (path.startsWith("/api/dag/")) {
-    const dagId = decodeURIComponent(path.slice("/api/dag/".length));
-    const tasks = ctx.db
-      .get_dag_tasks(dagId)
-      .map((t) => attachDependencyMetadata(ctx.db, t));
-    return jsonResponse(tasks, 200, origin);
-  }
-  if (path.startsWith("/api/tasks/")) {
-    const tid = idAt(path);
-    const task = tid === null ? null : ctx.db.get_task(tid);
-    return task
-      ? jsonResponse(attachDependencyMetadata(ctx.db, task), 200, origin)
-      : jsonResponse({ error: "not found" }, 404, origin);
-  }
-
-  if (path === "/api/skill-patterns") {
-    return jsonResponse(
-      {
-        patterns: ctx.db.get_skill_patterns(),
-        sweep: ctx.scheduler.skill_sweep_status(),
-      },
-      200,
-      origin,
-    );
-  }
-  if (path === "/api/skills") {
-    return jsonResponse({ skills: ctx.db.get_skills() }, 200, origin);
-  }
-  if (path.startsWith("/api/skills/") && path.endsWith("/content")) {
-    const sid = idAt(path);
-    const skill = sid === null ? null : ctx.db.get_skill(sid);
-    if (!skill) return jsonResponse({ error: "not found" }, 404, origin);
-    let content: string;
-    try {
-      content = fs.readFileSync(String(skill["path"]), "utf8");
-    } catch (e) {
-      content = `(无法读取 SKILL.md：${e})`;
-    }
-    return jsonResponse({ content, path: skill["path"], skill }, 200, origin);
-  }
-
-  if (path === "/api/csrf-token")
-    return jsonResponse({ csrf_token: CSRF_TOKEN }, 200, origin);
-  if (path === "/api/health")
-    return jsonResponse(
-      { status: "ok", tasks: ctx.db.get_all_tasks().length },
-      200,
-      origin,
-    );
-  if (path === "/api/settings") {
-    return jsonResponse(
-      {
-        default_agent: ctx.db.get_setting("default_agent", DEFAULT_AGENT),
-        timeout: Number.parseInt(
-          ctx.db.get_setting("timeout", String(DEFAULT_TIMEOUT_SECONDS)) ??
-            String(DEFAULT_TIMEOUT_SECONDS),
-          10,
-        ),
-        skill_library_enabled:
-          ctx.db.get_setting("skill_library_enabled", "0") === "1",
-        skill_sweep_agent: ctx.db.get_setting(
-          "skill_sweep_agent",
-          DEFAULT_AGENT,
-        ),
-        skill_sweep_cron: ctx.db.get_setting("skill_sweep_cron", "0 3 * * *"),
-        im_digest_enabled: ctx.db.get_setting("im_digest_enabled", "0") === "1",
-        im_digest_cron: ctx.db.get_setting("im_digest_cron", "0 9 * * 1-5"),
-        im_digest_channels: parse_im_digest_recipients(
-          ctx.db.get_setting("im_digest_channels", "[]"),
-        ),
-        im_attention_digest_minutes: Number.parseInt(
-          ctx.db.get_setting("im_attention_digest_minutes", "20") ?? "20",
-          10,
-        ),
-        im_skill_suggestions_enabled:
-          ctx.db.get_setting("im_skill_suggestions_enabled", "0") === "1",
-        im_skill_suggestion_channels: parse_im_digest_recipients(
-          ctx.db.get_setting("im_skill_suggestion_channels", "[]"),
-        ),
-      },
-      200,
-      origin,
-    );
-  }
-  if (path === "/api/feishu/settings") {
-    return jsonResponse(
-      {
-        feishu_app_id: ctx.db.get_setting("feishu_app_id", ""),
-        feishu_app_secret: ctx.db.get_setting("feishu_app_secret", ""),
-        feishu_default_chat_id: ctx.db.get_setting(
-          "feishu_default_chat_id",
-          "",
-        ),
-        feishu_default_working_dir: ctx.db.get_setting(
-          "feishu_default_working_dir",
-          "~",
-        ),
-        feishu_enabled: ctx.db.get_setting("feishu_enabled", "false"),
-      },
-      200,
-      origin,
-    );
-  }
-  if (path === "/api/channels/status") {
-    return jsonResponse(channelsStatus(ctx), 200, origin);
-  }
-
-  return jsonResponse({ error: "not found" }, 404, origin);
+/** Everything a route handler may read; the router fills it in per request. */
+interface RouteArgs {
+  ctx: ApiContext;
+  url: URL;
+  path: string;
+  origin: string;
+  /** Parsed JSON body for POST/PUT/PATCH; always `{}` for GET and DELETE. */
+  body: Row;
 }
 
-async function handlePost(
-  ctx: ApiContext,
-  req: Request,
-  url: URL,
-  origin: string,
-): Promise<Response> {
-  const bodyOrResponse = await readJsonBody(req, origin);
-  if (bodyOrResponse instanceof Response) return bodyOrResponse;
-  const body = bodyOrResponse;
-  const path = url.pathname;
-
-  if (path === "/api/heartbeats") {
-    const validated = validateHeartbeatPayload(ctx, body);
-    if (validated.response)
-      return jsonResponse(
-        validated.response[0],
-        validated.response[1] ?? 200,
-        origin,
-      );
-    const id = ctx.db.add_heartbeat(validated.heartbeat!);
-    return jsonResponse({ id, status: "created" }, 201, origin);
-  }
-  if (path.startsWith("/api/heartbeats/") && path.endsWith("/run-now")) {
-    const hid = idAt(path);
-    if (hid === null) return jsonResponse({ error: "not found" }, 404, origin);
-    try {
-      ctx.scheduler.trigger_heartbeat_now(hid);
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      return jsonResponse(
-        { error: msg },
-        msg.includes("not found") ? 404 : 409,
-        origin,
-      );
-    }
-    return jsonResponse({ status: "scheduled" }, 200, origin);
-  }
-  if (path.startsWith("/api/heartbeats/") && path.endsWith("/pause")) {
-    const hid = idAt(path);
-    if (hid === null) return jsonResponse({ error: "not found" }, 404, origin);
-    try {
-      ctx.scheduler.pause_heartbeat(hid);
-    } catch (e) {
-      return jsonResponse(
-        { error: e instanceof Error ? e.message : String(e) },
-        404,
-        origin,
-      );
-    }
-    return jsonResponse({ status: "paused" }, 200, origin);
-  }
-  if (path.startsWith("/api/heartbeats/") && path.endsWith("/resume")) {
-    const hid = idAt(path);
-    if (hid === null) return jsonResponse({ error: "not found" }, 404, origin);
-    try {
-      ctx.scheduler.resume_heartbeat(hid);
-    } catch (e) {
-      return jsonResponse(
-        { error: e instanceof Error ? e.message : String(e) },
-        404,
-        origin,
-      );
-    }
-    return jsonResponse({ status: "resumed" }, 200, origin);
-  }
-
-  if (path === "/api/task-briefs") {
-    const validated = validateTaskBriefPayload(body);
-    if (validated.response) {
-      return jsonResponse(
-        validated.response[0],
-        validated.response[1] ?? 200,
-        origin,
-      );
-    }
-    const id = ctx.db.add_task_brief(validated.brief!);
-    return jsonResponse(ctx.db.get_task_brief(id), 201, origin);
-  }
-  if (path.startsWith("/api/task-briefs/") && path.endsWith("/confirm")) {
-    const bid = idAt(path);
-    const brief = bid === null ? null : ctx.db.get_task_brief(bid);
-    if (!brief || bid === null)
-      return jsonResponse({ error: "not found" }, 404, origin);
-    if (brief["status"] !== TaskBriefStatus.DRAFT) {
-      return jsonResponse(
-        {
-          error: `Cannot confirm draft task with status '${brief["status"]}'.`,
-        },
-        409,
-        origin,
-      );
-    }
-    const task = taskFromBrief(ctx, brief);
-    const dirError = ensureWorkingDir(
-      task.working_dir,
-      `working_dir does not exist or is not a directory: ${task.working_dir}`,
-    );
-    if (dirError) return jsonResponse(dirError, 400, origin);
-    const taskId = ctx.scheduler.submit_task(task);
-    ctx.db.confirm_task_brief(bid, taskId);
-    return jsonResponse(
-      {
-        status: "created",
-        task_id: taskId,
-        brief: ctx.db.get_task_brief(bid),
-      },
-      201,
-      origin,
-    );
-  }
-  if (path.startsWith("/api/task-briefs/") && path.endsWith("/discard")) {
-    const bid = idAt(path);
-    const brief = bid === null ? null : ctx.db.get_task_brief(bid);
-    if (!brief || bid === null)
-      return jsonResponse({ error: "not found" }, 404, origin);
-    if (brief["status"] !== TaskBriefStatus.DRAFT) {
-      return jsonResponse(
-        {
-          error: `Cannot discard draft task with status '${brief["status"]}'.`,
-        },
-        409,
-        origin,
-      );
-    }
-    ctx.db.discard_task_brief(bid);
-    return jsonResponse(ctx.db.get_task_brief(bid), 200, origin);
-  }
-
-  if (path === "/api/im-runbooks") {
-    const validated = validateIMRunbookPayload(body);
-    if (validated.response) {
-      return jsonResponse(
-        validated.response[0],
-        validated.response[1] ?? 200,
-        origin,
-      );
-    }
-    const id = ctx.db.add_im_runbook(validated.runbook!);
-    return jsonResponse(ctx.db.get_im_runbook(id), 201, origin);
-  }
-  if (path === "/api/im-runbooks/from-task") {
-    const validated = commandFromTaskPayload(ctx, body);
-    if (validated.response) {
-      return jsonResponse(
-        validated.response[0],
-        validated.response[1] ?? 200,
-        origin,
-      );
-    }
-    const id = ctx.db.add_im_runbook(validated.runbook!);
-    return jsonResponse(ctx.db.get_im_runbook(id), 201, origin);
-  }
+/**
+ * Every REST route in one place. Order here is presentational only — the
+ * router derives match priority from the patterns, so a broad
+ * `/api/tasks/:task_id+` can no longer swallow a narrow `/api/tasks/:id/runs`
+ * added after it.
+ */
+const ROUTES: Array<Route<RouteArgs>> = [
+  // GET
+  { method: "GET", pattern: "/api/heartbeats", handler: getHeartbeats },
   {
-    const parts = path.split("/");
-    if (
-      parts.length === 5 &&
-      parts[2] === "im-runbooks" &&
-      (parts[4] === "preview" || parts[4] === "run")
-    ) {
-      const name = decodeURIComponent(parts[3] ?? "");
-      const sourceRef = asString(body["source_ref"] ?? `api:${name}`).trim();
-      try {
-        const result = ctx.scheduler.handle_inbound_message(
-          makeInboundMessage({
-            type:
-              parts[4] === "preview"
-                ? InboundMessageType.PREVIEW_RUNBOOK
-                : InboundMessageType.RUN_RUNBOOK,
-            source: "api",
-            payload: {
-              ...body,
-              name,
-              raw_args: asString(body["raw_args"] ?? ""),
-              source_channel:
-                asString(body["source_channel"] ?? "api").trim() || "api",
-              source_ref: sourceRef || `api:${name}`,
-            },
-            metadata: { source_ref: sourceRef || `api:${name}` },
-          }),
-        );
-        return jsonResponse(result, 201, origin);
-      } catch (e) {
-        return jsonResponse(
-          { error: e instanceof Error ? e.message : String(e) },
-          400,
-          origin,
-        );
-      }
-    }
-  }
+    method: "GET",
+    pattern: "/api/heartbeats/:hid/ticks/:tick_id/output",
+    handler: getHeartbeatTickOutput,
+  },
+  {
+    method: "GET",
+    pattern: "/api/heartbeats/:hid/ticks",
+    handler: getHeartbeatTicks,
+  },
+  { method: "GET", pattern: "/api/heartbeats/:hid+", handler: getHeartbeat },
+  { method: "GET", pattern: "/api/task-briefs", handler: getTaskBriefs },
+  {
+    method: "GET",
+    pattern: "/api/task-briefs/:brief_id+",
+    handler: getTaskBrief,
+  },
+  { method: "GET", pattern: "/api/im-runbooks", handler: getIMRunbooks },
+  { method: "GET", pattern: "/api/tasks", handler: getTasks },
+  { method: "GET", pattern: "/api/tasks/:task_id/runs", handler: getTaskRuns },
+  {
+    method: "GET",
+    pattern: "/api/tasks/:task_id/output",
+    handler: getTaskOutput,
+  },
+  {
+    method: "GET",
+    pattern: "/api/tasks/:task_id/events",
+    handler: getTaskEvents,
+  },
+  {
+    method: "GET",
+    pattern: "/api/tasks/:task_id/messages",
+    handler: getTaskMessages,
+  },
+  {
+    method: "GET",
+    pattern: "/api/tasks/:task_id/dependencies",
+    handler: getTaskDependencies,
+  },
+  {
+    method: "GET",
+    pattern: "/api/tasks/:task_id/dependents",
+    handler: getTaskDependents,
+  },
+  { method: "GET", pattern: "/api/dag/:dag_id+", handler: getDagTasks },
+  { method: "GET", pattern: "/api/tasks/:task_id+", handler: getTask },
+  { method: "GET", pattern: "/api/skill-patterns", handler: getSkillPatterns },
+  { method: "GET", pattern: "/api/skills", handler: getSkills },
+  {
+    method: "GET",
+    pattern: "/api/skills/:skill_id/content",
+    handler: getSkillContent,
+  },
+  { method: "GET", pattern: "/api/csrf-token", handler: getCsrfToken },
+  { method: "GET", pattern: "/api/health", handler: getHealth },
+  { method: "GET", pattern: "/api/settings", handler: getSettings },
+  {
+    method: "GET",
+    pattern: "/api/feishu/settings",
+    handler: getFeishuSettings,
+  },
+  {
+    method: "GET",
+    pattern: "/api/channels/status",
+    handler: getChannelsStatus,
+  },
+  // POST
+  { method: "POST", pattern: "/api/heartbeats", handler: postHeartbeat },
+  {
+    method: "POST",
+    pattern: "/api/heartbeats/:hid/run-now",
+    handler: postHeartbeatRunNow,
+  },
+  {
+    method: "POST",
+    pattern: "/api/heartbeats/:hid/pause",
+    handler: postHeartbeatPause,
+  },
+  {
+    method: "POST",
+    pattern: "/api/heartbeats/:hid/resume",
+    handler: postHeartbeatResume,
+  },
+  { method: "POST", pattern: "/api/task-briefs", handler: postTaskBrief },
+  {
+    method: "POST",
+    pattern: "/api/task-briefs/:brief_id/confirm",
+    handler: postTaskBriefConfirm,
+  },
+  {
+    method: "POST",
+    pattern: "/api/task-briefs/:brief_id/discard",
+    handler: postTaskBriefDiscard,
+  },
+  { method: "POST", pattern: "/api/im-runbooks", handler: postIMRunbook },
+  {
+    method: "POST",
+    pattern: "/api/im-runbooks/from-task",
+    handler: postIMRunbookFromTask,
+  },
+  {
+    method: "POST",
+    pattern: "/api/im-runbooks/:name/preview",
+    handler: postIMRunbookInvoke,
+  },
+  {
+    method: "POST",
+    pattern: "/api/im-runbooks/:name/run",
+    handler: postIMRunbookInvoke,
+  },
+  {
+    method: "POST",
+    pattern: "/api/im-digests/preview",
+    handler: postIMDigestPreview,
+  },
+  {
+    method: "POST",
+    pattern: "/api/im-digests/send",
+    handler: postIMDigestSend,
+  },
+  {
+    method: "POST",
+    pattern: "/api/im-skill-suggestions/preview",
+    handler: postSkillSuggestionPreview,
+  },
+  {
+    method: "POST",
+    pattern: "/api/im-skill-suggestions/send",
+    handler: postSkillSuggestionSend,
+  },
+  {
+    method: "POST",
+    pattern: "/api/im-skill-suggestions/:suggestion_id/action",
+    handler: postSkillSuggestionAction,
+  },
+  { method: "POST", pattern: "/api/skills/sweep", handler: postSkillsSweep },
+  {
+    method: "POST",
+    pattern: "/api/skill-patterns/:pattern_id/draft",
+    handler: postSkillPatternDraft,
+  },
+  {
+    method: "POST",
+    pattern: "/api/skill-patterns/:pattern_id/approve",
+    handler: postSkillPatternApprove,
+  },
+  {
+    method: "POST",
+    pattern: "/api/skill-patterns/:pattern_id/dismiss",
+    handler: postSkillPatternDismiss,
+  },
+  { method: "POST", pattern: "/api/tasks", handler: postTask },
+  { method: "POST", pattern: "/api/settings", handler: postSettings },
+  {
+    method: "POST",
+    pattern: "/api/feishu/settings",
+    handler: postFeishuSettings,
+  },
+  {
+    method: "POST",
+    pattern: "/api/channels/settings",
+    handler: postChannelsSettings,
+  },
+  {
+    method: "POST",
+    pattern: "/api/channels/weixin/action",
+    handler: postWeixinAction,
+  },
+  { method: "POST", pattern: "/api/dag", handler: postDag },
+  {
+    method: "POST",
+    pattern: "/api/tasks/:task_id/dependencies",
+    handler: postTaskDependency,
+  },
+  {
+    method: "POST",
+    pattern: "/api/tasks/:task_id/cancel",
+    handler: postTaskCancel,
+  },
+  {
+    method: "POST",
+    pattern: "/api/tasks/:task_id/retry",
+    handler: postTaskRetry,
+  },
+  {
+    method: "POST",
+    pattern: "/api/tasks/:task_id/respond",
+    handler: postTaskRespond,
+  },
+  {
+    method: "POST",
+    pattern: "/api/tasks/:task_id/resume",
+    handler: postTaskResume,
+  },
+  // PUT
+  { method: "PUT", pattern: "/api/settings", handler: putSettings },
+  {
+    method: "PUT",
+    pattern: "/api/task-briefs/:brief_id",
+    handler: putTaskBrief,
+  },
+  {
+    method: "PUT",
+    pattern: "/api/im-runbooks/:runbook_id",
+    handler: putIMRunbook,
+  },
+  { method: "PUT", pattern: "/api/skills/:skill_id+", handler: putSkill },
+  { method: "PUT", pattern: "/api/heartbeats/:hid", handler: putHeartbeat },
+  { method: "PUT", pattern: "/api/tasks/:task_id", handler: putTask },
+  // DELETE
+  {
+    method: "DELETE",
+    pattern: "/api/tasks/:task_id/dependencies/:dep_id",
+    handler: deleteTaskDependency,
+  },
+  {
+    method: "DELETE",
+    pattern: "/api/heartbeats/:hid+",
+    handler: deleteHeartbeat,
+  },
+  {
+    method: "DELETE",
+    pattern: "/api/im-runbooks/:runbook_id+",
+    handler: deleteIMRunbook,
+  },
+  { method: "DELETE", pattern: "/api/skills/:skill_id+", handler: deleteSkill },
+  { method: "DELETE", pattern: "/api/tasks/:task_id+", handler: deleteTask },
+];
 
-  if (path === "/api/im-digests/preview") {
-    return jsonResponse(triggerDigest(ctx, body), 200, origin);
-  }
-  if (path === "/api/im-digests/send") {
-    const recipients = digestRecipients(ctx, body);
-    if (!recipients.length) {
-      return jsonResponse(
-        { error: "no digest recipients configured" },
-        409,
-        origin,
-      );
-    }
-    const result = triggerDigest(ctx, body);
-    if (result["status"] === "quiet") {
-      return jsonResponse(result, 200, origin);
-    }
-    const text = asString(result["text"]);
-    try {
-      for (const recipient of recipients) {
-        await sendIMDigest(ctx, recipient, text);
-      }
-    } catch (e) {
-      return jsonResponse(
-        { error: e instanceof Error ? e.message : String(e) },
-        409,
-        origin,
-      );
-    }
-    return jsonResponse(
-      {
-        status: "sent",
-        sent: recipients.length,
-        digest: result["digest"],
-      },
-      200,
-      origin,
-    );
-  }
+const ROUTER = new Router(ROUTES);
 
-  if (path === "/api/im-skill-suggestions/preview") {
-    return jsonResponse(skillSuggestionPreview(ctx, body), 200, origin);
-  }
-  if (path === "/api/im-skill-suggestions/send") {
-    const recipients = skillSuggestionRecipients(ctx, body);
-    if (!recipients.length) {
-      return jsonResponse(
-        { error: "no skill suggestion recipients configured" },
-        409,
-        origin,
-      );
-    }
-    const includeSent = Boolean(body["include_sent"] ?? false);
-    const sentSuggestions: Row[] = [];
-    try {
-      for (const recipient of recipients) {
-        const suggestions = collect_im_skill_suggestions(ctx.db, {
-          channel: recipient.channel,
-          limit:
-            body["limit"] === undefined || body["limit"] === null
-              ? undefined
-              : Number(body["limit"]),
-        });
-        for (const suggestion of suggestions) {
-          if (
-            !includeSent &&
-            !ctx.db.should_send_im_skill_suggestion(
-              suggestion.pattern_id,
-              recipient.channel,
-              recipient.target,
-            )
-          ) {
-            continue;
-          }
-          await sendIMDigest(
-            ctx,
-            recipient,
-            render_im_skill_suggestion_text(suggestion),
-          );
-          ctx.db.upsert_im_skill_suggestion({
-            pattern_id: suggestion.pattern_id,
-            channel: recipient.channel,
-            target: recipient.target,
-            status: "suggested",
-          });
-          sentSuggestions.push({
-            pattern_id: suggestion.pattern_id,
-            channel: recipient.channel,
-            target: recipient.target,
-          });
-        }
-      }
-    } catch (e) {
-      return jsonResponse(
-        { error: e instanceof Error ? e.message : String(e) },
-        409,
-        origin,
-      );
-    }
-    return jsonResponse(
-      {
-        status: "sent",
-        sent: sentSuggestions.length,
-        suggestions: sentSuggestions,
-      },
-      200,
-      origin,
-    );
-  }
-  if (
-    path.startsWith("/api/im-skill-suggestions/") &&
-    path.endsWith("/action")
-  ) {
-    const patternId = idAt(path);
-    if (patternId === null) {
-      return jsonResponse({ error: "pattern not found" }, 404, origin);
-    }
-    try {
-      const result = ctx.scheduler.handle_inbound_message(
-        makeInboundMessage({
-          type: InboundMessageType.SKILL_SUGGESTION_ACTION,
-          source: "api",
-          reply_to:
-            body["target"] === undefined || body["target"] === null
-              ? null
-              : String(body["target"]),
-          payload: {
-            ...body,
-            pattern_id: patternId,
-            source_channel:
-              asString(
-                body["source_channel"] ?? body["channel"] ?? "api",
-              ).trim() || "api",
-            target: asString(body["target"] ?? ""),
-          },
-        }),
-      );
-      return jsonResponse(result, 200, origin);
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      return jsonResponse(
-        { error: msg },
-        msg.includes("not found") ? 404 : 400,
-        origin,
-      );
-    }
-  }
+/** Methods dispatched through the router; anything else is a 405. */
+const ROUTABLE_METHODS = new Set(["GET", "POST", "PUT", "PATCH", "DELETE"]);
 
-  if (path === "/api/skills/sweep") {
-    const started = ctx.scheduler.trigger_skill_sweep(
-      body["agent"] ?? null,
-      Boolean(body["full"] ?? true),
-    );
-    return started
-      ? jsonResponse({ status: "started" }, 200, origin)
-      : jsonResponse({ error: "sweep already running" }, 409, origin);
-  }
-  if (path.startsWith("/api/skill-patterns/") && path.endsWith("/draft")) {
-    const pid = idAt(path);
-    if (
-      pid === null ||
-      !ctx.scheduler.trigger_skill_draft(pid, body["agent"] ?? null)
-    ) {
-      return jsonResponse({ error: "pattern not found" }, 404, origin);
-    }
-    return jsonResponse({ status: "drafting" }, 200, origin);
-  }
-  if (path.startsWith("/api/skill-patterns/") && path.endsWith("/approve")) {
-    const pid = idAt(path);
-    if (pid === null)
-      return jsonResponse({ error: "pattern not found" }, 404, origin);
-    const draft = ctx.db.get_skill_draft(pid);
-    try {
-      const skill = ctx.scheduler.approve_skill(
-        pid,
-        String(body["name"] ?? draft?.["name"] ?? ""),
-        String(body["description"] ?? draft?.["description"] ?? ""),
-        String(body["body"] ?? draft?.["body"] ?? ""),
-      );
-      return jsonResponse({ status: "approved", skill }, 200, origin);
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      return jsonResponse(
-        { error: msg },
-        msg.includes("not found") ? 404 : 400,
-        origin,
-      );
-    }
-  }
-  if (path.startsWith("/api/skill-patterns/") && path.endsWith("/dismiss")) {
-    const pid = idAt(path);
-    try {
-      if (pid === null) throw new Error("pattern not found");
-      ctx.scheduler.dismiss_skill_pattern(pid);
-    } catch (e) {
-      return jsonResponse(
-        { error: e instanceof Error ? e.message : String(e) },
-        404,
-        origin,
-      );
-    }
-    return jsonResponse({ status: "dismissed" }, 200, origin);
-  }
+/** Methods whose request body is parsed before routing. */
+const BODY_METHODS = new Set(["POST", "PUT", "PATCH"]);
 
-  if (path === "/api/tasks") {
-    const prompt = asString(body["prompt"]);
-    if (!prompt.trim())
-      return jsonResponse(
-        { error: "prompt cannot be empty", field: "prompt" },
-        400,
-        origin,
-      );
-    const workingDir = asString(body["working_dir"], ".");
-    const dirError = ensureWorkingDir(
-      workingDir,
-      `working_dir does not exist or is not a directory: ${workingDir}`,
-    );
-    if (dirError) return jsonResponse(dirError, 400, origin);
-    const scheduleType = asString(body["schedule_type"], "immediate");
-    const cronExpr =
-      body["cron_expr"] === undefined ? null : asString(body["cron_expr"]);
-    if (scheduleType === "cron") {
-      if (!cronExpr?.trim())
-        return jsonResponse(
-          {
-            error: "cron_expr is required for cron schedule",
-            field: "cron_expr",
-          },
-          400,
-          origin,
-        );
-      if (!cronValid(cronExpr))
-        return jsonResponse(
-          { error: `invalid cron expression: ${cronExpr}`, field: "cron_expr" },
-          400,
-          origin,
-        );
-    }
-    const deps = dependencyList(
-      body["depends_on"],
-      Boolean(body["inject_result"]),
-    );
-    const task: Task = makeTask({
-      title: asString(body["title"], "Untitled"),
-      prompt,
-      working_dir: workingDir,
-      schedule_type: scheduleType as ScheduleType,
-      cron_expr: cronExpr,
-      delay_seconds: body["delay_seconds"] ?? null,
-      next_run_at: body["next_run_at"] ?? null,
-      max_runs: body["max_runs"] ?? null,
-      tags: asString(body["tags"]),
-      agent: asString(
-        body["agent"] ?? ctx.db.get_setting("default_agent", DEFAULT_AGENT),
-        DEFAULT_AGENT,
-      ),
-      prompt_images: parseJsonList(body["prompt_images"]),
-      image_paths: parseJsonList(body["image_paths"]).map(String),
-      dag_id: body["dag_id"] ?? null,
-    });
-    const id = ctx.scheduler.submit_task(task, deps);
-    return jsonResponse({ id, status: "created" }, 201, origin);
-  }
-
-  if (path === "/api/settings") {
-    for (const [key, value] of Object.entries(body))
-      ctx.db.set_setting(key, String(value));
-    return jsonResponse({ status: "updated" }, 200, origin);
-  }
-  if (path === "/api/feishu/settings") {
-    for (const key of [
-      "feishu_app_id",
-      "feishu_app_secret",
-      "feishu_default_chat_id",
-      "feishu_default_working_dir",
-      "feishu_enabled",
-    ]) {
-      if (key in body) ctx.db.set_setting(key, String(body[key]));
-    }
-    await restartChannels(ctx, body);
-    return jsonResponse({ status: "updated" }, 200, origin);
-  }
-  if (path === "/api/channels/settings") {
-    const allowed = new Set([
-      "telegram_bot_token",
-      "telegram_allowed_users",
-      "telegram_default_working_dir",
-      "telegram_enabled",
-      "telegram_default_chat_id",
-      "slack_bot_token",
-      "slack_app_token",
-      "slack_default_working_dir",
-      "slack_default_channel",
-      "slack_default_user",
-      "slack_enabled",
-      "weixin_default_working_dir",
-      "weixin_base_url",
-      "weixin_account_id",
-      "weixin_enabled",
-    ]);
-    for (const [key, value] of Object.entries(body)) {
-      if (allowed.has(key)) ctx.db.set_setting(key, String(value));
-    }
-    await restartChannels(ctx, body);
-    return jsonResponse({ status: "updated" }, 200, origin);
-  }
-  if (path === "/api/channels/weixin/action") {
-    const action = asString(body["action"]).trim().toLowerCase();
-    if (!ctx.weixin_channel)
-      return jsonResponse({ error: "weixin channel not running" }, 400, origin);
-    if (action === "login" || action === "reconnect") {
-      ctx.weixin_channel.request_login();
-      return jsonResponse({ status: "ok", action }, 200, origin);
-    }
-    if (action === "logout") {
-      ctx.weixin_channel.request_logout();
-      return jsonResponse({ status: "ok", action }, 200, origin);
-    }
-    return jsonResponse({ error: "unsupported action" }, 400, origin);
-  }
-
-  if (path === "/api/dag") {
-    const taskDefs = Array.isArray(body["tasks"])
-      ? (body["tasks"] as Row[])
-      : [];
-    if (!taskDefs.length)
-      return jsonResponse({ error: "tasks list is required" }, 400, origin);
-    const dagId = asString(
-      body["dag_id"],
-      `dag-${Math.trunc(Date.now() / 1000)}`,
-    );
-    const refToId = new Map<string, number>();
-    const results: Row = {};
-    for (const tdef of taskDefs) {
-      const ref = asString(tdef["ref"], String(refToId.size));
-      const dependsOn: Array<{ task_id: number; inject_result: boolean }> = [];
-      for (const depRef of Array.isArray(tdef["depends_on_refs"])
-        ? tdef["depends_on_refs"]
-        : []) {
-        const upstreamId = refToId.get(String(depRef));
-        if (upstreamId === undefined) {
-          return jsonResponse(
-            {
-              error: `ref '${depRef}' not found - declare tasks in topological order`,
-            },
-            400,
-            origin,
-          );
-        }
-        dependsOn.push({
-          task_id: upstreamId,
-          inject_result: Boolean(tdef["inject_result"]),
-        });
-      }
-      const task = makeTask({
-        title: asString(tdef["title"], asString(tdef["prompt"]).slice(0, 60)),
-        prompt: asString(tdef["prompt"]),
-        working_dir: asString(tdef["working_dir"], "."),
-        schedule_type: asString(
-          tdef["schedule_type"],
-          "immediate",
-        ) as ScheduleType,
-        cron_expr: tdef["cron_expr"] ?? null,
-        delay_seconds: tdef["delay_seconds"] ?? null,
-        next_run_at: tdef["next_run_at"] ?? null,
-        max_runs: tdef["max_runs"] ?? null,
-        tags: asString(tdef["tags"]),
-        agent: asString(
-          tdef["agent"] ?? ctx.db.get_setting("default_agent", DEFAULT_AGENT),
-          DEFAULT_AGENT,
-        ),
-        prompt_images: parseJsonList(tdef["prompt_images"]),
-        dag_id: dagId,
-      });
-      const taskId = ctx.scheduler.submit_task(task, dependsOn);
-      refToId.set(ref, taskId);
-      results[ref] = taskId;
-    }
-    return jsonResponse({ dag_id: dagId, task_ids: results }, 201, origin);
-  }
-
-  if (path.startsWith("/api/tasks/") && path.endsWith("/dependencies")) {
-    const tid = idAt(path);
-    const depTaskId = Number(body["depends_on_task_id"]);
-    if (tid === null || !Number.isInteger(depTaskId))
-      return jsonResponse(
-        { error: "depends_on_task_id required" },
-        400,
-        origin,
-      );
-    const task = ctx.db.get_task(tid);
-    const upstream = ctx.db.get_task(depTaskId);
-    if (!task || !upstream)
-      return jsonResponse({ error: "task not found" }, 404, origin);
-    const shouldBlock =
-      upstream["status"] !== "completed" &&
-      ["pending", "scheduled"].includes(task["status"]);
-    ctx.db.transaction(() => {
-      ctx.db.add_dependency(tid, depTaskId, Boolean(body["inject_result"]));
-      if (shouldBlock) ctx.db.update_task(tid, { status: "blocked" });
-    });
-    if (shouldBlock) ctx.scheduler._notify(tid);
-    return jsonResponse({ status: "added" }, 200, origin);
-  }
-  if (path.startsWith("/api/tasks/") && path.endsWith("/cancel")) {
-    const tid = idAt(path);
-    if (tid === null) return jsonResponse({ error: "not found" }, 404, origin);
-    ctx.scheduler.cancel_task(tid);
-    return jsonResponse({ status: "cancelled" }, 200, origin);
-  }
-  if (path.startsWith("/api/tasks/") && path.endsWith("/retry")) {
-    const tid = idAt(path);
-    if (tid === null) return jsonResponse({ error: "not found" }, 404, origin);
-    ctx.scheduler.retry_task(tid);
-    return jsonResponse({ status: "retrying" }, 200, origin);
-  }
-  if (path.startsWith("/api/tasks/") && path.endsWith("/respond")) {
-    const tid = idAt(path);
-    const task = tid === null ? null : ctx.db.get_task(tid);
-    if (!task || tid === null)
-      return jsonResponse({ error: "not found" }, 404, origin);
-    const answer = asString(body["answer"]);
-    ctx.db.update_task(tid, {
-      status: "pending",
-      prompt: answer,
-      answer,
-      question: null,
-      error: null,
-    });
-    return jsonResponse({ status: "responding" }, 200, origin);
-  }
-  if (path.startsWith("/api/tasks/") && path.endsWith("/resume")) {
-    const tid = idAt(path);
-    const task = tid === null ? null : ctx.db.get_task(tid);
-    const message = asString(body["message"]).trim();
-    if (!task || tid === null)
-      return jsonResponse({ error: "not found" }, 404, origin);
-    if (!message)
-      return jsonResponse({ error: "message required" }, 400, origin);
-    if (!task["session_id"])
-      return jsonResponse(
-        { error: "no session_id - cannot resume" },
-        400,
-        origin,
-      );
-    ctx.db.update_task(tid, {
-      status: "pending",
-      prompt: message,
-      result: null,
-      error: null,
-      question: null,
-    });
-    return jsonResponse({ status: "resuming" }, 200, origin);
-  }
-
-  return jsonResponse({ error: "not found" }, 404, origin);
+/** PATCH shares the PUT handlers, so it is not registered separately. */
+function routingMethod(method: string): string {
+  return method === "PATCH" ? "PUT" : method;
 }
 
-async function handlePut(
-  ctx: ApiContext,
-  req: Request,
-  url: URL,
-  origin: string,
-): Promise<Response> {
-  const bodyOrResponse = await readJsonBody(req, origin);
-  if (bodyOrResponse instanceof Response) return bodyOrResponse;
-  const body = bodyOrResponse;
-  const path = url.pathname;
+async function getHeartbeats({ ctx, origin }: RouteArgs): Promise<Response> {
+  return jsonResponse(ctx.db.get_all_heartbeats(), 200, origin);
+}
 
-  if (path === "/api/settings") {
-    for (const [key, value] of Object.entries(body))
-      ctx.db.set_setting(key, String(value));
-    return jsonResponse({ status: "updated" }, 200, origin);
+async function getHeartbeatTickOutput({
+  ctx,
+  path,
+  origin,
+}: RouteArgs): Promise<Response> {
+  const hid = idAt(path);
+  const tickId = idAt(path, 5);
+  if (hid === null || tickId === null)
+    return jsonResponse({ error: "not found" }, 404, origin);
+  const tick = ctx.db.get_heartbeat_tick(hid, tickId);
+  if (!tick) return jsonResponse({ error: "not found" }, 404, origin);
+  const output =
+    ctx.scheduler._live_heartbeat_output.get(tickId) ??
+    tick["raw_output"] ??
+    "";
+  return jsonResponse(
+    { output, is_running: ctx.scheduler._live_heartbeat_output.has(tickId) },
+    200,
+    origin,
+  );
+}
+
+async function getHeartbeatTicks({
+  ctx,
+  url,
+  path,
+  origin,
+}: RouteArgs): Promise<Response> {
+  const hid = idAt(path);
+  if (hid === null) return jsonResponse({ error: "not found" }, 404, origin);
+  const limit = Number.parseInt(url.searchParams.get("limit") ?? "50", 10);
+  return jsonResponse(
+    { ticks: ctx.db.get_heartbeat_ticks(hid, limit) },
+    200,
+    origin,
+  );
+}
+
+async function getHeartbeat({
+  ctx,
+  path,
+  origin,
+}: RouteArgs): Promise<Response> {
+  const hid = idAt(path);
+  if (hid === null) return jsonResponse({ error: "not found" }, 404, origin);
+  const heartbeat = ctx.db.get_heartbeat(hid);
+  return heartbeat
+    ? jsonResponse(heartbeat, 200, origin)
+    : jsonResponse({ error: "not found" }, 404, origin);
+}
+
+async function getTaskBriefs({
+  ctx,
+  url,
+  origin,
+}: RouteArgs): Promise<Response> {
+  const status = url.searchParams.get("status");
+  return jsonResponse(
+    { briefs: ctx.db.get_task_briefs(status || null) },
+    200,
+    origin,
+  );
+}
+
+async function getTaskBrief({
+  ctx,
+  path,
+  origin,
+}: RouteArgs): Promise<Response> {
+  const bid = idAt(path);
+  const brief = bid === null ? null : ctx.db.get_task_brief(bid);
+  return brief
+    ? jsonResponse(brief, 200, origin)
+    : jsonResponse({ error: "not found" }, 404, origin);
+}
+
+async function getIMRunbooks({ ctx, origin }: RouteArgs): Promise<Response> {
+  return jsonResponse({ runbooks: allIMRunbooks(ctx) }, 200, origin);
+}
+
+async function getTasks({ ctx, origin }: RouteArgs): Promise<Response> {
+  return jsonResponse(
+    ctx.db.get_all_tasks().map((t) => attachDependencyMetadata(ctx.db, t)),
+    200,
+    origin,
+  );
+}
+
+async function getTaskRuns({
+  ctx,
+  path,
+  origin,
+}: RouteArgs): Promise<Response> {
+  const tid = idAt(path);
+  return tid === null
+    ? jsonResponse({ error: "not found" }, 404, origin)
+    : jsonResponse(ctx.db.get_task_runs(tid), 200, origin);
+}
+
+async function getTaskOutput({
+  ctx,
+  path,
+  origin,
+}: RouteArgs): Promise<Response> {
+  const tid = idAt(path);
+  return tid === null
+    ? jsonResponse({ error: "not found" }, 404, origin)
+    : jsonResponse(taskOutputPayload(ctx, tid), 200, origin);
+}
+
+async function getTaskEvents({
+  ctx,
+  url,
+  path,
+  origin,
+}: RouteArgs): Promise<Response> {
+  const tid = idAt(path);
+  if (tid === null) return jsonResponse({ error: "not found" }, 404, origin);
+  const limit = Number.parseInt(url.searchParams.get("limit") ?? "1000", 10);
+  const offset = Number.parseInt(url.searchParams.get("offset") ?? "0", 10);
+  const events = ctx.db.get_output_events(tid, limit, offset);
+  return jsonResponse({ events, total: events.length }, 200, origin);
+}
+
+async function getTaskMessages({
+  ctx,
+  path,
+  origin,
+}: RouteArgs): Promise<Response> {
+  const tid = idAt(path);
+  return tid === null
+    ? jsonResponse({ error: "not found" }, 404, origin)
+    : jsonResponse(taskMessages(ctx, tid), 200, origin);
+}
+
+async function getTaskDependencies({
+  ctx,
+  path,
+  origin,
+}: RouteArgs): Promise<Response> {
+  const tid = idAt(path);
+  return tid === null
+    ? jsonResponse({ error: "not found" }, 404, origin)
+    : jsonResponse(ctx.db.get_dependencies(tid), 200, origin);
+}
+
+async function getTaskDependents({
+  ctx,
+  path,
+  origin,
+}: RouteArgs): Promise<Response> {
+  const tid = idAt(path);
+  return tid === null
+    ? jsonResponse({ error: "not found" }, 404, origin)
+    : jsonResponse(ctx.db.get_dependents(tid), 200, origin);
+}
+
+async function getDagTasks({
+  ctx,
+  path,
+  origin,
+}: RouteArgs): Promise<Response> {
+  const dagId = decodeURIComponent(path.slice("/api/dag/".length));
+  const tasks = ctx.db
+    .get_dag_tasks(dagId)
+    .map((t) => attachDependencyMetadata(ctx.db, t));
+  return jsonResponse(tasks, 200, origin);
+}
+
+async function getTask({ ctx, path, origin }: RouteArgs): Promise<Response> {
+  const tid = idAt(path);
+  const task = tid === null ? null : ctx.db.get_task(tid);
+  return task
+    ? jsonResponse(attachDependencyMetadata(ctx.db, task), 200, origin)
+    : jsonResponse({ error: "not found" }, 404, origin);
+}
+
+async function getSkillPatterns({ ctx, origin }: RouteArgs): Promise<Response> {
+  return jsonResponse(
+    {
+      patterns: ctx.db.get_skill_patterns(),
+      sweep: ctx.scheduler.skill_sweep_status(),
+    },
+    200,
+    origin,
+  );
+}
+
+async function getSkills({ ctx, origin }: RouteArgs): Promise<Response> {
+  return jsonResponse({ skills: ctx.db.get_skills() }, 200, origin);
+}
+
+async function getSkillContent({
+  ctx,
+  path,
+  origin,
+}: RouteArgs): Promise<Response> {
+  const sid = idAt(path);
+  const skill = sid === null ? null : ctx.db.get_skill(sid);
+  if (!skill) return jsonResponse({ error: "not found" }, 404, origin);
+  let content: string;
+  try {
+    content = fs.readFileSync(String(skill["path"]), "utf8");
+  } catch (e) {
+    content = `(无法读取 SKILL.md：${e})`;
   }
-  if (path.startsWith("/api/task-briefs/") && path.split("/").length === 4) {
-    const bid = idAt(path);
-    const existing = bid === null ? null : ctx.db.get_task_brief(bid);
-    if (!existing || bid === null)
-      return jsonResponse({ error: "not found" }, 404, origin);
-    if (existing["status"] !== TaskBriefStatus.DRAFT) {
-      return jsonResponse(
-        {
-          error: `Cannot edit draft task with status '${existing["status"]}'.`,
+  return jsonResponse({ content, path: skill["path"], skill }, 200, origin);
+}
+
+async function getCsrfToken({ origin }: RouteArgs): Promise<Response> {
+  return jsonResponse({ csrf_token: CSRF_TOKEN }, 200, origin);
+}
+
+async function getHealth({ ctx, origin }: RouteArgs): Promise<Response> {
+  return jsonResponse(
+    { status: "ok", tasks: ctx.db.get_all_tasks().length },
+    200,
+    origin,
+  );
+}
+
+async function getSettings({ ctx, origin }: RouteArgs): Promise<Response> {
+  return jsonResponse(
+    {
+      default_agent: ctx.db.get_setting("default_agent", DEFAULT_AGENT),
+      timeout: Number.parseInt(
+        ctx.db.get_setting("timeout", String(DEFAULT_TIMEOUT_SECONDS)) ??
+          String(DEFAULT_TIMEOUT_SECONDS),
+        10,
+      ),
+      skill_library_enabled:
+        ctx.db.get_setting("skill_library_enabled", "0") === "1",
+      skill_sweep_agent: ctx.db.get_setting("skill_sweep_agent", DEFAULT_AGENT),
+      skill_sweep_cron: ctx.db.get_setting("skill_sweep_cron", "0 3 * * *"),
+      im_digest_enabled: ctx.db.get_setting("im_digest_enabled", "0") === "1",
+      im_digest_cron: ctx.db.get_setting("im_digest_cron", "0 9 * * 1-5"),
+      im_digest_channels: parse_im_digest_recipients(
+        ctx.db.get_setting("im_digest_channels", "[]"),
+      ),
+      im_attention_digest_minutes: Number.parseInt(
+        ctx.db.get_setting("im_attention_digest_minutes", "20") ?? "20",
+        10,
+      ),
+      im_skill_suggestions_enabled:
+        ctx.db.get_setting("im_skill_suggestions_enabled", "0") === "1",
+      im_skill_suggestion_channels: parse_im_digest_recipients(
+        ctx.db.get_setting("im_skill_suggestion_channels", "[]"),
+      ),
+    },
+    200,
+    origin,
+  );
+}
+
+async function getFeishuSettings({
+  ctx,
+  origin,
+}: RouteArgs): Promise<Response> {
+  return jsonResponse(
+    {
+      feishu_app_id: ctx.db.get_setting("feishu_app_id", ""),
+      feishu_app_secret: ctx.db.get_setting("feishu_app_secret", ""),
+      feishu_default_chat_id: ctx.db.get_setting("feishu_default_chat_id", ""),
+      feishu_default_working_dir: ctx.db.get_setting(
+        "feishu_default_working_dir",
+        "~",
+      ),
+      feishu_enabled: ctx.db.get_setting("feishu_enabled", "false"),
+    },
+    200,
+    origin,
+  );
+}
+
+async function getChannelsStatus({
+  ctx,
+  origin,
+}: RouteArgs): Promise<Response> {
+  return jsonResponse(channelsStatus(ctx), 200, origin);
+}
+
+async function postHeartbeat({
+  ctx,
+  origin,
+  body,
+}: RouteArgs): Promise<Response> {
+  const validated = validateHeartbeatPayload(ctx, body);
+  if (validated.response)
+    return jsonResponse(
+      validated.response[0],
+      validated.response[1] ?? 200,
+      origin,
+    );
+  const id = ctx.db.add_heartbeat(validated.heartbeat!);
+  return jsonResponse({ id, status: "created" }, 201, origin);
+}
+
+async function postHeartbeatRunNow({
+  ctx,
+  path,
+  origin,
+}: RouteArgs): Promise<Response> {
+  const hid = idAt(path);
+  if (hid === null) return jsonResponse({ error: "not found" }, 404, origin);
+  try {
+    ctx.scheduler.trigger_heartbeat_now(hid);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    return jsonResponse(
+      { error: msg },
+      msg.includes("not found") ? 404 : 409,
+      origin,
+    );
+  }
+  return jsonResponse({ status: "scheduled" }, 200, origin);
+}
+
+async function postHeartbeatPause({
+  ctx,
+  path,
+  origin,
+}: RouteArgs): Promise<Response> {
+  const hid = idAt(path);
+  if (hid === null) return jsonResponse({ error: "not found" }, 404, origin);
+  try {
+    ctx.scheduler.pause_heartbeat(hid);
+  } catch (e) {
+    return jsonResponse(
+      { error: e instanceof Error ? e.message : String(e) },
+      404,
+      origin,
+    );
+  }
+  return jsonResponse({ status: "paused" }, 200, origin);
+}
+
+async function postHeartbeatResume({
+  ctx,
+  path,
+  origin,
+}: RouteArgs): Promise<Response> {
+  const hid = idAt(path);
+  if (hid === null) return jsonResponse({ error: "not found" }, 404, origin);
+  try {
+    ctx.scheduler.resume_heartbeat(hid);
+  } catch (e) {
+    return jsonResponse(
+      { error: e instanceof Error ? e.message : String(e) },
+      404,
+      origin,
+    );
+  }
+  return jsonResponse({ status: "resumed" }, 200, origin);
+}
+
+async function postTaskBrief({
+  ctx,
+  origin,
+  body,
+}: RouteArgs): Promise<Response> {
+  const validated = validateTaskBriefPayload(body);
+  if (validated.response) {
+    return jsonResponse(
+      validated.response[0],
+      validated.response[1] ?? 200,
+      origin,
+    );
+  }
+  const id = ctx.db.add_task_brief(validated.brief!);
+  return jsonResponse(ctx.db.get_task_brief(id), 201, origin);
+}
+
+async function postTaskBriefConfirm({
+  ctx,
+  path,
+  origin,
+}: RouteArgs): Promise<Response> {
+  const bid = idAt(path);
+  const brief = bid === null ? null : ctx.db.get_task_brief(bid);
+  if (!brief || bid === null)
+    return jsonResponse({ error: "not found" }, 404, origin);
+  if (brief["status"] !== TaskBriefStatus.DRAFT) {
+    return jsonResponse(
+      {
+        error: `Cannot confirm draft task with status '${brief["status"]}'.`,
+      },
+      409,
+      origin,
+    );
+  }
+  const task = taskFromBrief(ctx, brief);
+  const dirError = ensureWorkingDir(
+    task.working_dir,
+    `working_dir does not exist or is not a directory: ${task.working_dir}`,
+  );
+  if (dirError) return jsonResponse(dirError, 400, origin);
+  const taskId = ctx.scheduler.submit_task(task);
+  ctx.db.confirm_task_brief(bid, taskId);
+  return jsonResponse(
+    {
+      status: "created",
+      task_id: taskId,
+      brief: ctx.db.get_task_brief(bid),
+    },
+    201,
+    origin,
+  );
+}
+
+async function postTaskBriefDiscard({
+  ctx,
+  path,
+  origin,
+}: RouteArgs): Promise<Response> {
+  const bid = idAt(path);
+  const brief = bid === null ? null : ctx.db.get_task_brief(bid);
+  if (!brief || bid === null)
+    return jsonResponse({ error: "not found" }, 404, origin);
+  if (brief["status"] !== TaskBriefStatus.DRAFT) {
+    return jsonResponse(
+      {
+        error: `Cannot discard draft task with status '${brief["status"]}'.`,
+      },
+      409,
+      origin,
+    );
+  }
+  ctx.db.discard_task_brief(bid);
+  return jsonResponse(ctx.db.get_task_brief(bid), 200, origin);
+}
+
+async function postIMRunbook({
+  ctx,
+  origin,
+  body,
+}: RouteArgs): Promise<Response> {
+  const validated = validateIMRunbookPayload(body);
+  if (validated.response) {
+    return jsonResponse(
+      validated.response[0],
+      validated.response[1] ?? 200,
+      origin,
+    );
+  }
+  const id = ctx.db.add_im_runbook(validated.runbook!);
+  return jsonResponse(ctx.db.get_im_runbook(id), 201, origin);
+}
+
+async function postIMRunbookFromTask({
+  ctx,
+  origin,
+  body,
+}: RouteArgs): Promise<Response> {
+  const validated = commandFromTaskPayload(ctx, body);
+  if (validated.response) {
+    return jsonResponse(
+      validated.response[0],
+      validated.response[1] ?? 200,
+      origin,
+    );
+  }
+  const id = ctx.db.add_im_runbook(validated.runbook!);
+  return jsonResponse(ctx.db.get_im_runbook(id), 201, origin);
+}
+
+async function postIMRunbookInvoke({
+  ctx,
+  path,
+  origin,
+  body,
+}: RouteArgs): Promise<Response> {
+  const parts = path.split("/");
+  const name = decodeURIComponent(parts[3] ?? "");
+  const sourceRef = asString(body["source_ref"] ?? `api:${name}`).trim();
+  try {
+    const result = ctx.scheduler.handle_inbound_message(
+      makeInboundMessage({
+        type:
+          parts[4] === "preview"
+            ? InboundMessageType.PREVIEW_RUNBOOK
+            : InboundMessageType.RUN_RUNBOOK,
+        source: "api",
+        payload: {
+          ...body,
+          name,
+          raw_args: asString(body["raw_args"] ?? ""),
+          source_channel:
+            asString(body["source_channel"] ?? "api").trim() || "api",
+          source_ref: sourceRef || `api:${name}`,
         },
-        409,
-        origin,
-      );
-    }
-    const validated = validateTaskBriefPayload(body, existing);
-    if (validated.response) {
-      return jsonResponse(
-        validated.response[0],
-        validated.response[1] ?? 200,
-        origin,
-      );
-    }
-    const brief = validated.brief!;
-    ctx.db.update_task_brief(bid, {
-      title: brief.title,
-      goal: brief.goal,
-      context_summary: brief.context_summary,
-      acceptance_criteria: brief.acceptance_criteria,
-      working_dir: brief.working_dir,
-      working_dir_confidence: brief.working_dir_confidence,
-      agent: brief.agent,
-      risk_level: brief.risk_level,
-      needs_confirmation: brief.needs_confirmation,
-      source_channel: brief.source_channel,
-      source_ref: brief.source_ref,
-      source_metadata: brief.source_metadata,
-      expires_at: brief.expires_at,
-    });
-    return jsonResponse(ctx.db.get_task_brief(bid), 200, origin);
-  }
-  if (path.startsWith("/api/im-runbooks/") && path.split("/").length === 4) {
-    const rid = idAt(path);
-    if (rid === null)
-      return jsonResponse({ error: "invalid runbook id" }, 400, origin);
-    const existing = ctx.db.get_im_runbook(rid);
-    if (!existing) return jsonResponse({ error: "not found" }, 404, origin);
-    const validated = validateIMRunbookPayload(body, existing);
-    if (validated.response) {
-      return jsonResponse(
-        validated.response[0],
-        validated.response[1] ?? 200,
-        origin,
-      );
-    }
-    const runbook = validated.runbook!;
-    ctx.db.update_im_runbook(rid, {
-      name: runbook.name,
-      aliases: runbook.aliases,
-      description: runbook.description,
-      source_type: runbook.source_type,
-      source_id: runbook.source_id,
-      command_schema: runbook.command_schema,
-      prompt_template: runbook.prompt_template,
-      default_agent: runbook.default_agent,
-      confirmation_policy: runbook.confirmation_policy,
-      enabled: runbook.enabled,
-    });
-    return jsonResponse(ctx.db.get_im_runbook(rid), 200, origin);
-  }
-  if (path.startsWith("/api/skills/")) {
-    const sid = idAt(path);
-    if (sid === null)
-      return jsonResponse({ error: "invalid skill id" }, 400, origin);
-    try {
-      const skill = ctx.scheduler.toggle_skill(
-        sid,
-        Boolean(body["enabled"] ?? true),
-      );
-      return jsonResponse({ status: "updated", skill }, 200, origin);
-    } catch (e) {
-      return jsonResponse(
-        { error: e instanceof Error ? e.message : String(e) },
-        404,
-        origin,
-      );
-    }
-  }
-  if (path.startsWith("/api/heartbeats/") && path.split("/").length === 4) {
-    const hid = idAt(path);
-    if (hid === null)
-      return jsonResponse({ error: "invalid heartbeat id" }, 400, origin);
-    const existing = ctx.db.get_heartbeat(hid);
-    if (!existing) return jsonResponse({ error: "not found" }, 404, origin);
-    const validated = validateHeartbeatPayload(ctx, body, existing);
-    if (validated.response)
-      return jsonResponse(
-        validated.response[0],
-        validated.response[1] ?? 200,
-        origin,
-      );
-    const hb = validated.heartbeat!;
-    ctx.db.update_heartbeat(hid, {
-      name: hb.name,
-      enabled: hb.enabled ? 1 : 0,
-      working_dir: hb.working_dir,
-      schedule_type: hb.schedule_type,
-      cron_expr: hb.cron_expr,
-      interval_seconds: hb.interval_seconds,
-      check_prompt: hb.check_prompt,
-      action_prompt_template: hb.action_prompt_template,
-      default_agent: hb.default_agent,
-      cooldown_seconds: hb.cooldown_seconds,
-      next_run_at: hb.next_run_at,
-    });
-    return jsonResponse(ctx.db.get_heartbeat(hid), 200, origin);
-  }
-  if (path.startsWith("/api/tasks/") && path.split("/").length === 4) {
-    const tid = idAt(path);
-    if (tid === null)
-      return jsonResponse({ error: "invalid task id" }, 400, origin);
-    const task = ctx.db.get_task(tid);
-    if (!task) return jsonResponse({ error: "not found" }, 404, origin);
-    if (!["pending", "scheduled", "blocked"].includes(task["status"])) {
-      return jsonResponse(
-        {
-          error: `Cannot edit task with status '${task["status"]}'. Only pending, scheduled, or blocked tasks can be edited.`,
-        },
-        409,
-        origin,
-      );
-    }
-    const prompt = asString(body["prompt"] ?? task["prompt"]);
-    if (!prompt.trim())
-      return jsonResponse(
-        { error: "prompt cannot be empty", field: "prompt" },
-        400,
-        origin,
-      );
-    const workingDir = asString(body["working_dir"] ?? task["working_dir"]);
-    const dirError = ensureWorkingDir(
-      workingDir,
-      `working_dir does not exist: ${workingDir}`,
+        metadata: { source_ref: sourceRef || `api:${name}` },
+      }),
     );
-    if (dirError) return jsonResponse(dirError, 400, origin);
-    const scheduleType = asString(
-      body["schedule_type"] ?? task["schedule_type"],
+    return jsonResponse(result, 201, origin);
+  } catch (e) {
+    return jsonResponse(
+      { error: e instanceof Error ? e.message : String(e) },
+      400,
+      origin,
     );
-    const cronExpr = asString(body["cron_expr"] ?? task["cron_expr"]);
-    if (scheduleType === "cron") {
-      if (!cronExpr.trim())
-        return jsonResponse(
-          { error: "cron_expr required for cron schedule", field: "cron_expr" },
-          400,
-          origin,
-        );
-      if (!cronValid(cronExpr))
-        return jsonResponse(
-          { error: `invalid cron expression: ${cronExpr}`, field: "cron_expr" },
-          400,
-          origin,
-        );
-    }
+  }
+}
 
-    const updates: Row = {};
-    for (const field of [
-      "title",
-      "prompt",
-      "working_dir",
-      "schedule_type",
-      "cron_expr",
-      "delay_seconds",
-      "max_runs",
-      "tags",
-      "agent",
-      "dag_id",
-    ]) {
-      if (field in body) updates[field] = body[field];
-    }
-    if ("prompt_images" in body)
-      updates["prompt_images"] = JSON.stringify(
-        parseJsonList(body["prompt_images"]),
-      );
-    if ("image_paths" in body)
-      updates["image_paths"] = JSON.stringify(
-        parseJsonList(body["image_paths"]),
-      );
+async function postIMDigestPreview({
+  ctx,
+  origin,
+  body,
+}: RouteArgs): Promise<Response> {
+  return jsonResponse(triggerDigest(ctx, body), 200, origin);
+}
 
-    const newScheduleType = asString(
-      updates["schedule_type"] ?? task["schedule_type"],
+async function postIMDigestSend({
+  ctx,
+  origin,
+  body,
+}: RouteArgs): Promise<Response> {
+  const recipients = digestRecipients(ctx, body);
+  if (!recipients.length) {
+    return jsonResponse(
+      { error: "no digest recipients configured" },
+      409,
+      origin,
     );
-    if (newScheduleType === "immediate") {
-      Object.assign(updates, {
-        status: "pending",
-        next_run_at: null,
-        cron_expr: null,
-        delay_seconds: null,
-      });
-    } else if (newScheduleType === "delayed") {
-      Object.assign(updates, {
-        status: "pending",
-        next_run_at: null,
-        cron_expr: null,
-      });
-    } else if (newScheduleType === "scheduled_at") {
-      const nextRunAt = body["next_run_at"] ?? task["next_run_at"];
-      if (!nextRunAt)
-        return jsonResponse(
-          {
-            error: "next_run_at required for scheduled_at",
-            field: "next_run_at",
-          },
-          400,
-          origin,
-        );
-      Object.assign(updates, {
-        next_run_at: nextRunAt,
-        status: "scheduled",
-        cron_expr: null,
-        delay_seconds: null,
-      });
-    } else if (newScheduleType === "cron") {
-      const newCron = asString(updates["cron_expr"] ?? task["cron_expr"]);
-      Object.assign(updates, {
-        next_run_at: cronNextIso(newCron),
-        status: "scheduled",
-        delay_seconds: null,
-      });
+  }
+  const result = triggerDigest(ctx, body);
+  if (result["status"] === "quiet") {
+    return jsonResponse(result, 200, origin);
+  }
+  const text = asString(result["text"]);
+  try {
+    for (const recipient of recipients) {
+      await sendIMDigest(ctx, recipient, text);
     }
+  } catch (e) {
+    return jsonResponse(
+      { error: e instanceof Error ? e.message : String(e) },
+      409,
+      origin,
+    );
+  }
+  return jsonResponse(
+    {
+      status: "sent",
+      sent: recipients.length,
+      digest: result["digest"],
+    },
+    200,
+    origin,
+  );
+}
 
-    if ("depends_on" in body) {
-      ctx.db.clear_dependencies(tid);
-      const deps = dependencyList(body["depends_on"]);
-      if (deps.length) {
-        ctx.db.add_dependencies_batch(tid, deps);
+async function postSkillSuggestionPreview({
+  ctx,
+  origin,
+  body,
+}: RouteArgs): Promise<Response> {
+  return jsonResponse(skillSuggestionPreview(ctx, body), 200, origin);
+}
+
+async function postSkillSuggestionSend({
+  ctx,
+  origin,
+  body,
+}: RouteArgs): Promise<Response> {
+  const recipients = skillSuggestionRecipients(ctx, body);
+  if (!recipients.length) {
+    return jsonResponse(
+      { error: "no skill suggestion recipients configured" },
+      409,
+      origin,
+    );
+  }
+  const includeSent = Boolean(body["include_sent"] ?? false);
+  const sentSuggestions: Row[] = [];
+  try {
+    for (const recipient of recipients) {
+      const suggestions = collect_im_skill_suggestions(ctx.db, {
+        channel: recipient.channel,
+        limit:
+          body["limit"] === undefined || body["limit"] === null
+            ? undefined
+            : Number(body["limit"]),
+      });
+      for (const suggestion of suggestions) {
         if (
-          deps.some(
-            (dep) => ctx.db.get_task(dep.task_id)?.["status"] !== "completed",
+          !includeSent &&
+          !ctx.db.should_send_im_skill_suggestion(
+            suggestion.pattern_id,
+            recipient.channel,
+            recipient.target,
           )
         ) {
-          updates["status"] = "blocked";
+          continue;
         }
+        await sendIMDigest(
+          ctx,
+          recipient,
+          render_im_skill_suggestion_text(suggestion),
+        );
+        ctx.db.upsert_im_skill_suggestion({
+          pattern_id: suggestion.pattern_id,
+          channel: recipient.channel,
+          target: recipient.target,
+          status: "suggested",
+        });
+        sentSuggestions.push({
+          pattern_id: suggestion.pattern_id,
+          channel: recipient.channel,
+          target: recipient.target,
+        });
       }
     }
-    if (Object.keys(updates).length) ctx.db.update_task(tid, updates);
-    const updated = ctx.db.get_task(tid);
+  } catch (e) {
     return jsonResponse(
-      updated ? attachDependencyMetadata(ctx.db, updated) : null,
-      200,
+      { error: e instanceof Error ? e.message : String(e) },
+      409,
       origin,
     );
   }
-  return jsonResponse({ error: "not found" }, 404, origin);
+  return jsonResponse(
+    {
+      status: "sent",
+      sent: sentSuggestions.length,
+      suggestions: sentSuggestions,
+    },
+    200,
+    origin,
+  );
 }
 
-async function handleDelete(
-  ctx: ApiContext,
-  url: URL,
-  origin: string,
-): Promise<Response> {
-  const path = url.pathname;
-  const parts = path.split("/");
+async function postSkillSuggestionAction({
+  ctx,
+  path,
+  origin,
+  body,
+}: RouteArgs): Promise<Response> {
+  const patternId = idAt(path);
+  if (patternId === null) {
+    return jsonResponse({ error: "pattern not found" }, 404, origin);
+  }
+  try {
+    const result = ctx.scheduler.handle_inbound_message(
+      makeInboundMessage({
+        type: InboundMessageType.SKILL_SUGGESTION_ACTION,
+        source: "api",
+        reply_to:
+          body["target"] === undefined || body["target"] === null
+            ? null
+            : String(body["target"]),
+        payload: {
+          ...body,
+          pattern_id: patternId,
+          source_channel:
+            asString(
+              body["source_channel"] ?? body["channel"] ?? "api",
+            ).trim() || "api",
+          target: asString(body["target"] ?? ""),
+        },
+      }),
+    );
+    return jsonResponse(result, 200, origin);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    return jsonResponse(
+      { error: msg },
+      msg.includes("not found") ? 404 : 400,
+      origin,
+    );
+  }
+}
+
+async function postSkillsSweep({
+  ctx,
+  origin,
+  body,
+}: RouteArgs): Promise<Response> {
+  const started = ctx.scheduler.trigger_skill_sweep(
+    body["agent"] ?? null,
+    Boolean(body["full"] ?? true),
+  );
+  return started
+    ? jsonResponse({ status: "started" }, 200, origin)
+    : jsonResponse({ error: "sweep already running" }, 409, origin);
+}
+
+async function postSkillPatternDraft({
+  ctx,
+  path,
+  origin,
+  body,
+}: RouteArgs): Promise<Response> {
+  const pid = idAt(path);
   if (
-    parts.length === 6 &&
-    parts[2] === "tasks" &&
-    parts[4] === "dependencies"
+    pid === null ||
+    !ctx.scheduler.trigger_skill_draft(pid, body["agent"] ?? null)
   ) {
-    const tid = Number(parts[3]);
-    const depId = Number(parts[5]);
-    ctx.db.remove_dependency(tid, depId);
-    return jsonResponse({ status: "removed" }, 200, origin);
+    return jsonResponse({ error: "pattern not found" }, 404, origin);
   }
-  if (path.startsWith("/api/heartbeats/")) {
-    const hid = idAt(path);
-    if (hid !== null) ctx.db.delete_heartbeat(hid);
-    return jsonResponse({ status: "deleted" }, 200, origin);
+  return jsonResponse({ status: "drafting" }, 200, origin);
+}
+
+async function postSkillPatternApprove({
+  ctx,
+  path,
+  origin,
+  body,
+}: RouteArgs): Promise<Response> {
+  const pid = idAt(path);
+  if (pid === null)
+    return jsonResponse({ error: "pattern not found" }, 404, origin);
+  const draft = ctx.db.get_skill_draft(pid);
+  try {
+    const skill = ctx.scheduler.approve_skill(
+      pid,
+      String(body["name"] ?? draft?.["name"] ?? ""),
+      String(body["description"] ?? draft?.["description"] ?? ""),
+      String(body["body"] ?? draft?.["body"] ?? ""),
+    );
+    return jsonResponse({ status: "approved", skill }, 200, origin);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    return jsonResponse(
+      { error: msg },
+      msg.includes("not found") ? 404 : 400,
+      origin,
+    );
   }
-  if (path.startsWith("/api/im-runbooks/")) {
-    const rid = idAt(path);
-    if (rid === null)
-      return jsonResponse({ error: "invalid runbook id" }, 400, origin);
-    ctx.db.delete_im_runbook(rid);
-    return jsonResponse({ status: "deleted" }, 200, origin);
+}
+
+async function postSkillPatternDismiss({
+  ctx,
+  path,
+  origin,
+}: RouteArgs): Promise<Response> {
+  const pid = idAt(path);
+  try {
+    if (pid === null) throw new Error("pattern not found");
+    ctx.scheduler.dismiss_skill_pattern(pid);
+  } catch (e) {
+    return jsonResponse(
+      { error: e instanceof Error ? e.message : String(e) },
+      404,
+      origin,
+    );
   }
-  if (path.startsWith("/api/skills/")) {
-    const sid = idAt(path);
-    if (sid === null)
-      return jsonResponse({ error: "invalid skill id" }, 400, origin);
-    try {
-      ctx.scheduler.remove_skill(sid);
-      return jsonResponse({ status: "deleted" }, 200, origin);
-    } catch (e) {
+  return jsonResponse({ status: "dismissed" }, 200, origin);
+}
+
+async function postTask({ ctx, origin, body }: RouteArgs): Promise<Response> {
+  const prompt = asString(body["prompt"]);
+  if (!prompt.trim())
+    return jsonResponse(
+      { error: "prompt cannot be empty", field: "prompt" },
+      400,
+      origin,
+    );
+  const workingDir = asString(body["working_dir"], ".");
+  const dirError = ensureWorkingDir(
+    workingDir,
+    `working_dir does not exist or is not a directory: ${workingDir}`,
+  );
+  if (dirError) return jsonResponse(dirError, 400, origin);
+  const scheduleType = asString(body["schedule_type"], "immediate");
+  const cronExpr =
+    body["cron_expr"] === undefined ? null : asString(body["cron_expr"]);
+  if (scheduleType === "cron") {
+    if (!cronExpr?.trim())
       return jsonResponse(
-        { error: e instanceof Error ? e.message : String(e) },
-        404,
+        {
+          error: "cron_expr is required for cron schedule",
+          field: "cron_expr",
+        },
+        400,
         origin,
       );
+    if (!cronValid(cronExpr))
+      return jsonResponse(
+        { error: `invalid cron expression: ${cronExpr}`, field: "cron_expr" },
+        400,
+        origin,
+      );
+  }
+  const deps = dependencyList(
+    body["depends_on"],
+    Boolean(body["inject_result"]),
+  );
+  const task: Task = makeTask({
+    title: asString(body["title"], "Untitled"),
+    prompt,
+    working_dir: workingDir,
+    schedule_type: scheduleType as ScheduleType,
+    cron_expr: cronExpr,
+    delay_seconds: body["delay_seconds"] ?? null,
+    next_run_at: body["next_run_at"] ?? null,
+    max_runs: body["max_runs"] ?? null,
+    tags: asString(body["tags"]),
+    agent: asString(
+      body["agent"] ?? ctx.db.get_setting("default_agent", DEFAULT_AGENT),
+      DEFAULT_AGENT,
+    ),
+    prompt_images: parseJsonList(body["prompt_images"]),
+    image_paths: parseJsonList(body["image_paths"]).map(String),
+    dag_id: body["dag_id"] ?? null,
+  });
+  const id = ctx.scheduler.submit_task(task, deps);
+  return jsonResponse({ id, status: "created" }, 201, origin);
+}
+
+async function postSettings({
+  ctx,
+  origin,
+  body,
+}: RouteArgs): Promise<Response> {
+  for (const [key, value] of Object.entries(body))
+    ctx.db.set_setting(key, String(value));
+  return jsonResponse({ status: "updated" }, 200, origin);
+}
+
+async function postFeishuSettings({
+  ctx,
+  origin,
+  body,
+}: RouteArgs): Promise<Response> {
+  for (const key of [
+    "feishu_app_id",
+    "feishu_app_secret",
+    "feishu_default_chat_id",
+    "feishu_default_working_dir",
+    "feishu_enabled",
+  ]) {
+    if (key in body) ctx.db.set_setting(key, String(body[key]));
+  }
+  await restartChannels(ctx, body);
+  return jsonResponse({ status: "updated" }, 200, origin);
+}
+
+async function postChannelsSettings({
+  ctx,
+  origin,
+  body,
+}: RouteArgs): Promise<Response> {
+  const allowed = new Set([
+    "telegram_bot_token",
+    "telegram_allowed_users",
+    "telegram_default_working_dir",
+    "telegram_enabled",
+    "telegram_default_chat_id",
+    "slack_bot_token",
+    "slack_app_token",
+    "slack_default_working_dir",
+    "slack_default_channel",
+    "slack_default_user",
+    "slack_enabled",
+    "weixin_default_working_dir",
+    "weixin_base_url",
+    "weixin_account_id",
+    "weixin_enabled",
+  ]);
+  for (const [key, value] of Object.entries(body)) {
+    if (allowed.has(key)) ctx.db.set_setting(key, String(value));
+  }
+  await restartChannels(ctx, body);
+  return jsonResponse({ status: "updated" }, 200, origin);
+}
+
+async function postWeixinAction({
+  ctx,
+  origin,
+  body,
+}: RouteArgs): Promise<Response> {
+  const action = asString(body["action"]).trim().toLowerCase();
+  if (!ctx.weixin_channel)
+    return jsonResponse({ error: "weixin channel not running" }, 400, origin);
+  if (action === "login" || action === "reconnect") {
+    ctx.weixin_channel.request_login();
+    return jsonResponse({ status: "ok", action }, 200, origin);
+  }
+  if (action === "logout") {
+    ctx.weixin_channel.request_logout();
+    return jsonResponse({ status: "ok", action }, 200, origin);
+  }
+  return jsonResponse({ error: "unsupported action" }, 400, origin);
+}
+
+async function postDag({ ctx, origin, body }: RouteArgs): Promise<Response> {
+  const taskDefs = Array.isArray(body["tasks"]) ? (body["tasks"] as Row[]) : [];
+  if (!taskDefs.length)
+    return jsonResponse({ error: "tasks list is required" }, 400, origin);
+  const dagId = asString(
+    body["dag_id"],
+    `dag-${Math.trunc(Date.now() / 1000)}`,
+  );
+  const refToId = new Map<string, number>();
+  const results: Row = {};
+  for (const tdef of taskDefs) {
+    const ref = asString(tdef["ref"], String(refToId.size));
+    const dependsOn: Array<{ task_id: number; inject_result: boolean }> = [];
+    for (const depRef of Array.isArray(tdef["depends_on_refs"])
+      ? tdef["depends_on_refs"]
+      : []) {
+      const upstreamId = refToId.get(String(depRef));
+      if (upstreamId === undefined) {
+        return jsonResponse(
+          {
+            error: `ref '${depRef}' not found - declare tasks in topological order`,
+          },
+          400,
+          origin,
+        );
+      }
+      dependsOn.push({
+        task_id: upstreamId,
+        inject_result: Boolean(tdef["inject_result"]),
+      });
+    }
+    const task = makeTask({
+      title: asString(tdef["title"], asString(tdef["prompt"]).slice(0, 60)),
+      prompt: asString(tdef["prompt"]),
+      working_dir: asString(tdef["working_dir"], "."),
+      schedule_type: asString(
+        tdef["schedule_type"],
+        "immediate",
+      ) as ScheduleType,
+      cron_expr: tdef["cron_expr"] ?? null,
+      delay_seconds: tdef["delay_seconds"] ?? null,
+      next_run_at: tdef["next_run_at"] ?? null,
+      max_runs: tdef["max_runs"] ?? null,
+      tags: asString(tdef["tags"]),
+      agent: asString(
+        tdef["agent"] ?? ctx.db.get_setting("default_agent", DEFAULT_AGENT),
+        DEFAULT_AGENT,
+      ),
+      prompt_images: parseJsonList(tdef["prompt_images"]),
+      dag_id: dagId,
+    });
+    const taskId = ctx.scheduler.submit_task(task, dependsOn);
+    refToId.set(ref, taskId);
+    results[ref] = taskId;
+  }
+  return jsonResponse({ dag_id: dagId, task_ids: results }, 201, origin);
+}
+
+async function postTaskDependency({
+  ctx,
+  path,
+  origin,
+  body,
+}: RouteArgs): Promise<Response> {
+  const tid = idAt(path);
+  const depTaskId = Number(body["depends_on_task_id"]);
+  if (tid === null || !Number.isInteger(depTaskId))
+    return jsonResponse({ error: "depends_on_task_id required" }, 400, origin);
+  const task = ctx.db.get_task(tid);
+  const upstream = ctx.db.get_task(depTaskId);
+  if (!task || !upstream)
+    return jsonResponse({ error: "task not found" }, 404, origin);
+  const shouldBlock =
+    upstream["status"] !== "completed" &&
+    ["pending", "scheduled"].includes(task["status"]);
+  ctx.db.transaction(() => {
+    ctx.db.add_dependency(tid, depTaskId, Boolean(body["inject_result"]));
+    if (shouldBlock) ctx.db.update_task(tid, { status: "blocked" });
+  });
+  if (shouldBlock) ctx.scheduler._notify(tid);
+  return jsonResponse({ status: "added" }, 200, origin);
+}
+
+async function postTaskCancel({
+  ctx,
+  path,
+  origin,
+}: RouteArgs): Promise<Response> {
+  const tid = idAt(path);
+  if (tid === null) return jsonResponse({ error: "not found" }, 404, origin);
+  ctx.scheduler.cancel_task(tid);
+  return jsonResponse({ status: "cancelled" }, 200, origin);
+}
+
+async function postTaskRetry({
+  ctx,
+  path,
+  origin,
+}: RouteArgs): Promise<Response> {
+  const tid = idAt(path);
+  if (tid === null) return jsonResponse({ error: "not found" }, 404, origin);
+  ctx.scheduler.retry_task(tid);
+  return jsonResponse({ status: "retrying" }, 200, origin);
+}
+
+async function postTaskRespond({
+  ctx,
+  path,
+  origin,
+  body,
+}: RouteArgs): Promise<Response> {
+  const tid = idAt(path);
+  const task = tid === null ? null : ctx.db.get_task(tid);
+  if (!task || tid === null)
+    return jsonResponse({ error: "not found" }, 404, origin);
+  const answer = asString(body["answer"]);
+  ctx.db.update_task(tid, {
+    status: "pending",
+    prompt: answer,
+    answer,
+    question: null,
+    error: null,
+  });
+  return jsonResponse({ status: "responding" }, 200, origin);
+}
+
+async function postTaskResume({
+  ctx,
+  path,
+  origin,
+  body,
+}: RouteArgs): Promise<Response> {
+  const tid = idAt(path);
+  const task = tid === null ? null : ctx.db.get_task(tid);
+  const message = asString(body["message"]).trim();
+  if (!task || tid === null)
+    return jsonResponse({ error: "not found" }, 404, origin);
+  if (!message) return jsonResponse({ error: "message required" }, 400, origin);
+  if (!task["session_id"])
+    return jsonResponse(
+      { error: "no session_id - cannot resume" },
+      400,
+      origin,
+    );
+  ctx.db.update_task(tid, {
+    status: "pending",
+    prompt: message,
+    result: null,
+    error: null,
+    question: null,
+  });
+  return jsonResponse({ status: "resuming" }, 200, origin);
+}
+
+async function putSettings({
+  ctx,
+  origin,
+  body,
+}: RouteArgs): Promise<Response> {
+  for (const [key, value] of Object.entries(body))
+    ctx.db.set_setting(key, String(value));
+  return jsonResponse({ status: "updated" }, 200, origin);
+}
+
+async function putTaskBrief({
+  ctx,
+  path,
+  origin,
+  body,
+}: RouteArgs): Promise<Response> {
+  const bid = idAt(path);
+  const existing = bid === null ? null : ctx.db.get_task_brief(bid);
+  if (!existing || bid === null)
+    return jsonResponse({ error: "not found" }, 404, origin);
+  if (existing["status"] !== TaskBriefStatus.DRAFT) {
+    return jsonResponse(
+      {
+        error: `Cannot edit draft task with status '${existing["status"]}'.`,
+      },
+      409,
+      origin,
+    );
+  }
+  const validated = validateTaskBriefPayload(body, existing);
+  if (validated.response) {
+    return jsonResponse(
+      validated.response[0],
+      validated.response[1] ?? 200,
+      origin,
+    );
+  }
+  const brief = validated.brief!;
+  ctx.db.update_task_brief(bid, {
+    title: brief.title,
+    goal: brief.goal,
+    context_summary: brief.context_summary,
+    acceptance_criteria: brief.acceptance_criteria,
+    working_dir: brief.working_dir,
+    working_dir_confidence: brief.working_dir_confidence,
+    agent: brief.agent,
+    risk_level: brief.risk_level,
+    needs_confirmation: brief.needs_confirmation,
+    source_channel: brief.source_channel,
+    source_ref: brief.source_ref,
+    source_metadata: brief.source_metadata,
+    expires_at: brief.expires_at,
+  });
+  return jsonResponse(ctx.db.get_task_brief(bid), 200, origin);
+}
+
+async function putIMRunbook({
+  ctx,
+  path,
+  origin,
+  body,
+}: RouteArgs): Promise<Response> {
+  const rid = idAt(path);
+  if (rid === null)
+    return jsonResponse({ error: "invalid runbook id" }, 400, origin);
+  const existing = ctx.db.get_im_runbook(rid);
+  if (!existing) return jsonResponse({ error: "not found" }, 404, origin);
+  const validated = validateIMRunbookPayload(body, existing);
+  if (validated.response) {
+    return jsonResponse(
+      validated.response[0],
+      validated.response[1] ?? 200,
+      origin,
+    );
+  }
+  const runbook = validated.runbook!;
+  ctx.db.update_im_runbook(rid, {
+    name: runbook.name,
+    aliases: runbook.aliases,
+    description: runbook.description,
+    source_type: runbook.source_type,
+    source_id: runbook.source_id,
+    command_schema: runbook.command_schema,
+    prompt_template: runbook.prompt_template,
+    default_agent: runbook.default_agent,
+    confirmation_policy: runbook.confirmation_policy,
+    enabled: runbook.enabled,
+  });
+  return jsonResponse(ctx.db.get_im_runbook(rid), 200, origin);
+}
+
+async function putSkill({
+  ctx,
+  path,
+  origin,
+  body,
+}: RouteArgs): Promise<Response> {
+  const sid = idAt(path);
+  if (sid === null)
+    return jsonResponse({ error: "invalid skill id" }, 400, origin);
+  try {
+    const skill = ctx.scheduler.toggle_skill(
+      sid,
+      Boolean(body["enabled"] ?? true),
+    );
+    return jsonResponse({ status: "updated", skill }, 200, origin);
+  } catch (e) {
+    return jsonResponse(
+      { error: e instanceof Error ? e.message : String(e) },
+      404,
+      origin,
+    );
+  }
+}
+
+async function putHeartbeat({
+  ctx,
+  path,
+  origin,
+  body,
+}: RouteArgs): Promise<Response> {
+  const hid = idAt(path);
+  if (hid === null)
+    return jsonResponse({ error: "invalid heartbeat id" }, 400, origin);
+  const existing = ctx.db.get_heartbeat(hid);
+  if (!existing) return jsonResponse({ error: "not found" }, 404, origin);
+  const validated = validateHeartbeatPayload(ctx, body, existing);
+  if (validated.response)
+    return jsonResponse(
+      validated.response[0],
+      validated.response[1] ?? 200,
+      origin,
+    );
+  const hb = validated.heartbeat!;
+  ctx.db.update_heartbeat(hid, {
+    name: hb.name,
+    enabled: hb.enabled ? 1 : 0,
+    working_dir: hb.working_dir,
+    schedule_type: hb.schedule_type,
+    cron_expr: hb.cron_expr,
+    interval_seconds: hb.interval_seconds,
+    check_prompt: hb.check_prompt,
+    action_prompt_template: hb.action_prompt_template,
+    default_agent: hb.default_agent,
+    cooldown_seconds: hb.cooldown_seconds,
+    next_run_at: hb.next_run_at,
+  });
+  return jsonResponse(ctx.db.get_heartbeat(hid), 200, origin);
+}
+
+async function putTask({
+  ctx,
+  path,
+  origin,
+  body,
+}: RouteArgs): Promise<Response> {
+  const tid = idAt(path);
+  if (tid === null)
+    return jsonResponse({ error: "invalid task id" }, 400, origin);
+  const task = ctx.db.get_task(tid);
+  if (!task) return jsonResponse({ error: "not found" }, 404, origin);
+  if (!["pending", "scheduled", "blocked"].includes(task["status"])) {
+    return jsonResponse(
+      {
+        error: `Cannot edit task with status '${task["status"]}'. Only pending, scheduled, or blocked tasks can be edited.`,
+      },
+      409,
+      origin,
+    );
+  }
+  const prompt = asString(body["prompt"] ?? task["prompt"]);
+  if (!prompt.trim())
+    return jsonResponse(
+      { error: "prompt cannot be empty", field: "prompt" },
+      400,
+      origin,
+    );
+  const workingDir = asString(body["working_dir"] ?? task["working_dir"]);
+  const dirError = ensureWorkingDir(
+    workingDir,
+    `working_dir does not exist: ${workingDir}`,
+  );
+  if (dirError) return jsonResponse(dirError, 400, origin);
+  const scheduleType = asString(body["schedule_type"] ?? task["schedule_type"]);
+  const cronExpr = asString(body["cron_expr"] ?? task["cron_expr"]);
+  if (scheduleType === "cron") {
+    if (!cronExpr.trim())
+      return jsonResponse(
+        { error: "cron_expr required for cron schedule", field: "cron_expr" },
+        400,
+        origin,
+      );
+    if (!cronValid(cronExpr))
+      return jsonResponse(
+        { error: `invalid cron expression: ${cronExpr}`, field: "cron_expr" },
+        400,
+        origin,
+      );
+  }
+
+  const updates: Row = {};
+  for (const field of [
+    "title",
+    "prompt",
+    "working_dir",
+    "schedule_type",
+    "cron_expr",
+    "delay_seconds",
+    "max_runs",
+    "tags",
+    "agent",
+    "dag_id",
+  ]) {
+    if (field in body) updates[field] = body[field];
+  }
+  if ("prompt_images" in body)
+    updates["prompt_images"] = JSON.stringify(
+      parseJsonList(body["prompt_images"]),
+    );
+  if ("image_paths" in body)
+    updates["image_paths"] = JSON.stringify(parseJsonList(body["image_paths"]));
+
+  const newScheduleType = asString(
+    updates["schedule_type"] ?? task["schedule_type"],
+  );
+  if (newScheduleType === "immediate") {
+    Object.assign(updates, {
+      status: "pending",
+      next_run_at: null,
+      cron_expr: null,
+      delay_seconds: null,
+    });
+  } else if (newScheduleType === "delayed") {
+    Object.assign(updates, {
+      status: "pending",
+      next_run_at: null,
+      cron_expr: null,
+    });
+  } else if (newScheduleType === "scheduled_at") {
+    const nextRunAt = body["next_run_at"] ?? task["next_run_at"];
+    if (!nextRunAt)
+      return jsonResponse(
+        {
+          error: "next_run_at required for scheduled_at",
+          field: "next_run_at",
+        },
+        400,
+        origin,
+      );
+    Object.assign(updates, {
+      next_run_at: nextRunAt,
+      status: "scheduled",
+      cron_expr: null,
+      delay_seconds: null,
+    });
+  } else if (newScheduleType === "cron") {
+    const newCron = asString(updates["cron_expr"] ?? task["cron_expr"]);
+    Object.assign(updates, {
+      next_run_at: cronNextIso(newCron),
+      status: "scheduled",
+      delay_seconds: null,
+    });
+  }
+
+  if ("depends_on" in body) {
+    ctx.db.clear_dependencies(tid);
+    const deps = dependencyList(body["depends_on"]);
+    if (deps.length) {
+      ctx.db.add_dependencies_batch(tid, deps);
+      if (
+        deps.some(
+          (dep) => ctx.db.get_task(dep.task_id)?.["status"] !== "completed",
+        )
+      ) {
+        updates["status"] = "blocked";
+      }
     }
   }
-  if (path.startsWith("/api/tasks/")) {
-    const tid = idAt(path);
-    if (tid !== null) ctx.db.delete_task(tid);
+  if (Object.keys(updates).length) ctx.db.update_task(tid, updates);
+  const updated = ctx.db.get_task(tid);
+  return jsonResponse(
+    updated ? attachDependencyMetadata(ctx.db, updated) : null,
+    200,
+    origin,
+  );
+}
+
+async function deleteTaskDependency({
+  ctx,
+  path,
+  origin,
+}: RouteArgs): Promise<Response> {
+  const parts = path.split("/");
+  const tid = Number(parts[3]);
+  const depId = Number(parts[5]);
+  ctx.db.remove_dependency(tid, depId);
+  return jsonResponse({ status: "removed" }, 200, origin);
+}
+
+async function deleteHeartbeat({
+  ctx,
+  path,
+  origin,
+}: RouteArgs): Promise<Response> {
+  const hid = idAt(path);
+  if (hid !== null) ctx.db.delete_heartbeat(hid);
+  return jsonResponse({ status: "deleted" }, 200, origin);
+}
+
+async function deleteIMRunbook({
+  ctx,
+  path,
+  origin,
+}: RouteArgs): Promise<Response> {
+  const rid = idAt(path);
+  if (rid === null)
+    return jsonResponse({ error: "invalid runbook id" }, 400, origin);
+  ctx.db.delete_im_runbook(rid);
+  return jsonResponse({ status: "deleted" }, 200, origin);
+}
+
+async function deleteSkill({
+  ctx,
+  path,
+  origin,
+}: RouteArgs): Promise<Response> {
+  const sid = idAt(path);
+  if (sid === null)
+    return jsonResponse({ error: "invalid skill id" }, 400, origin);
+  try {
+    ctx.scheduler.remove_skill(sid);
     return jsonResponse({ status: "deleted" }, 200, origin);
+  } catch (e) {
+    return jsonResponse(
+      { error: e instanceof Error ? e.message : String(e) },
+      404,
+      origin,
+    );
   }
-  return jsonResponse({ error: "not found" }, 404, origin);
+}
+
+async function deleteTask({ ctx, path, origin }: RouteArgs): Promise<Response> {
+  const tid = idAt(path);
+  if (tid !== null) ctx.db.delete_task(tid);
+  return jsonResponse({ status: "deleted" }, 200, origin);
 }
 
 export async function handleApiRequest(
@@ -2239,12 +2695,20 @@ export async function handleApiRequest(
   }
 
   try {
-    if (req.method === "GET") return await handleGet(ctx, req, url, origin);
-    if (req.method === "POST") return await handlePost(ctx, req, url, origin);
-    if (req.method === "PUT" || req.method === "PATCH")
-      return await handlePut(ctx, req, url, origin);
-    if (req.method === "DELETE") return await handleDelete(ctx, url, origin);
-    return jsonResponse({ error: "method not allowed" }, 405, origin);
+    if (!ROUTABLE_METHODS.has(req.method)) {
+      return jsonResponse({ error: "method not allowed" }, 405, origin);
+    }
+    // Read the body before matching, so an oversized or malformed body is
+    // rejected the same way whether or not the path resolves to a route.
+    let body: Row = {};
+    if (BODY_METHODS.has(req.method)) {
+      const bodyOrResponse = await readJsonBody(req, origin);
+      if (bodyOrResponse instanceof Response) return bodyOrResponse;
+      body = bodyOrResponse;
+    }
+    const route = ROUTER.find(routingMethod(req.method), url.pathname);
+    if (!route) return jsonResponse({ error: "not found" }, 404, origin);
+    return await route.handler({ ctx, url, path: url.pathname, origin, body });
   } catch (e) {
     return jsonResponse(
       { error: e instanceof Error ? e.message : String(e) },
