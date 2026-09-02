@@ -115,3 +115,27 @@ export function parseJsonObject(rawText: string): Record<string, unknown> {
   }
   return data as Record<string, unknown>;
 }
+
+/**
+ * Render a millisecond duration as a short human-readable string, e.g.
+ * `"820ms"`, `"3.4s"`, `"2m 05s"`, `"1h 07m"`. Used for run timings in logs
+ * and chat replies, where a raw millisecond count is hard to read.
+ *
+ * Negative input is clamped to zero.
+ */
+export function formatDuration(ms: number): string {
+  if (!Number.isFinite(ms) || ms <= 0) return "0ms";
+  if (ms < 1000) return `${Math.round(ms)}ms`;
+
+  const totalSeconds = ms / 1000;
+  if (totalSeconds < 60) return `${totalSeconds.toFixed(1)}s`;
+
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const totalMinutes = Math.floor(totalSeconds / 60);
+  const seconds = Math.floor(totalSeconds % 60);
+  if (totalMinutes < 60) return `${totalMinutes}m ${pad(seconds)}s`;
+
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  return `${hours}h ${pad(minutes)}m`;
+}
