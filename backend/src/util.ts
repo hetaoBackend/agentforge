@@ -115,3 +115,25 @@ export function parseJsonObject(rawText: string): Record<string, unknown> {
   }
   return data as Record<string, unknown>;
 }
+
+/**
+ * Render a byte count as a short human-readable size, e.g. `"512 B"`,
+ * `"1.4 KB"`, `"23.0 MB"`, `"2.1 GB"`. Used for attachment and log sizes,
+ * where a raw byte count is hard to compare at a glance.
+ *
+ * Uses binary units (1 KB = 1024 B). Negative and non-finite input is
+ * clamped to zero.
+ */
+export function formatBytes(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
+  if (bytes < 1024) return `${Math.round(bytes)} B`;
+
+  const units = ["KB", "MB", "GB", "TB"];
+  let value = bytes / 1024;
+  let unitIndex = 0;
+  while (value >= 1024 && unitIndex < units.length - 1) {
+    value /= 1024;
+    unitIndex += 1;
+  }
+  return `${value.toFixed(1)} ${units[unitIndex]}`;
+}
