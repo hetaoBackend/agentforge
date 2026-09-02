@@ -120,3 +120,30 @@ export function parseJsonObject(rawText: string): Record<string, unknown> {
   }
   return data as Record<string, unknown>;
 }
+
+/**
+ * Shorten `text` to at most `limit` characters by eliding the middle, so both
+ * the head and the tail stay readable. Useful for log lines and chat previews
+ * where the interesting parts sit at both ends (e.g. a long file path).
+ *
+ * Returns the input unchanged when it already fits, and falls back to a plain
+ * head-slice when `limit` is too small to hold the ellipsis.
+ */
+export function truncateMiddle(
+  text: string,
+  limit: number,
+  ellipsis = "…",
+): string {
+  const value = text ?? "";
+  if (limit <= 0) return "";
+  if (value.length <= limit) return value;
+  if (limit <= ellipsis.length) return value.slice(0, limit);
+  const keep = limit - ellipsis.length;
+  const head = Math.ceil(keep / 2);
+  const tail = keep - head;
+  return (
+    value.slice(0, head) +
+    ellipsis +
+    (tail > 0 ? value.slice(value.length - tail) : "")
+  );
+}
